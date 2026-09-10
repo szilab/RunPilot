@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RunPilot</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">RP</div>
+        <div><strong>RunPilot</strong><span>Windows automation</span></div>
+      </div>
+      <nav>
+        <button class="nav active" data-page="overview">Overview</button>
+        <button class="nav" data-page="processes">Processes</button>
+        <button class="nav" data-page="jobs">Scheduled jobs</button>
+        <button class="nav" data-page="backups">Backups</button>
+        <button class="nav" data-page="history">History</button>
+      </nav>
+      <div class="side-foot">
+        <span id="connectionDot" class="dot"></span>
+        <span id="connectionText">Not authenticated</span>
+      </div>
+    </aside>
+
+    <main>
+      <header>
+        <div>
+          <h1 id="pageTitle">Overview</h1>
+          <p id="pageSubtitle">RunPilot service and resource health at a glance.</p>
+        </div>
+        <div class="header-actions">
+          <button id="primaryAction" class="button primary">Add process</button>
+        </div>
+      </header>
+
+      <section id="overviewPage" class="page active">
+        <div id="overviewMetrics" class="overview-metrics"></div>
+        <section class="overview-section">
+          <div class="section-head"><h2>Disk usage</h2></div>
+          <div id="diskDetails" class="row-list"></div>
+        </section>
+        <section class="overview-section">
+          <div class="section-head"><h2>Current issues</h2><span id="issueCount" class="meta"></span></div>
+          <div id="issueDetails" class="row-list"></div>
+        </section>
+      </section>
+
+      <section id="processesPage" class="page">
+        <div id="processGrid" class="row-list"></div>
+        <div id="processEmpty" class="empty hidden">
+          <h2>No managed processes</h2>
+          <p>Add an executable, PowerShell script, batch file or Python program.</p>
+        </div>
+      </section>
+
+      <section id="jobsPage" class="page">
+        <div id="jobGrid" class="row-list"></div>
+        <div id="jobEmpty" class="empty hidden">
+          <h2>No scheduled command jobs</h2>
+          <p>Create interval, daily or cron-based command jobs.</p>
+        </div>
+      </section>
+
+      <section id="backupsPage" class="page">
+        <div class="notice">
+          <strong>Backup engine: Windows Robocopy</strong>
+          <span>Copy and mirror jobs use the built-in <code>robocopy.exe</code>. Exit codes 0–7 are treated as successful/non-fatal.</span>
+        </div>
+        <div id="backupGrid" class="row-list"></div>
+        <div id="backupEmpty" class="empty hidden">
+          <h2>No backup jobs</h2>
+          <p>Schedule folder copies or mirrors using Windows Robocopy.</p>
+        </div>
+      </section>
+
+      <section id="historyPage" class="page">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Target</th><th>Type</th><th>Started</th><th>Result</th><th>Exit</th><th></th></tr></thead>
+            <tbody id="historyBody"></tbody>
+          </table>
+        </div>
+        <div id="historyEmpty" class="empty hidden">
+          <h2>No runs yet</h2>
+          <p>Process exits and scheduled/manual job executions will appear here.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="loginDialog" class="dialog small">
+    <form method="dialog" id="loginForm">
+      <div class="dialog-head">
+        <div><h2>Connect to RunPilot</h2><p>Enter the API token stored in <code>runpilot.yaml</code>.</p></div>
+      </div>
+      <label>Access token<input id="tokenInput" type="password" autocomplete="current-password" required></label>
+      <div id="loginError" class="form-error hidden"></div>
+      <div class="dialog-actions">
+        <button class="button primary" value="default">Connect</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="processDialog" class="dialog">
+    <form method="dialog" id="processForm">
+      <div class="dialog-head">
+        <div><h2 id="processDialogTitle">Add process</h2><p>Run continuously and supervise its lifecycle.</p></div>
+        <button class="icon-btn" type="button" data-dismiss="processDialog" aria-label="Close">×</button>
+      </div>
+      <input type="hidden" id="processId">
+      <div class="form-grid">
+        <label>Name<input id="processName" required></label>
+        <label>Interpreter
+          <select id="processInterpreter">
+            <option value="auto">Auto detect</option>
+            <option value="direct">Direct executable</option>
+            <option value="powershell">PowerShell</option>
+            <option value="cmd">CMD / batch</option>
+            <option value="python">Python</option>
+          </select>
+        </label>
+        <label class="span-2">Executable or script path<input id="processPath" placeholder="C:\Tools\myapp.exe" required></label>
+        <label class="span-2">Arguments<input id="processArgs" placeholder='--port 8080 --mode service'></label>
+        <label class="span-2">Working directory<input id="processCwd" placeholder="Optional"></label>
+        <label>Restart policy
+          <select id="processRestart">
+            <option value="on-failure">On failure</option>
+            <option value="always">Always</option>
+            <option value="never">Never</option>
+          </select>
+        </label>
+        <label class="check"><input id="processAutostart" type="checkbox"> Start automatically with RunPilot</label>
+      </div>
+      <div class="dialog-actions">
+        <button class="button secondary" type="button" data-dismiss="processDialog">Cancel</button>
+        <button id="saveProcessBtn" class="button primary" value="default">Save process</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="jobDialog" class="dialog">
+    <form method="dialog" id="jobForm">
+      <div class="dialog-head">
+        <div><h2 id="jobDialogTitle">Add scheduled job</h2><p>Run a command once per schedule.</p></div>
+        <button class="icon-btn" type="button" data-dismiss="jobDialog" aria-label="Close">×</button>
+      </div>
+      <input type="hidden" id="jobId">
+      <div class="form-grid">
+        <label>Name<input id="jobName" required></label>
+        <label>Interpreter
+          <select id="jobInterpreter">
+            <option value="auto">Auto detect</option>
+            <option value="direct">Direct executable</option>
+            <option value="powershell">PowerShell</option>
+            <option value="cmd">CMD / batch</option>
+            <option value="python">Python</option>
+          </select>
+        </label>
+        <label class="span-2">Executable or script path<input id="jobPath" required></label>
+        <label class="span-2">Arguments<input id="jobArgs"></label>
+        <label>Schedule
+          <select id="jobScheduleType">
+            <option value="interval">Interval</option>
+            <option value="daily">Daily</option>
+            <option value="cron">Cron</option>
+          </select>
+        </label>
+        <label id="jobIntervalWrap">Every (minutes)<input id="jobInterval" type="number" min="1" value="20"></label>
+        <label id="jobDailyWrap" class="hidden">Time<input id="jobDaily" type="time" value="03:00"></label>
+        <label id="jobCronWrap" class="hidden">Cron<input id="jobCron" placeholder="0 */20 * * * *"></label>
+        <label class="check"><input id="jobEnabled" type="checkbox" checked> Schedule enabled</label>
+      </div>
+      <div class="dialog-actions">
+        <button class="button secondary" type="button" data-dismiss="jobDialog">Cancel</button>
+        <button class="button primary" value="default">Save job</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="backupDialog" class="dialog">
+    <form method="dialog" id="backupForm">
+      <div class="dialog-head">
+        <div><h2 id="backupDialogTitle">Add backup</h2><p>Schedule Robocopy using a safe preset.</p></div>
+        <button class="icon-btn" type="button" data-dismiss="backupDialog" aria-label="Close">×</button>
+      </div>
+      <input type="hidden" id="backupId">
+      <div class="form-grid">
+        <label>Name<input id="backupName" required></label>
+        <label>Mode
+          <select id="backupMode">
+            <option value="copy">Copy / update</option>
+            <option value="mirror">Mirror (deletes destination extras)</option>
+          </select>
+        </label>
+        <label class="span-2">Source folder<input id="backupSource" placeholder="D:\Data" required></label>
+        <label class="span-2">Destination folder<input id="backupDestination" placeholder="F:\Backup\Data" required></label>
+        <label>Schedule
+          <select id="backupScheduleType">
+            <option value="daily">Daily</option>
+            <option value="interval">Interval</option>
+            <option value="cron">Cron</option>
+          </select>
+        </label>
+        <label id="backupDailyWrap">Time<input id="backupDaily" type="time" value="03:00"></label>
+        <label id="backupIntervalWrap" class="hidden">Every (minutes)<input id="backupInterval" type="number" min="1" value="60"></label>
+        <label id="backupCronWrap" class="hidden">Cron<input id="backupCron" placeholder="0 0 3 * * *"></label>
+        <label>Retries<input id="backupRetries" type="number" min="0" value="2"></label>
+        <label class="check"><input id="backupEnabled" type="checkbox" checked> Schedule enabled</label>
+      </div>
+      <div id="mirrorWarning" class="warning hidden">Mirror mode uses <code>/MIR</code>. Files that exist only in the destination can be deleted.</div>
+      <div class="dialog-actions">
+        <button class="button secondary" type="button" data-dismiss="backupDialog">Cancel</button>
+        <button class="button primary" value="default">Save backup</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="logDialog" class="dialog log-dialog">
+    <div class="dialog-head">
+      <div><h2 id="logTitle">Log</h2><p id="logSubtitle">Latest output</p></div>
+      <button class="icon-btn" id="closeLog" type="button" aria-label="Close">×</button>
+    </div>
+    <pre id="logOutput">Loading…</pre>
+  </dialog>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="app.js"></script>
+</body>
+</html>
