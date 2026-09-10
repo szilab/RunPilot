@@ -124,6 +124,10 @@ func defaultConfig() model.Config {
 		},
 		Processes: []model.ProcessDefinition{},
 		Jobs:      []model.JobDefinition{},
+		Storage: []model.StorageDefinition{{
+			ID: "storage-local", Name: "Helyi fájlrendszer", Type: model.StorageLocal,
+			Local: &model.LocalStorageSpec{Scope: model.LocalStorageScopeHost},
+		}},
 	}
 }
 
@@ -139,6 +143,16 @@ func normalize(c *model.Config) {
 	}
 	if c.Server.Token == "" {
 		c.Server.Token = randomToken()
+	}
+	hasLocalFilesystem := false
+	for _, storage := range c.Storage {
+		if storage.ID == "storage-local" {
+			hasLocalFilesystem = true
+			break
+		}
+	}
+	if !hasLocalFilesystem {
+		c.Storage = append(c.Storage, model.StorageDefinition{ID: "storage-local", Name: "Helyi fájlrendszer", Type: model.StorageLocal, Local: &model.LocalStorageSpec{Scope: model.LocalStorageScopeHost}})
 	}
 	for i := range c.Processes {
 		model.NormalizeProcess(&c.Processes[i])

@@ -38,7 +38,7 @@ Planned/possible capabilities include:
 - **Applications** — lifecycle, status and logs for long-running workloads.
 - **Jobs** — manually or automatically scheduled one-shot operations.
 - **Backups** — GUI and scheduling around specialist backup tools.
-- **Storage** — browsable local or versioned storage providers with capabilities such as download, historical versions and restore.
+- **Storage** — writable Local Filesystem browsing (a restricted folder or all drives accessible to the service identity), plus future versioned providers.
 - **Software** — later GUI over external installation/package providers such as WinGet.
 - **History and health** — shared execution history, logs and host/workload status.
 
@@ -153,7 +153,7 @@ The first MVP deliberately keeps persistence simple. A later milestone can migra
 3. Add live log streaming (SSE/WebSocket), rotation and retention.
 4. Add job cancellation and richer running-job state.
 5. Refine the integration boundary and add additional typed backup tools, with Restic as the preferred direction for versioned/snapshot backup semantics.
-6. Add a read-oriented Storage capability, beginning with explicitly configured local filesystem roots and later Restic snapshot/version browsing, download and restore.
+6. Add Restic snapshot/version browsing, download and restore. Its read/version capabilities will intentionally differ from the writable Local Filesystem provider.
 7. Add encrypted secret/environment/integration credential storage using Windows DPAPI or an equivalent protected mechanism.
 8. Add a double-click/tray management shell for install/start/stop/open-UI actions.
 9. Explore software installation/upgrade GUI through external providers such as WinGet.

@@ -3,6 +3,8 @@ let token = localStorage.getItem("runpilot.token") || "";
 let currentPage = "overview";
 let processes = [];
 let jobs = [];
+let storage = [], storageLocation = null, storagePath = "";
+let storageClipboard = null, editingTextPath = null, storageShowHidden = false;
 let overview = null;
 let logTimer = null;
 let logSource = null;
@@ -13,15 +15,16 @@ const themeStorageKey = "runpilot.theme";
 const pageMeta = {
   overview: ["Overview", "RunPilot service and resource health at a glance.", null],
   processes: ["Processes", "Long-running applications supervised by the RunPilot service.", "Add process"],
-  jobs: ["Scheduled jobs", "One-shot commands launched on an interval, daily time or cron expression.", "Add job"],
+  jobs: ["Scheduler", "One-shot commands launched on an interval, daily time or cron expression.", "Add job"],
   backups: ["Backups", "Scheduled filesystem backups powered by Windows built-in tools.", "Add backup"],
+  storage: ["Storage", "Helyi fájlrendszer kezelése.", "Tároló hozzáadása"],
   history: ["History", "Recent process exits and job executions with exit code and captured output.", null],
 };
 
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
   headers.set("Authorization", `Bearer ${token}`);
-  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const res = await fetch(path, {...options, headers});
   if (res.status === 401) {
     setConnected(false);
@@ -228,19 +231,21 @@ async function refresh() {
   if (refreshing || !token) return;
   refreshing = true;
   try {
-    const [p, j, h, o] = await Promise.all([
+    const [p, j, h, o, st] = await Promise.all([
       api("api/v1/processes"),
       api("api/v1/jobs"),
       api("api/v1/runs?lines=100"),
-      api("api/v1/overview")
+      api("api/v1/overview"), api("api/v1/storage")
     ]);
     processes = p;
     jobs = j;
     overview = o;
+    storage = st;
     renderOverview();
     renderProcesses();
     renderJobs();
     renderHistory(h);
+    renderStorage();
     setConnected(true);
   } catch (e) {
     setConnected(false);
@@ -381,6 +386,79 @@ function renderHistory(runs) {
   $("historyEmpty").classList.toggle("hidden", runs.length > 0);
 }
 
+function renderStorage() {
+  const local = storage.find(d => d.id === "storage-local") || storage[0];
+  $("storageEmpty").classList.toggle("hidden", !!local);
+  if (local && !storageLocation) browseStorage(local.id);
+}
+async function browseStorage(id, p = "") { try { const listing = await api(`api/v1/storage/${id}/entries?` + new URLSearchParams({path:p})); storageLocation=id; storagePath=listing.path; $("storageBrowserTitle").textContent=storage.find(x=>x.id===id)?.name || "Helyi fájlrendszer"; $("storageBreadcrumbs").textContent=listing.path || "Ez a gép"; $("storageUp").disabled=listing.parentPath == null; $("storageUp").onclick=()=>browseStorage(id,listing.parentPath || ""); const root=$("storageEntries"); root.replaceChildren(); listing.entries.forEach(e => { const row=document.createElement("article"); row.className="row storage-entry"; row.innerHTML=`<div class="row-head"><div><h3>${escapeHtml(e.name)}</h3><div class="meta">${escapeHtml(e.type)}</div></div></div><div class="row-details"><div class="kv"><span>Size</span><span>${fmtBytes(e.size)}</span></div><div class="kv"><span>Modified</span><span>${fmtDate(e.modifiedAt)}</span></div></div><div class="row-actions"></div>`; if(e.type!=="file") { row.classList.add("openable"); row.addEventListener("click",()=>browseStorage(id,e.path)); } const actions=row.querySelector(".row-actions"); const menu=document.createElement("select"); menu.className="storage-menu"; menu.innerHTML=`<option value="">További műveletek…</option>${e.type==="file"?'<option value="download">Letöltés</option>':''}${e.type!=="filesystem-root"?'<option value="copy">Másolás</option><option value="rename">Átnevezés</option><option value="move">Áthelyezés</option><option value="delete">Törlés</option>':''}`; menu.addEventListener("click",event=>event.stopPropagation()); menu.addEventListener("change",()=>{const action=menu.value;menu.value="";if(action==="download")downloadStorage(id,e.path);if(action==="copy")copyStorage(id,e.path);if(action==="rename")renameStorage(id,e.path);if(action==="move")moveStorage(id,e.path);if(action==="delete")deleteStorageObject(id,e.path,e.type)}); actions.append(menu); root.append(row) }); } catch(e) { toast(e.message); } }
+async function downloadStorage(id,p){try{const t=await api(`api/v1/storage/${id}/download-ticket`,{method:"POST",body:JSON.stringify({path:p})});window.location.assign(t.url)}catch(e){toast(e.message)}}
+async function deleteStorageObject(id,p,type){if(!confirm(`Delete ${type === "directory" ? "folder and all contents" : "file"}? This cannot be undone through RunPilot.`))return;try{await api(`api/v1/storage/${id}/delete`,{method:"POST",body:JSON.stringify({path:p})});browseStorage(id,storagePath)}catch(e){toast(e.message)}}
+async function renameStorage(id,p){const n=prompt("New name:");if(!n)return;try{await api(`api/v1/storage/${id}/rename`,{method:"POST",body:JSON.stringify({path:p,newName:n})});browseStorage(id,storagePath)}catch(e){toast(e.message)}}
+async function moveStorage(id,p){const d=prompt("Destination folder path (provider-relative):",storagePath);if(d===null)return;try{await api(`api/v1/storage/${id}/move`,{method:"POST",body:JSON.stringify({sourcePath:p,destinationDirectory:d})});browseStorage(id,storagePath)}catch(e){toast(e.message)}}
+async function copyStorage(id,p){const d=prompt("Célmappa útvonala:",storagePath);if(d===null)return;try{await api(`api/v1/storage/${id}/copy`,{method:"POST",body:JSON.stringify({sourcePath:p,destinationDirectory:d})});browseStorage(id,storagePath)}catch(e){toast(e.message)}}
+
+function renderStorage() {
+  const select = $("storageProvider"), previous = storageLocation || select.value;
+  select.replaceChildren();
+  storage.forEach(d => { const option = document.createElement("option"); option.value = d.id; option.textContent = d.name; select.append(option); });
+  const local = storage.find(d => d.id === "storage-local") || storage[0];
+  $("storageEmpty").classList.toggle("hidden", !!local);
+  if (local) { select.value = storage.some(d => d.id === previous) ? previous : local.id; if (!storageLocation) browseStorage(select.value, ""); }
+}
+function isEditableText(name) { return !/\.[^./\\]+$/.test(name) || /\.(txt|log|yaml|yml|json|ini|cfg|conf|toml|xml|csv|md|bat|cmd|ps1|go|js|html|css|ts|tsx|jsx|py|rb|java|c|h|cpp|cs|rs|sh|sql)$/i.test(name); }
+function button(label, title, action, disabled = false) { const b=document.createElement("button"); b.className="row-icon"+(title==="Letöltés"?" download-icon":""); b.type="button"; b.textContent=label; b.title=title; b.disabled=disabled; b.addEventListener("click", event=>{event.stopPropagation();action()}); return b; }
+function actionSlot(control = null) { if (control) return control; const slot=document.createElement("span");slot.className="row-icon-slot";slot.setAttribute("aria-hidden","true");return slot; }
+function entryIcon(entry) { if (entry.type === "directory" || entry.type === "filesystem-root") return "folder"; const ext=(entry.name.split(".").pop()||"").toLowerCase(); if (["txt","log","yaml","yml","json","ini","cfg","conf","toml","xml","csv","md","go","js","ts","py","sh","sql"].includes(ext)||!/\.[^./\\]+$/.test(entry.name)) return "text"; if(["jpg","jpeg","png","gif","webp","svg"].includes(ext)) return "image"; if(["mp3","wav","flac","ogg"].includes(ext)) return "audio"; if(["mp4","mkv","avi","mov","webm"].includes(ext)) return "video"; return "file"; }
+function renderBreadcrumbs(id, value) { const root=$("storageBreadcrumbs"); root.replaceChildren(); const home=document.createElement("button");home.className="breadcrumb-link";home.textContent="Ez a gép";home.addEventListener("click",()=>browseStorage(id,""));root.append(home); let built=""; for(const segment of value ? value.split("/") : []) { const sep=document.createElement("span");sep.textContent="/";root.append(sep);built=built?`${built}/${segment}`:segment;const link=document.createElement("button");link.className="breadcrumb-link";link.textContent=segment;const target=built;link.addEventListener("click",()=>browseStorage(id,target));root.append(link); } }
+async function browseStorage(id, p = "") {
+  try {
+    const listing=await api(`api/v1/storage/${id}/entries?`+new URLSearchParams({path:p,showHidden:storageShowHidden})); storageLocation=id; storagePath=listing.path;
+    $("storageProvider").value=id; $("storageBrowserTitle").textContent=storage.find(x=>x.id===id)?.name || "Tároló"; renderBreadcrumbs(id,listing.path);
+    $("storageUp").disabled=listing.parentPath==null; $("storageUp").onclick=()=>browseStorage(id,listing.parentPath||"");
+    const root=$("storageEntries");root.replaceChildren(); const header=document.createElement("div");header.className="storage-list-head";header.innerHTML="<span>Name</span><span>Size</span><span>Modified</span><span>Actions</span>";root.append(header);
+    listing.entries.forEach(entry=>{
+      const row=document.createElement("article");row.className="row storage-entry storage-row";
+      const head=document.createElement("div");head.className="storage-name";const icon=document.createElement("span");icon.className=`entry-icon ${entryIcon(entry)}`;icon.setAttribute("aria-hidden","true");const title=document.createElement("h3");title.textContent=entry.name;head.append(icon);
+      head.append(title);const meta=document.createElement("div");meta.className="meta";meta.textContent=entry.type;head.append(meta);
+      const details=document.createElement("div");details.className="row-details";details.innerHTML=`<div class="kv"><span>Méret</span><span>${fmtBytes(entry.size)}</span></div><div class="kv"><span>Módosítva</span><span>${fmtDate(entry.modifiedAt)}</span></div>`;
+      const actions=document.createElement("div");actions.className="row-actions";
+      const mutable=entry.type!=="filesystem-root", editable=entry.type==="file" && isEditableText(entry.name);
+      actions.append(actionSlot(entry.type==="file" ? button("↓","Letöltés",()=>downloadStorage(id,entry.path)) : null));
+      actions.append(actionSlot(editable ? button("✎","Szerkesztés",()=>openTextEditor(id,entry.path,entry.name)) : null));
+      actions.append(actionSlot(mutable ? button("↺","Átnevezés",()=>renameStorage(id,entry.path)) : null));
+      actions.append(actionSlot(mutable ? button("⧉","Másolás",()=>setStorageClipboard("copy",entry)) : null));
+      actions.append(actionSlot(mutable ? button("✂","Kivágás",()=>setStorageClipboard("move",entry)) : null));
+      actions.append(button("📌","Beillesztés",()=>pasteStorage(id),!storageClipboard));
+      actions.append(actionSlot(mutable ? button("🗑","Törlés",()=>deleteStorageObject(id,entry.path,entry.type)) : null));
+      const size=document.createElement("div");size.className="storage-cell";size.textContent=entry.type==="file"?fmtBytes(entry.size):"—";const modified=document.createElement("div");modified.className="storage-cell";modified.textContent=fmtDate(entry.modifiedAt);row.append(head,size,modified,actions);
+      if(entry.type!=="file") { row.classList.add("openable");row.addEventListener("click",()=>browseStorage(id,entry.path)); }
+      else { row.classList.add("openable");row.addEventListener("click",()=>isEditableText(entry.name)?openTextEditor(id,entry.path,entry.name):downloadStorage(id,entry.path)); }
+      root.append(row);
+    });
+  } catch(e) { toast(e.message); }
+}
+function setStorageClipboard(operation, entry) { storageClipboard={operation,path:entry.path,name:entry.name}; toast(operation==="copy" ? `Másolásra kijelölve: ${entry.name}` : `Áthelyezésre kijelölve: ${entry.name}`); browseStorage(storageLocation,storagePath); }
+async function pasteStorage(id) { if(!storageClipboard)return; try { const endpoint=storageClipboard.operation==="copy"?"copy":"move"; await api(`api/v1/storage/${id}/${endpoint}`,{method:"POST",body:JSON.stringify({sourcePath:storageClipboard.path,destinationDirectory:storagePath})}); const message=storageClipboard.operation==="copy"?"Másolva":"Áthelyezve"; if(storageClipboard.operation==="move")storageClipboard=null;toast(message);browseStorage(id,storagePath); }catch(e){toast(e.message)} }
+function syntaxSpan(kind, value) { return `<span class="syntax-${kind}">${escapeHtml(value)}</span>`; }
+function highlightText(content, name) {
+  const ext=(name.split(".").pop()||"").toLowerCase(); const structured=["json","yaml","yml","toml","ini","xml","html","css"].includes(ext);
+  return content.split("\n").map(line=>{
+    if (/^\s*(#|\/\/)/.test(line)) return syntaxSpan("comment",line);
+    const chunks=line.split(/("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g);
+    return chunks.map((part,index)=>{
+      if (index%2) return syntaxSpan("string",part);
+      let safe=escapeHtml(part);
+      if (structured) safe=safe.replace(/\b(true|false|null|yes|no)\b/gi,'<span class="syntax-keyword">$1</span>').replace(/\b(-?\d+(?:\.\d+)?)\b/g,'<span class="syntax-number">$1</span>');
+      else safe=safe.replace(/\b(func|function|return|if|else|for|while|package|import|const|var|let|class|public|private|def|true|false|null|nil)\b/g,'<span class="syntax-keyword">$1</span>');
+      return safe;
+    }).join("");
+  }).join("\n")+"\n";
+}
+function updateTextHighlight() { const code=$("textHighlight").querySelector("code"); code.innerHTML=highlightText($("textEditorContent").value,editingTextPath?.path||""); }
+async function openTextEditor(id,path,name) { try { const data=await api(`api/v1/storage/${id}/text?`+new URLSearchParams({path})); editingTextPath={id,path};$("textEditorTitle").textContent=`Szerkesztés: ${name}`;$("textEditorPath").textContent=path;$("textEditorContent").value=data.content;updateTextHighlight();$("textEditorDialog").showModal(); }catch(e){toast(e.message)} }
+async function saveTextEditor() { if(!editingTextPath)return;try{await api(`api/v1/storage/${editingTextPath.id}/text`,{method:"PUT",body:JSON.stringify({path:editingTextPath.path,content:$("textEditorContent").value})});$("textEditorDialog").close();toast("Fájl mentve");browseStorage(storageLocation,storagePath)}catch(e){toast(e.message)} }
+
 async function processAction(id, action) {
   try { await api(`api/v1/processes/${id}/${action}`, {method:"POST"}); toast(`Process ${action} requested`); setTimeout(refresh, 250); }
   catch (e) { toast(e.message); }
@@ -424,7 +502,17 @@ $("primaryAction").addEventListener("click", () => {
   if (currentPage === "processes") openProcess();
   if (currentPage === "jobs") openJob();
   if (currentPage === "backups") openBackup();
+  if (currentPage === "storage") $("storageDialog").showModal();
 });
+$("storageCreate").addEventListener("click",async()=>{if(!storageLocation)return;const name=prompt("Folder name:");if(!name)return;try{await api(`api/v1/storage/${storageLocation}/directories`,{method:"POST",body:JSON.stringify({parentPath:storagePath,name})});browseStorage(storageLocation,storagePath)}catch(e){toast(e.message)}});
+$("storageUpload").addEventListener("change",async e=>{if(!storageLocation||!e.target.files.length)return;const form=new FormData();form.append("path",storagePath);for(const f of e.target.files)form.append("files",f);try{await api(`api/v1/storage/${storageLocation}/upload`,{method:"POST",body:form});browseStorage(storageLocation,storagePath)}catch(err){toast(err.message)}finally{e.target.value=""}});
+$("storageProvider").addEventListener("change",e=>browseStorage(e.target.value,""));
+$("storageShowHidden").addEventListener("change",e=>{storageShowHidden=e.target.checked;browseStorage(storageLocation,storagePath)});
+$("storageScope").addEventListener("change",()=>$("storageRootWrap").classList.toggle("hidden",$("storageScope").value==="host"));
+$("storageForm").addEventListener("submit",async e=>{e.preventDefault();const scope=$("storageScope").value;try{await api("api/v1/storage",{method:"POST",body:JSON.stringify({name:$("storageName").value.trim(),type:$("storageType").value,local:{scope,root:scope==="root"?$("storageRoot").value.trim():""}})});$("storageDialog").close();await refresh()}catch(err){toast(err.message)}});
+$("saveTextEditor").addEventListener("click",saveTextEditor);$("closeTextEditor").addEventListener("click",()=>$("textEditorDialog").close());$("cancelTextEditor").addEventListener("click",()=>$("textEditorDialog").close());
+$("textEditorContent").addEventListener("input",updateTextHighlight);
+$("textEditorContent").addEventListener("scroll",e=>{ $("textHighlight").scrollTop=e.target.scrollTop; $("textHighlight").scrollLeft=e.target.scrollLeft; });
 
 function openProcess(existing = null) {
   $("processForm").reset();

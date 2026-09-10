@@ -101,6 +101,32 @@ type Config struct {
 	Server    ServerConfig        `json:"server" yaml:"server"`
 	Processes []ProcessDefinition `json:"processes" yaml:"processes"`
 	Jobs      []JobDefinition     `json:"jobs" yaml:"jobs"`
+	Storage   []StorageDefinition `json:"storage" yaml:"storage"`
+}
+
+// Storage definitions describe locations RunPilot can manage; deleting one
+// never alters the data at that location.
+type StorageType string
+
+const StorageLocal StorageType = "local"
+
+type LocalStorageScope string
+
+const (
+	LocalStorageScopeRoot LocalStorageScope = "root"
+	LocalStorageScopeHost LocalStorageScope = "host"
+)
+
+type LocalStorageSpec struct {
+	Scope LocalStorageScope `json:"scope" yaml:"scope"`
+	Root  string            `json:"root,omitempty" yaml:"root,omitempty"`
+}
+
+type StorageDefinition struct {
+	ID    string            `json:"id" yaml:"id"`
+	Name  string            `json:"name" yaml:"name"`
+	Type  StorageType       `json:"type" yaml:"type"`
+	Local *LocalStorageSpec `json:"local,omitempty" yaml:"local,omitempty"`
 }
 
 type DiskStatus struct {

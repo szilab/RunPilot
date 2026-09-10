@@ -13,6 +13,7 @@ import (
 	"github.com/szilab/RunPilot/internal/platform"
 	"github.com/szilab/RunPilot/internal/processmgr"
 	"github.com/szilab/RunPilot/internal/scheduler"
+	"github.com/szilab/RunPilot/internal/storage"
 )
 
 type Controller struct {
@@ -69,6 +70,64 @@ func (c *Controller) DataDir() string        { return c.dataDir }
 func (c *Controller) ConfigPath() string     { return c.config.Path() }
 func (c *Controller) Snapshot() model.Config { return c.config.Snapshot() }
 func (c *Controller) TokenCreated() bool     { return c.config.TokenCreated() }
+
+func (c *Controller) StorageDefinitions() []model.StorageDefinition {
+	return c.config.Snapshot().Storage
+}
+func (c *Controller) UpsertStorage(d model.StorageDefinition) (model.StorageDefinition, error) {
+	if strings.TrimSpace(d.Name) == "" {
+		return d, fmt.Errorf("storage name is required")
+	}
+	if d.Type != model.StorageLocal || d.Local == nil {
+		return d, fmt.Errorf("storage type local is required")
+	}
+	if d.Local.Scope == model.LocalStorageScopeHost {
+		d.Local.Root = ""
+	}
+	if _, err := storage.ProviderFor(d); err != nil {
+		return d, err
+	}
+	if d.ID == "" {
+		d.ID = config.NewID("storage")
+	}
+	err := c.config.Update(func(cfg *model.Config) error {
+		for i := range cfg.Storage {
+			if cfg.Storage[i].ID == d.ID {
+				cfg.Storage[i] = d
+				return nil
+			}
+		}
+		cfg.Storage = append(cfg.Storage, d)
+		return nil
+	})
+	return d, err
+}
+func (c *Controller) DeleteStorage(id string) error {
+	return c.config.Update(func(cfg *model.Config) error {
+		out := cfg.Storage[:0]
+		found := false
+		for _, d := range cfg.Storage {
+			if d.ID == id {
+				found = true
+				continue
+			}
+			out = append(out, d)
+		}
+		if !found {
+			return fmt.Errorf("unknown storage %q", id)
+		}
+		cfg.Storage = out
+		return nil
+	})
+}
+func (c *Controller) StorageProvider(id string) (storage.Provider, error) {
+	for _, d := range c.config.Snapshot().Storage {
+		if d.ID == id {
+			return storage.ProviderFor(d)
+		}
+	}
+	return nil, fmt.Errorf("unknown storage %q", id)
+}
 
 func (c *Controller) ProcessViews() []processmgr.View {
 	return c.processes.Views()

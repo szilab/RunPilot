@@ -141,7 +141,7 @@ Storage access is intentionally separate from backup execution.
 
 A **Storage Provider** exposes a browsable data source to the RunPilot GUI. Initial/future providers include:
 
-- **Local filesystem** — browse explicitly configured Windows roots and download files.
+- **Local filesystem** — browse, upload, download and manage either an explicitly configured Windows root or all drives accessible to the RunPilot service identity.
 - **Restic repository** — browse snapshots, inspect historical file versions, download a selected version and restore through Restic.
 
 Conceptually, providers may offer capabilities such as:
@@ -155,11 +155,11 @@ Restore
 
 Not every provider must implement every capability.
 
-The storage layer must not become a general-purpose file manager by default. Initial scope should favor read-oriented operations and explicit restore workflows rather than arbitrary rename, move, delete, upload or ACL editing.
+The Local Filesystem provider supports practical scoped browser operations: upload, create, rename, move and delete. Other providers, especially Restic, expose only their native read/version/restore capabilities rather than artificial writable operations.
 
 ### Local filesystem security
 
-Local filesystem providers should expose explicitly configured roots rather than automatically making the entire host filesystem available through the web UI. All provider paths must be resolved relative to the configured root and protected against path traversal.
+Local filesystem providers explicitly choose either a configured hard root boundary or host-filesystem mode. Root mode resolves symlinks and verifies effective paths remain beneath the configured root. Host mode enumerates available drives and accepts only controlled provider-relative paths; Windows permissions remain authoritative.
 
 ### Version-oriented UX
 
