@@ -8,6 +8,7 @@ let logTimer = null;
 let logSource = null;
 let refreshTimer = null;
 let refreshing = false;
+const themeStorageKey = "runpilot.theme";
 
 const pageMeta = {
   overview: ["Overview", "RunPilot service and resource health at a glance.", null],
@@ -38,7 +39,25 @@ async function api(path, options = {}) {
 
 function setConnected(ok) {
   $("connectionDot").classList.toggle("ok", ok);
-  $("connectionText").textContent = ok ? "Connected" : "Not authenticated";
+  $("connectionText").textContent = ok ? "Connected" : "Offline";
+}
+
+function applyTheme(theme) {
+  const isDark = theme === "dark";
+  document.documentElement.dataset.theme = isDark ? "dark" : "light";
+  localStorage.setItem(themeStorageKey, isDark ? "dark" : "light");
+  const toggle = $("themeToggle");
+  toggle.setAttribute("aria-pressed", String(isDark));
+  toggle.title = isDark ? "Switch to light theme" : "Switch to dark theme";
+  toggle.innerHTML = isDark ? "☀ <span>Light theme</span>" : "☾ <span>Dark theme</span>";
+}
+
+function initializeTheme() {
+  const saved = localStorage.getItem(themeStorageKey);
+  applyTheme(saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+  $("themeToggle").addEventListener("click", () => {
+    applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+  });
 }
 
 function toast(message) {
@@ -145,6 +164,7 @@ async function refresh() {
     renderHistory(h);
     setConnected(true);
   } catch (e) {
+    setConnected(false);
     if (e.message === "Unauthorized") $("loginDialog").showModal();
     else toast(e.message);
   } finally {
@@ -515,6 +535,7 @@ $("loginForm").addEventListener("submit", async e => {
 });
 
 (async function init() {
+  initializeTheme();
   if (!token) {
     $("loginDialog").showModal();
     return;

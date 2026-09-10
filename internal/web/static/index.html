@@ -4,13 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RunPilot</title>
+  <link rel="icon" type="image/png" href="runpilot-logo.png">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">RP</div>
+        <img class="brand-mark" src="runpilot-logo.png" alt="RunPilot logo">
         <div><strong>RunPilot</strong><span>Windows automation</span></div>
       </div>
       <nav>
@@ -33,6 +34,7 @@
           <p id="pageSubtitle">RunPilot service and resource health at a glance.</p>
         </div>
         <div class="header-actions">
+          <button id="themeToggle" class="button secondary theme-toggle" type="button" aria-pressed="false" title="Switch to dark theme">☾ <span>Dark theme</span></button>
           <button id="primaryAction" class="button primary">Add process</button>
         </div>
       </header>

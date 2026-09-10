@@ -14,6 +14,8 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	for _, want := range []string{
 		`data-page="overview"`,
 		`id="overviewPage"`,
+		`runpilot-logo.png`,
+		`id="themeToggle"`,
 		`class="row-list"`,
 		`type="button" data-dismiss="processDialog"`,
 		`type="button" data-dismiss="jobDialog"`,
@@ -26,6 +28,9 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	if strings.Contains(page, "refreshBtn") || strings.Contains(page, "card-grid") {
 		t.Fatal("index.html still exposes manual refresh or card layout")
 	}
+	if _, err := staticFS.ReadFile("static/runpilot-logo.png"); err != nil {
+		t.Fatalf("embedded application logo is missing: %v", err)
+	}
 
 	app, err := staticFS.ReadFile("static/app.js")
 	if err != nil {
@@ -36,5 +41,8 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js does not contain %q", want)
 		}
+	}
+	if !strings.Contains(script, "function applyTheme") {
+		t.Fatal("app.js does not support theme selection")
 	}
 }
