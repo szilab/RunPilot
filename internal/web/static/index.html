@@ -20,6 +20,7 @@
         <button class="nav" data-page="jobs">Scheduler</button>
         <button class="nav" data-page="backups">Backups</button>
         <button class="nav" data-page="storage">Storage</button>
+        <button class="nav" data-page="software">Software</button>
         <button class="nav" data-page="history">History</button>
       </nav>
       <div class="side-foot">
@@ -99,6 +100,21 @@
           <div id="storageBreadcrumbs" class="meta"></div><div id="storageEntries" class="row-list"></div>
         </div>
         <div id="storageEmpty" class="empty hidden"><h2>Local filesystem unavailable</h2><p>No accessible filesystem roots were found.</p></div>
+      </section>
+
+      <section id="softwarePage" class="page">
+        <div class="software-controller"><label for="softwareProviderSelect">Provider</label><select id="softwareProviderSelect" aria-label="Software provider"></select></div>
+        <div id="softwareProviderCard" class="row-list software-card"></div>
+        <div id="softwareTabs" class="software-tabs hidden">
+          <button class="button secondary small active" data-software-tab="installed">Installed</button>
+          <button class="button secondary small" data-software-tab="search">Search</button>
+          <button class="button secondary small" data-software-tab="updates">Updates</button>
+          <button class="button secondary small" data-software-tab="buckets">Buckets</button>
+          <button id="softwareUpgradeAll" class="button primary small">Upgrade all</button>
+        </div>
+        <div id="softwareSearchBar" class="software-search hidden"><input id="softwareSearchInput" placeholder="Search the managed Scoop main bucket"><button id="softwareSearchButton" class="button primary small">Search</button></div>
+        <div id="softwareBucketBar" class="software-bucket-bar hidden"><input id="softwareBucketName" placeholder="Bucket name"><input id="softwareBucketSource" placeholder="Optional HTTPS bucket URL"><button id="softwareAddBucket" class="button primary small">Add bucket</button></div>
+        <div id="softwarePackages" class="row-list"></div>
       </section>
     </main>
   </div>

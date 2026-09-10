@@ -19,7 +19,7 @@ RunPilot is a Windows-first Go application. Keep the runtime as a single native 
 - Keep tool-specific configuration typed. Do not create a universal catch-all backup/runtime/software schema containing every option offered by every possible backend.
 - Do not turn storage browsing into a general-purpose file manager unless that is explicitly approved as a product change. Prefer browse/download/version/restore-oriented access and explicitly configured filesystem roots.
 - Docker/WSL support, if added, should integrate with an already working external runtime. Do not provision WSL, install/manage Docker daemons, implement container networking/port forwarding or recreate Docker/Compose orchestration semantics unless explicitly requested as a separate product decision.
-- Software installation, when added, should use external package/install providers such as WinGet rather than implementing a package manager.
+- Software Management starts with the RunPilot-owned isolated Scoop provider. Its configurable root defaults below the active data directory; never reuse, discover, modify or PATH-invoke a user Scoop installation. Do not add permanent PATH or global `SCOOP*` settings, global installs, or the nonportable bucket. WinGet may be added later as a separate provider for conventional Windows software.
 - Treat Robocopy exit codes 0-7 as successful/non-fatal and 8+ as failure.
 - New GUI capabilities should use backend REST/domain integrations rather than duplicating execution logic in browser JavaScript.
 - Privileged filesystem/process/tool operations stay server-side. The browser is a management client only.

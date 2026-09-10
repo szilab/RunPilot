@@ -13,6 +13,7 @@ import (
 	"github.com/szilab/RunPilot/internal/platform"
 	"github.com/szilab/RunPilot/internal/processmgr"
 	"github.com/szilab/RunPilot/internal/scheduler"
+	"github.com/szilab/RunPilot/internal/software"
 	"github.com/szilab/RunPilot/internal/storage"
 )
 
@@ -23,6 +24,7 @@ type Controller struct {
 	processes *processmgr.Manager
 	jobs      *jobs.Runner
 	scheduler *scheduler.Scheduler
+	software  *software.Manager
 }
 
 func Open(dataDir string) (*Controller, error) {
@@ -45,6 +47,7 @@ func Open(dataDir string) (*Controller, error) {
 		processes: processmgr.New(h),
 		jobs:      jr,
 		scheduler: scheduler.New(jr),
+		software:  software.NewManager(dataDir),
 	}
 	snap := cfg.Snapshot()
 	c.processes.Reconcile(snap.Processes)
@@ -127,6 +130,37 @@ func (c *Controller) StorageProvider(id string) (storage.Provider, error) {
 		}
 	}
 	return nil, fmt.Errorf("unknown storage %q", id)
+}
+
+func (c *Controller) SoftwareDefinitions() []model.SoftwareProviderDefinition {
+	return c.config.Snapshot().Software.Providers
+}
+
+func (c *Controller) SoftwareProvider(id string) (software.Provider, error) {
+	d, err := software.Find(c.SoftwareDefinitions(), id)
+	if err != nil {
+		return nil, err
+	}
+	return c.software.Provider(d)
+}
+
+// UpsertSoftwareProvider switches the active root when it changes. It never
+// migrates, copies, or removes the prior managed Scoop installation.
+func (c *Controller) UpsertSoftwareProvider(d model.SoftwareProviderDefinition) (model.SoftwareProviderDefinition, error) {
+	d, err := software.ValidateDefinition(c.dataDir, d)
+	if err != nil {
+		return d, err
+	}
+	err = c.config.Update(func(cfg *model.Config) error {
+		for i := range cfg.Software.Providers {
+			if cfg.Software.Providers[i].ID == d.ID {
+				cfg.Software.Providers[i] = d
+				return nil
+			}
+		}
+		return fmt.Errorf("unknown software provider %q", d.ID)
+	})
+	return d, err
 }
 
 func (c *Controller) ProcessViews() []processmgr.View {

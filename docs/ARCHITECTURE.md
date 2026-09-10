@@ -2,7 +2,7 @@
 
 ## Product direction
 
-RunPilot is a lightweight Windows host-management control plane with a single native Windows service and an embedded web UI. Its purpose is to give Windows users one coherent GUI for managing applications, scheduled operations, backup tools, storage access and, later, software installation.
+RunPilot is a lightweight Windows host-management control plane with a single native Windows service and an embedded web UI. Its purpose is to give Windows users one coherent GUI for managing applications, scheduled operations, backup tools, storage access and software installation.
 
 RunPilot should integrate existing specialist tools instead of reimplementing them. The guiding rule is:
 
@@ -13,7 +13,7 @@ Examples:
 - RunPilot supervises native processes; it does not replace the Windows process model.
 - RunPilot schedules and configures Robocopy or Restic; it does not implement its own backup format or deduplication engine.
 - RunPilot may expose Docker/Compose lifecycle operations in the future; it should not become a WSL or Docker orchestrator.
-- RunPilot may expose software installation through tools such as WinGet; it should not become a package manager.
+- RunPilot exposes software installation through external providers; it should not become a package manager.
 
 The browser is only a management client. Privileged operations remain owned by the RunPilot service and its backend integrations.
 
@@ -29,7 +29,7 @@ Core RunPilot capabilities provide the consistent user experience:
 2. **Jobs** — one-shot operations that can run manually or on a schedule.
 3. **Backups** — typed backup jobs delegated to external backup tools.
 4. **Storage** — browsable storage sources with provider-specific capabilities such as download, versions or restore.
-5. **Software management** — future GUI over external installation/package providers.
+5. **Software management** — GUI over external installation/package providers.
 6. **History and health** — cross-cutting execution history, logs and host/workload status.
 
 These capabilities should share RunPilot infrastructure such as configuration, scheduling, execution history, authorization and the embedded GUI, but they should not collapse into one generic shell-command abstraction.
@@ -83,7 +83,7 @@ External integrations should normally invoke the authoritative external tool thr
 
 ## Persistence
 
-MVP persistence is deliberately transparent:
+Persistence is deliberately transparent:
 
 - `runpilot.yaml` — configuration
 - `history.jsonl` — completed run records
@@ -104,7 +104,7 @@ The internal scheduler supports:
 - 5- or 6-field cron expressions
 - optional IANA timezone
 
-Cron syntax in the MVP supports `*`, `*/N`, numeric values, lists and numeric ranges. Advanced Quartz/Vixie extensions such as `L`, `W`, `#` and named weekdays/months are intentionally out of scope.
+Cron syntax supports `*`, `*/N`, numeric values, lists and numeric ranges. Advanced Quartz/Vixie extensions such as `L`, `W`, `#` and named weekdays/months are intentionally out of scope.
 
 Overlap defaults to `skip`, which is especially important for backup jobs.
 
@@ -182,7 +182,7 @@ A process definition contains:
 - restart policy
 - exponential restart backoff
 
-The MVP terminates Windows process trees through `taskkill /T /F`. This is intentionally an implementation seam. The production supervisor should move to native Windows Job Objects so descendants are owned and terminated deterministically.
+RunPilot currently terminates Windows process trees through `taskkill /T /F`. This is intentionally an implementation seam. The production supervisor should move to native Windows Job Objects so descendants are owned and terminated deterministically.
 
 ### External runtimes
 
@@ -198,13 +198,15 @@ Unless explicitly approved as a separate feature, RunPilot should **not**:
 
 Docker/WSL integration is therefore deferred until its minimal product boundary is agreed. The architecture should preserve an integration seam without speculatively building an orchestrator.
 
-## Software management direction
+## Software management
 
-A later Software area can provide a Windows-oriented GUI for installing, upgrading and removing applications through external providers such as WinGet.
+Software Management is a RunPilot capability. Its first provider is a **RunPilot-owned isolated Scoop installation**, not a user's existing Scoop and not a machine PATH lookup. The configured provider has a stable ID, display name, typed Scoop settings and a configurable root. An empty root resolves from the active RunPilot data directory as `<data-dir>\software\scoop` (normally `%ProgramData%\RunPilot\software\scoop`).
 
-RunPilot should own discovery, presentation, user intent, status and history. The installation provider remains responsible for package resolution and installation semantics.
+RunPilot lazily bootstraps the managed Scoop runtime from Scoop's official installer after downloading it to a controlled provider directory. Bootstrap failure is isolated to Software Management; it does not prevent the service or other capabilities from starting. All Scoop commands invoke the exact managed `apps\scoop\current\bin\scoop.ps1` entrypoint and pass a child-process-only Scoop environment rooted at that directory. RunPilot never permanently changes PATH or global/user `SCOOP`, `SCOOP_GLOBAL`, or `SCOOP_CACHE` settings.
 
-A curated RunPilot application catalog may later combine installation with optional RunPilot application configuration, but it should build on provider integrations rather than introduce a new package-management implementation.
+The initial policy uses Scoop's standard portable model and the normal main bucket. Scoop's managed Git prerequisite is automatically installed under the same managed root so provider commands never depend on Git from a user Scoop or host PATH. The UI exposes typed list/add/remove bucket operations rather than raw Scoop command execution; the required `main` bucket cannot be removed. Git and 7-Zip remain visible in package results but their individual install, upgrade and uninstall controls are disabled because they are Scoop-managed prerequisites. Global installs, the nonportable bucket, importing/reusing existing Scoop packages, and automatic Process creation are excluded. Changing the configured root selects another isolated instance; RunPilot does not migrate, copy, delete or modify the previous root. Package install remains separate from Process Management.
+
+WinGet remains a possible future provider for conventional Windows software, behind the same Software capability boundary.
 
 ## Security
 
@@ -223,7 +225,7 @@ Storage/download endpoints require the same authentication boundary as other man
 
 ## GUI principles
 
-The MVP uses embedded static HTML/CSS/JavaScript. There is no frontend runtime dependency and no separate web server. Assets compile into `runpilot.exe`.
+The embedded GUI uses static HTML/CSS/JavaScript. There is no frontend runtime dependency and no separate web server. Assets compile into `runpilot.exe`.
 
 The long-term goal is a coherent Windows host-management GUI rather than a collection of unrelated tool pages. Integrations may expose tool-specific options, but navigation, status, execution feedback, history and common interactions should remain consistent.
 

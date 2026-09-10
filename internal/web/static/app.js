@@ -4,6 +4,7 @@ let currentPage = "overview";
 let processes = [];
 let jobs = [];
 let storage = [], storageLocation = null, storagePath = "";
+let softwareProviders = [], softwareProviderID = "", softwarePackages = [], softwareUpdates = [], softwareSearchResults = [], softwareBuckets = [], softwareTab = "installed", softwareBusy = false, softwareBusyLabel = "", softwareLoading = false, softwareLoadingKey = "", softwareLoadedKey = "", softwareLoadSequence = 0, softwareRootDrafts = {};
 let storageClipboard = null, editingTextPath = null, storageShowHidden = false;
 let overview = null;
 let logTimer = null;
@@ -18,6 +19,7 @@ const pageMeta = {
   jobs: ["Scheduler", "One-shot commands launched on an interval, daily time or cron expression.", "Add job"],
   backups: ["Backups", "Scheduled filesystem backups powered by Windows built-in tools.", "Add backup"],
   storage: ["Storage", "Helyi fájlrendszer kezelése.", "Tároló hozzáadása"],
+  software: ["Software", "Install and maintain portable applications in a RunPilot-managed Scoop root.", null],
   history: ["History", "Recent process exits and job executions with exit code and captured output.", null],
 };
 
@@ -231,26 +233,40 @@ async function refresh() {
   if (refreshing || !token) return;
   refreshing = true;
   try {
-    const [p, j, h, o, st] = await Promise.all([
+    const [p, j, h, o, st, sw] = await Promise.all([
       api("api/v1/processes"),
       api("api/v1/jobs"),
       api("api/v1/runs?lines=100"),
-      api("api/v1/overview"), api("api/v1/storage")
+      api("api/v1/overview"), api("api/v1/storage"),
+      currentPage === "software" ? api("api/v1/software/providers") : Promise.resolve(null)
     ]);
     processes = p;
     jobs = j;
     overview = o;
     storage = st;
+    if (sw) {
+      softwareProviders = sw;
+      if (!sw.some(p => p.id === softwareProviderID)) softwareProviderID = sw[0]?.id || "";
+      const selected = sw.find(p => p.id === softwareProviderID);
+      if (selected?.state === "ready") {
+        await loadSoftwareView();
+      } else {
+        softwarePackages = []; softwareUpdates = []; softwareSearchResults = []; softwareBuckets = []; softwareLoading = false; softwareLoadingKey = ""; softwareLoadedKey = "";
+      }
+    }
     renderOverview();
     renderProcesses();
     renderJobs();
     renderHistory(h);
     renderStorage();
+    if (currentPage === "software") renderSoftware();
     setConnected(true);
   } catch (e) {
+    softwareLoading = false; softwareLoadingKey = "";
     setConnected(false);
     if (e.message === "Unauthorized") $("loginDialog").showModal();
     else toast(e.message);
+    if (currentPage === "software") renderSoftware();
   } finally {
     refreshing = false;
   }
@@ -481,6 +497,81 @@ async function deleteJob(id) {
   catch (e) { toast(e.message); }
 }
 
+function activeSoftwareProvider() { return softwareProviders.find(provider => provider.id === softwareProviderID) || softwareProviders[0]; }
+function softwarePackageFacts(pkg) {
+  const facts = [{label: pkg.installed ? "Installed" : "Version", value: pkg.version || "—"}];
+  if (pkg.availableVersion) facts.push({label: "Latest", value: pkg.availableVersion});
+  if (pkg.bucket) facts.push({label: "Source", value: pkg.bucket});
+  return facts.map(fact => `<div><span>${escapeHtml(fact.label)}</span><strong>${escapeHtml(fact.value)}</strong></div>`).join("");
+}
+function renderSoftware() {
+  const provider = activeSoftwareProvider();
+  const card = $("softwareProviderCard"), packages = $("softwarePackages"), picker = $("softwareProviderSelect");
+  picker.replaceChildren();
+  softwareProviders.forEach(item => { const option = document.createElement("option"); option.value = item.id; option.textContent = `${item.name} (${item.type})`; picker.append(option); });
+  if (!provider) { card.innerHTML = `<div class="empty compact"><h2>Software provider unavailable</h2><p>RunPilot has no configured Software provider.</p></div>`; return; }
+  picker.value = provider.id;
+  const state = provider.state || "unavailable";
+  const message = provider.message || "Preparing the managed Scoop runtime.";
+  const hasRootDraft = Object.prototype.hasOwnProperty.call(softwareRootDrafts, provider.id);
+  const rootValue = hasRootDraft ? softwareRootDrafts[provider.id] : provider.usingDefaultRoot ? "" : provider.root || "";
+  card.innerHTML = `<article class="software-provider-summary">
+    <div class="software-provider-identity"><div class="software-provider-title"><h2>${escapeHtml(provider.name)}</h2>${statusBadge(state)}</div></div>
+    <label class="software-root-editor"><span>Root</span><input id="softwareRoot" value="${escapeHtml(rootValue)}" placeholder="${escapeHtml(provider.root || "Managed Scoop root")}" ${softwareBusy ? "disabled" : ""}><small>Leave empty to use the RunPilot data-directory default. Changing roots does not move or delete applications.</small></label>
+    <div class="row-actions software-provider-actions"><button class="button secondary small" onclick="saveSoftwareRoot()" ${softwareBusy ? "disabled" : ""}>Save root</button><button class="button secondary small" onclick="softwareRefresh()" ${softwareBusy ? "disabled" : ""}>${state === "ready" ? "Refresh" : "Retry"}</button></div>
+  </article>`;
+  $("softwareTabs").classList.toggle("hidden", state !== "ready");
+  $("softwareUpgradeAll").classList.toggle("hidden", softwareTab !== "updates" || !softwareUpdates.length);
+  $("softwareUpgradeAll").disabled = softwareBusy;
+  $("softwareSearchBar").classList.toggle("hidden", state !== "ready" || softwareTab !== "search");
+  $("softwareBucketBar").classList.toggle("hidden", state !== "ready" || softwareTab !== "buckets");
+  $("softwareAddBucket").disabled = softwareBusy || state !== "ready";
+  $("softwareAddBucket").textContent = softwareBusy && softwareTab === "buckets" ? "Working…" : "Add bucket";
+  document.querySelectorAll("[data-software-tab]").forEach(b => b.classList.toggle("active", b.dataset.softwareTab === softwareTab));
+  if (state !== "ready") { packages.innerHTML = `<div class="empty compact"><h2>${state === "initializing" ? "Preparing RunPilot Software Management…" : "Software unavailable"}</h2><p>${escapeHtml(message)}</p></div>`; return; }
+  if (softwareLoading) { packages.innerHTML = `<div class="software-loading" role="status"><span class="spinner" aria-hidden="true"></span><strong>Loading ${softwareTab === "buckets" ? "buckets" : "applications"}…</strong><span>Querying the selected provider.</span></div>`; return; }
+  if (softwareTab === "buckets" && softwareBusy) { packages.innerHTML = `<div class="software-loading" role="status"><span class="spinner" aria-hidden="true"></span><strong>${escapeHtml(softwareBusyLabel || "Updating buckets")}…</strong><span>Waiting for Scoop to finish the bucket operation.</span></div>`; return; }
+  if (softwareTab === "buckets") {
+    packages.innerHTML = softwareBuckets.length ? softwareBuckets.map(bucket => `<article class="software-bucket-row"><div><h3>${escapeHtml(bucket.name)}</h3><div class="meta">${escapeHtml(bucket.source || "Scoop default source")}</div></div><div class="row-actions">${bucket.protected ? `<span class="software-protected" title="This bucket is required by Scoop">Required by Scoop</span>` : `<button class="button danger small" onclick="softwareRemoveBucket('${escapeHtml(bucket.name)}')" ${softwareBusy ? "disabled" : ""}>Remove</button>`}</div></article>`).join("") : `<div class="empty compact"><h2>No additional buckets</h2><p>Add a trusted Scoop bucket to make its applications available for search.</p></div>`;
+    return;
+  }
+  const items = softwareTab === "updates" ? softwareUpdates : softwareTab === "search" ? softwareSearchResults : softwarePackages;
+  packages.innerHTML = items.length ? items.map(p => `<article class="software-package-row"><div class="software-package-name"><h3>${escapeHtml(p.name)}</h3><div class="meta">${escapeHtml(p.description || p.bucket || "Scoop main bucket")}</div></div>${p.updateAvailable ? statusBadge("update") : p.installed ? statusBadge("installed") : ""}<div class="software-package-meta">${softwarePackageFacts(p)}</div><div class="row-actions">${p.protected ? `${p.installed && p.updateAvailable ? `<button class="button software-protected-action small" disabled>Upgrade</button>` : ""}<button class="button software-protected-action small" disabled>${p.installed ? "Uninstall" : "Install"}</button>` : p.installed ? `${p.updateAvailable ? `<button class="button primary small" onclick="softwareUpgrade('${escapeHtml(p.id)}')" ${softwareBusy ? "disabled" : ""}>Upgrade</button>` : ""}<button class="button danger small" onclick="softwareUninstall('${escapeHtml(p.id)}')" ${softwareBusy ? "disabled" : ""}>Uninstall</button>` : `<button class="button primary small" onclick="softwareInstall('${escapeHtml(p.id)}')" ${softwareBusy ? "disabled" : ""}>Install</button>`}</div></article>`).join("") : `<div class="empty compact"><h2>${softwareTab === "search" ? "Search the managed buckets" : softwareTab === "updates" ? "No updates found" : "No RunPilot-managed applications"}</h2><p>${softwareTab === "installed" ? "Applications installed in another Scoop root are deliberately not shown here." : ""}</p></div>`;
+}
+function changeSoftwareProvider(id) { if (id === softwareProviderID) return; softwareProviderID = id; softwarePackages = []; softwareUpdates = []; softwareSearchResults = []; softwareBuckets = []; softwareLoadedKey = ""; softwareLoadSequence++; softwareLoading = true; renderSoftware(); refresh(); }
+async function softwareAction(path, options = {}, busyLabel = "") { softwareBusy = true; softwareBusyLabel = busyLabel; renderSoftware(); let completed = false; try { await api(path, options); completed = true; softwareLoadedKey = ""; toast("Software operation completed"); await refresh(); } catch (e) { toast(e.message); await refresh(); } finally { softwareBusy = false; softwareBusyLabel = ""; renderSoftware(); } return completed; }
+function softwareInstall(id) { const p=activeSoftwareProvider(); if(p) softwareAction(`api/v1/software/providers/${p.id}/install`, {method:"POST", body:JSON.stringify({package:id})}); }
+function softwareUpgrade(id) { const p=activeSoftwareProvider(); if(p) softwareAction(`api/v1/software/providers/${p.id}/packages/${encodeURIComponent(id)}/upgrade`, {method:"POST"}); }
+function softwareUninstall(id) { const p=activeSoftwareProvider(); if(p && confirm(`Uninstall ${id} from the RunPilot-managed Scoop root?`)) softwareAction(`api/v1/software/providers/${p.id}/packages/${encodeURIComponent(id)}/uninstall`, {method:"POST"}); }
+function softwareRefresh() { const p=activeSoftwareProvider(); if(p) softwareAction(`api/v1/software/providers/${p.id}/refresh`, {method:"POST"}); }
+function softwareUpgradeAll() { const p=activeSoftwareProvider(); if(p && confirm("Upgrade all RunPilot-managed Scoop applications?")) softwareAction(`api/v1/software/providers/${p.id}/upgrade-all`, {method:"POST"}); }
+function saveSoftwareRoot() { const p=activeSoftwareProvider(); if(!p)return; const root = $("softwareRoot").value.trim(); softwareRootDrafts[p.id] = root; softwareAction(`api/v1/software/providers/${p.id}`, {method:"PUT",body:JSON.stringify({scoop:{root}})}); }
+function softwareAddBucket() { const p = activeSoftwareProvider(), name = $("softwareBucketName").value.trim(), source = $("softwareBucketSource").value.trim(); if (!p || !name) { toast("A bucket name is required."); return; } softwareAction(`api/v1/software/providers/${p.id}/buckets`, {method:"POST", body:JSON.stringify({name, source})}, "Adding bucket").then(completed => { if (completed) { $("softwareBucketName").value = ""; $("softwareBucketSource").value = ""; } }); }
+function softwareRemoveBucket(name) { const p = activeSoftwareProvider(); if (p && confirm(`Remove Scoop bucket ${name}?`)) softwareAction(`api/v1/software/providers/${p.id}/buckets/${encodeURIComponent(name)}`, {method:"DELETE"}, "Removing bucket"); }
+function softwareViewKey() { const p = activeSoftwareProvider(); if (!p || p.state !== "ready") return ""; const query = softwareTab === "search" ? $("softwareSearchInput").value.trim() : ""; return `${p.id}|${softwareTab}|${query}`; }
+async function loadSoftwareView(force = false) {
+  const p = activeSoftwareProvider(), query = $("softwareSearchInput").value.trim();
+  if (!p || p.state !== "ready") return;
+  if (softwareTab === "search" && !query) { softwareSearchResults = []; softwareLoading = false; renderSoftware(); return; }
+  const key = softwareViewKey();
+  if (!force && key === softwareLoadedKey) return;
+  if (!force && softwareLoading && key === softwareLoadingKey) return;
+  const sequence = ++softwareLoadSequence;
+  softwareLoading = true; softwareLoadingKey = key; renderSoftware();
+  try {
+    const result = softwareTab === "installed" ? await api(`api/v1/software/providers/${p.id}/installed`) : softwareTab === "updates" ? await api(`api/v1/software/providers/${p.id}/updates`) : softwareTab === "buckets" ? await api(`api/v1/software/providers/${p.id}/buckets`) : await api(`api/v1/software/providers/${p.id}/search?` + new URLSearchParams({q:query}));
+    if (sequence !== softwareLoadSequence) return;
+    const items = Array.isArray(result) ? result : [];
+    if (softwareTab === "installed") softwarePackages = items;
+    else if (softwareTab === "updates") softwareUpdates = items;
+    else if (softwareTab === "buckets") softwareBuckets = items;
+    else softwareSearchResults = items;
+    softwareLoadedKey = key;
+  } catch (e) { if (sequence === softwareLoadSequence) toast(e.message); }
+  finally { if (sequence === softwareLoadSequence) { softwareLoading = false; softwareLoadingKey = ""; renderSoftware(); } }
+}
+function softwareSearch() { loadSoftwareView(true); }
+
 function setPage(page) {
   currentPage = page;
   document.querySelectorAll(".nav").forEach(n => n.classList.toggle("active", n.dataset.page === page));
@@ -491,10 +582,21 @@ function setPage(page) {
   $("pageSubtitle").textContent = sub;
   $("primaryAction").textContent = action || "";
   $("primaryAction").classList.toggle("hidden", !action);
+	if (page === "software" && !softwareProviders.length) {
+		$("softwareProviderCard").innerHTML = `<div class="empty compact"><h2>Preparing RunPilot Software Management…</h2><p>Initializing the managed Scoop runtime for this RunPilot data directory.</p></div>`;
+		$("softwarePackages").innerHTML = `<div class="software-loading" role="status"><span class="spinner" aria-hidden="true"></span><strong>Loading applications…</strong><span>Querying the selected provider.</span></div>`;
+	}
   refresh();
 }
 
 document.querySelectorAll(".nav").forEach(n => n.addEventListener("click", () => setPage(n.dataset.page)));
+document.querySelectorAll("[data-software-tab]").forEach(button => button.addEventListener("click", () => { softwareTab = button.dataset.softwareTab; renderSoftware(); loadSoftwareView(); }));
+$("softwareSearchButton").addEventListener("click", softwareSearch);
+$("softwareUpgradeAll").addEventListener("click", softwareUpgradeAll);
+$("softwareAddBucket").addEventListener("click", softwareAddBucket);
+$("softwareProviderSelect").addEventListener("change", event => changeSoftwareProvider(event.target.value));
+$("softwareSearchInput").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareSearch(); } });
+$("softwareBucketSource").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareAddBucket(); } });
 document.querySelectorAll("[data-dismiss]").forEach(button => button.addEventListener("click", () => {
   $(button.dataset.dismiss).close();
 }));

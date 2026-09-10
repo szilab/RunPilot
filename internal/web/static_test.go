@@ -16,6 +16,12 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		`id="overviewPage"`,
 		`runpilot-logo.png`,
 		`id="themeToggle"`,
+		`data-page="software"`,
+		`id="softwarePage"`,
+		`id="softwareProviderSelect"`,
+		`id="softwareProviderCard"`,
+		`data-software-tab="buckets"`,
+		`id="softwareBucketBar"`,
 		`class="row-list"`,
 		`type="button" data-dismiss="processDialog"`,
 		`type="button" data-dismiss="jobDialog"`,
@@ -37,7 +43,7 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(app)
-	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "api/v1/overview", `class="row"`} {
+	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "Loading applications", "api/v1/software/providers", "/buckets", "api/v1/overview", `class="row"`} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js does not contain %q", want)
 		}

@@ -2,7 +2,7 @@
 
 RunPilot is a lightweight Windows host-management application written in Go. One native Windows service manages configured workloads and operations and exposes an embedded local web UI.
 
-The current MVP focuses on process supervision, scheduling and backup jobs. The longer-term product direction is a coherent Windows management GUI for applications, scheduled operations, backup tools, storage access and, later, software installation.
+RunPilot provides process supervision, scheduling, backup jobs, storage access and isolated software management through a coherent Windows management GUI.
 
 The project takes the useful operating model of Perch — one service, one dashboard, many managed processes — but uses its own implementation and broader typed capability/integration model.
 
@@ -12,7 +12,7 @@ A central architectural rule is:
 
 RunPilot should integrate specialist tools such as Robocopy, Restic or future package/runtime providers instead of reimplementing their core semantics.
 
-## MVP capabilities
+## Capabilities
 
 - Native Windows service (`RunPilot Process Manager`)
 - Long-running process supervision
@@ -28,6 +28,7 @@ RunPilot should integrate specialist tools such as Robocopy, Restic or future pa
 - Overview dashboard with host CPU, memory, disk and workload health
 - Token-authenticated API bound to `127.0.0.1` by default
 - YAML configuration under `%ProgramData%\RunPilot`
+- Software Management through a RunPilot-owned isolated Scoop provider
 
 ## Product direction
 
@@ -39,7 +40,7 @@ Planned/possible capabilities include:
 - **Jobs** — manually or automatically scheduled one-shot operations.
 - **Backups** — GUI and scheduling around specialist backup tools.
 - **Storage** — writable Local Filesystem browsing (a restricted folder or all drives accessible to the service identity), plus future versioned providers.
-- **Software** — later GUI over external installation/package providers such as WinGet.
+- **Software** — install, upgrade and remove portable applications through the RunPilot-owned Scoop provider; WinGet may be a future provider for conventional Windows software.
 - **History and health** — shared execution history, logs and host/workload status.
 
 An external integration may serve more than one capability. For example, a future Restic integration can provide both backup execution and storage browsing/version restore while sharing repository configuration, executable discovery and credentials.
@@ -129,6 +130,20 @@ backup:
 
 `mirror` mode maps to Robocopy `/MIR` and can delete destination-only files. The UI displays an explicit warning before saving it.
 
+Software Management is configured with a typed, RunPilot-owned Scoop provider:
+
+```yaml
+software:
+  providers:
+    - id: scoop
+      name: RunPilot Scoop
+      type: scoop
+      scoop:
+        root: D:\RunPilotApps # optional; empty uses <data-dir>\software\scoop
+```
+
+RunPilot downloads and bootstraps this isolated Scoop instance on first use, including Scoop's managed portable Git prerequisite under the same root. It never uses, changes, or imports an existing user Scoop installation; it does not permanently add Scoop shims to PATH or set global Scoop environment variables. Changing `root` selects a new isolated installation and leaves the old root untouched. Packages are standard portable Scoop packages and remain separate from RunPilot Process definitions. The Software page can list, add and remove Scoop buckets through typed controls; the required `main` bucket, Git and 7-Zip remain visible but their individual package controls are disabled because Scoop manages them.
+
 ## Architecture
 
 ```text
@@ -144,7 +159,7 @@ runpilot.exe
 └── Embedded HTTP API + web UI
 ```
 
-The first MVP deliberately keeps persistence simple. A later milestone can migrate history/configuration to embedded SQLite once the domain/API has stabilized.
+The first implementation deliberately keeps persistence simple. A later milestone can migrate history/configuration to embedded SQLite once the domain/API has stabilized.
 
 ## Near-term roadmap
 
@@ -156,5 +171,5 @@ The first MVP deliberately keeps persistence simple. A later milestone can migra
 6. Add Restic snapshot/version browsing, download and restore. Its read/version capabilities will intentionally differ from the writable Local Filesystem provider.
 7. Add encrypted secret/environment/integration credential storage using Windows DPAPI or an equivalent protected mechanism.
 8. Add a double-click/tray management shell for install/start/stop/open-UI actions.
-9. Explore software installation/upgrade GUI through external providers such as WinGet.
+9. Add further typed Software providers such as WinGet for conventional Windows software where appropriate.
 10. Add signed Windows releases and GitHub Actions CI/release builds.

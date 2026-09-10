@@ -54,3 +54,41 @@ func TestDownloadTicketAtRootUsesLocalPath(t *testing.T) {
 		t.Fatalf("download = %d, %v", got.Code, got.Body.Bytes())
 	}
 }
+
+func TestSoftwareProviderConfigurationRequiresAuth(t *testing.T) {
+	ctrl, err := core.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	s, err := New(ctrl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unauthorized := httptest.NewRequest(http.MethodPut, "/api/v1/software/providers/scoop", bytes.NewBufferString(`{"scoop":{"root":"C:\\RunPilotSoftware"}}`))
+	r := httptest.NewRecorder()
+	s.Handler().ServeHTTP(r, unauthorized)
+	if r.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d", r.Code)
+	}
+	authorized := httptest.NewRequest(http.MethodPut, "/api/v1/software/providers/scoop", bytes.NewBufferString(`{"scoop":{"root":"C:\\RunPilotSoftware"}}`))
+	authorized.Header.Set("Authorization", "Bearer "+ctrl.Snapshot().Server.Token)
+	r = httptest.NewRecorder()
+	s.Handler().ServeHTTP(r, authorized)
+	if r.Code != http.StatusOK {
+		t.Fatalf("configuration status = %d: %s", r.Code, r.Body.String())
+	}
+	var provider struct{ ID string }
+	if err := json.NewDecoder(r.Body).Decode(&provider); err != nil {
+		t.Fatal(err)
+	}
+	if provider.ID != "scoop" {
+		t.Fatalf("provider = %#v", provider)
+	}
+	unauthorizedBuckets := httptest.NewRequest(http.MethodGet, "/api/v1/software/providers/scoop/buckets", nil)
+	r = httptest.NewRecorder()
+	s.Handler().ServeHTTP(r, unauthorizedBuckets)
+	if r.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated bucket status = %d", r.Code)
+	}
+}
