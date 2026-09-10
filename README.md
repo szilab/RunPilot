@@ -1,8 +1,16 @@
 # RunPilot
 
-RunPilot is a lightweight Windows process manager, task scheduler and backup-job launcher written in Go. One native Windows service manages all configured workloads and exposes an embedded local web UI.
+RunPilot is a lightweight Windows host-management application written in Go. One native Windows service manages configured workloads and operations and exposes an embedded local web UI.
 
-The project takes the useful operating model of Perch — one service, one dashboard, many managed processes — but uses its own implementation and a broader typed job model.
+The current MVP focuses on process supervision, scheduling and backup jobs. The longer-term product direction is a coherent Windows management GUI for applications, scheduled operations, backup tools, storage access and, later, software installation.
+
+The project takes the useful operating model of Perch — one service, one dashboard, many managed processes — but uses its own implementation and broader typed capability/integration model.
+
+A central architectural rule is:
+
+> **RunPilot manages tools and workloads; it does not become those tools.**
+
+RunPilot should integrate specialist tools such as Robocopy, Restic or future package/runtime providers instead of reimplementing their core semantics.
 
 ## MVP capabilities
 
@@ -20,6 +28,27 @@ The project takes the useful operating model of Perch — one service, one dashb
 - Overview dashboard with host CPU, memory, disk and workload health
 - Token-authenticated API bound to `127.0.0.1` by default
 - YAML configuration under `%ProgramData%\RunPilot`
+
+## Product direction
+
+RunPilot separates user-facing capabilities from external tool integrations.
+
+Planned/possible capabilities include:
+
+- **Applications** — lifecycle, status and logs for long-running workloads.
+- **Jobs** — manually or automatically scheduled one-shot operations.
+- **Backups** — GUI and scheduling around specialist backup tools.
+- **Storage** — browsable local or versioned storage providers with capabilities such as download, historical versions and restore.
+- **Software** — later GUI over external installation/package providers such as WinGet.
+- **History and health** — shared execution history, logs and host/workload status.
+
+An external integration may serve more than one capability. For example, a future Restic integration can provide both backup execution and storage browsing/version restore while sharing repository configuration, executable discovery and credentials.
+
+RunPilot should not emulate unsupported backend features merely to make integrations look identical. If Robocopy does not provide versioned repository semantics, versioned backup should use a tool that natively provides them rather than adding a home-grown backup format to RunPilot.
+
+Similarly, future Docker/Compose support should attach to an already functional external runtime and expose useful GUI lifecycle/status/log operations. Provisioning WSL, installing or operating Docker daemons, implementing container networking or recreating Docker orchestration are not currently part of the RunPilot product boundary.
+
+See `ARCHITECTURE.md` for the detailed capability/integration model and guardrails.
 
 ## Development
 
@@ -106,10 +135,11 @@ backup:
 runpilot.exe
 ├── Windows Service host
 ├── Core controller
-│   ├── Process manager
+│   ├── Application/process supervision
 │   ├── Scheduler
 │   ├── One-shot job runner
-│   └── Backup engine adapters
+│   └── Typed external integrations
+├── Future storage providers / software providers
 ├── YAML config + JSONL run history + per-run logs
 └── Embedded HTTP API + web UI
 ```
@@ -122,7 +152,9 @@ The first MVP deliberately keeps persistence simple. A later milestone can migra
 2. Add graceful stop policies and configurable stop timeouts.
 3. Add live log streaming (SSE/WebSocket), rotation and retention.
 4. Add job cancellation and richer running-job state.
-5. Add more built-in backup engines (`wbadmin` where appropriate) and retention/verification policy.
-6. Add encrypted secret/environment storage using Windows DPAPI.
-7. Add a double-click/tray management shell for install/start/stop/open-UI actions.
-8. Add signed Windows releases and GitHub Actions CI/release builds.
+5. Refine the integration boundary and add additional typed backup tools, with Restic as the preferred direction for versioned/snapshot backup semantics.
+6. Add a read-oriented Storage capability, beginning with explicitly configured local filesystem roots and later Restic snapshot/version browsing, download and restore.
+7. Add encrypted secret/environment/integration credential storage using Windows DPAPI or an equivalent protected mechanism.
+8. Add a double-click/tray management shell for install/start/stop/open-UI actions.
+9. Explore software installation/upgrade GUI through external providers such as WinGet.
+10. Add signed Windows releases and GitHub Actions CI/release builds.
