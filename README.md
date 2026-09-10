@@ -74,6 +74,10 @@ The default data directory is `%ProgramData%\RunPilot`.
 
 Processes are continuous workloads. Scheduled jobs are one-shot executions. Backups are a typed job subtype, so they use the same scheduler, history and manual-run machinery without becoming arbitrary shell-script templates.
 
+Processes and command jobs can set per-command environment variables. These values
+are stored in the normal RunPilot YAML configuration and are not encrypted secret
+storage.
+
 Example backup definition:
 
 ```yaml

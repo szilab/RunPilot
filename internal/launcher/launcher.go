@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/szilab/RunPilot/internal/model"
@@ -14,6 +15,9 @@ import (
 func Build(spec model.CommandSpec) (*exec.Cmd, error) {
 	if strings.TrimSpace(spec.Path) == "" {
 		return nil, fmt.Errorf("command path is required")
+	}
+	if err := model.ValidateCommand(spec); err != nil {
+		return nil, err
 	}
 
 	interpreter := strings.ToLower(strings.TrimSpace(spec.Interpreter))
@@ -52,11 +56,46 @@ func Build(spec model.CommandSpec) (*exec.Cmd, error) {
 	if spec.WorkingDirectory != "" {
 		cmd.Dir = spec.WorkingDirectory
 	}
-	cmd.Env = os.Environ()
-	for k, v := range spec.Environment {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
+	cmd.Env = mergeEnvironment(os.Environ(), spec.Environment, runtime.GOOS == "windows")
 	return cmd, nil
+}
+
+// mergeEnvironment returns inherited entries with configured values applied.
+// Case-insensitive matching is used for Windows, which prevents PATH and Path
+// from being passed to a child as competing environment variables.
+func mergeEnvironment(inherited []string, configured map[string]string, caseInsensitive bool) []string {
+	if len(configured) == 0 {
+		return append([]string(nil), inherited...)
+	}
+
+	canonicalName := func(name string) string {
+		if caseInsensitive {
+			return strings.ToUpper(name)
+		}
+		return name
+	}
+	overrides := make(map[string]struct{}, len(configured))
+	keys := make([]string, 0, len(configured))
+	for name := range configured {
+		overrides[canonicalName(name)] = struct{}{}
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+
+	merged := make([]string, 0, len(inherited)+len(configured))
+	for _, entry := range inherited {
+		name, _, found := strings.Cut(entry, "=")
+		if found {
+			if _, overridden := overrides[canonicalName(name)]; overridden {
+				continue
+			}
+		}
+		merged = append(merged, entry)
+	}
+	for _, name := range keys {
+		merged = append(merged, name+"="+configured[name])
+	}
+	return merged
 }
 
 func inferInterpreter(path string) string {

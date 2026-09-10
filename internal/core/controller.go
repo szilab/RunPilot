@@ -136,6 +136,9 @@ func (c *Controller) UpsertProcess(p model.ProcessDefinition) (model.ProcessDefi
 	if strings.TrimSpace(p.Command.Path) == "" {
 		return p, fmt.Errorf("process command path is required")
 	}
+	if err := model.ValidateCommand(p.Command); err != nil {
+		return p, err
+	}
 	if p.ID == "" {
 		p.ID = config.NewID("proc")
 	}
@@ -195,6 +198,9 @@ func (c *Controller) UpsertJob(j model.JobDefinition) (model.JobDefinition, erro
 	case model.JobCommand:
 		if j.Command == nil || strings.TrimSpace(j.Command.Path) == "" {
 			return j, fmt.Errorf("command job requires a command")
+		}
+		if err := model.ValidateCommand(*j.Command); err != nil {
+			return j, err
 		}
 		j.Backup = nil
 	case model.JobBackup:

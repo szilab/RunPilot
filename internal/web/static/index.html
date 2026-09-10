@@ -128,6 +128,15 @@
         <label class="span-2">Executable or script path<input id="processPath" placeholder="C:\Tools\myapp.exe" required></label>
         <label class="span-2">Arguments<input id="processArgs" placeholder='--port 8080 --mode service'></label>
         <label class="span-2">Working directory<input id="processCwd" placeholder="Optional"></label>
+        <div class="environment-editor span-2" data-command-prefix="process">
+          <div class="environment-head">
+            <div><strong>Environment variables</strong><span>Optional values passed only to this process.</span></div>
+            <button class="button secondary small env-add" type="button">+ Add variable</button>
+          </div>
+          <div id="processEnvRows" class="environment-rows"></div>
+          <p id="processEnvEmpty" class="environment-empty">No custom variables configured.</p>
+          <p id="processCommandError" class="form-error hidden" role="alert"></p>
+        </div>
         <label>Restart policy
           <select id="processRestart">
             <option value="on-failure">On failure</option>
@@ -164,6 +173,16 @@
         </label>
         <label class="span-2">Executable or script path<input id="jobPath" required></label>
         <label class="span-2">Arguments<input id="jobArgs"></label>
+        <label class="span-2">Working directory<input id="jobCwd" placeholder="Optional"></label>
+        <div class="environment-editor span-2" data-command-prefix="job">
+          <div class="environment-head">
+            <div><strong>Environment variables</strong><span>Optional values passed only to this job.</span></div>
+            <button class="button secondary small env-add" type="button">+ Add variable</button>
+          </div>
+          <div id="jobEnvRows" class="environment-rows"></div>
+          <p id="jobEnvEmpty" class="environment-empty">No custom variables configured.</p>
+          <p id="jobCommandError" class="form-error hidden" role="alert"></p>
+        </div>
         <label>Schedule
           <select id="jobScheduleType">
             <option value="interval">Interval</option>

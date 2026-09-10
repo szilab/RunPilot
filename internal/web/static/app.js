@@ -87,6 +87,85 @@ function formatArgs(args = []) {
   return args.map(a => /\s/.test(a) ? `"${a.replaceAll('"', '\\"')}"` : a).join(" ");
 }
 
+function setCommandError(prefix, message = "") {
+  const error = $(`${prefix}CommandError`);
+  error.textContent = message;
+  error.classList.toggle("hidden", !message);
+}
+
+function updateEnvironmentEmpty(prefix) {
+  const hasRows = $(`${prefix}EnvRows`).children.length > 0;
+  $(`${prefix}EnvEmpty`).classList.toggle("hidden", hasRows);
+}
+
+function addEnvironmentRow(prefix, name = "", value = "", focusName = false) {
+  const row = document.createElement("div");
+  row.className = "environment-row";
+  row.innerHTML = `<input class="environment-name" aria-label="Variable name" placeholder="NAME">
+    <input class="environment-value" aria-label="Variable value" placeholder="Value">
+    <button class="button secondary small environment-remove" type="button" title="Remove variable" aria-label="Remove variable">Remove</button>`;
+  row.querySelector(".environment-name").value = name;
+  row.querySelector(".environment-value").value = value;
+  row.querySelector(".environment-remove").addEventListener("click", () => {
+    row.remove();
+    updateEnvironmentEmpty(prefix);
+  });
+  $(`${prefix}EnvRows`).append(row);
+  updateEnvironmentEmpty(prefix);
+  if (focusName) row.querySelector(".environment-name").focus();
+}
+
+function populateCommandEditor(prefix, command = {}) {
+  $(`${prefix}Path`).value = command.path || "";
+  $(`${prefix}Args`).value = formatArgs(command.args || []);
+  $(`${prefix}Cwd`).value = command.workingDirectory || "";
+  $(`${prefix}Interpreter`).value = command.interpreter || "auto";
+  $(`${prefix}EnvRows`).replaceChildren();
+  Object.keys(command.environment || {}).sort((a, b) => a.localeCompare(b)).forEach(name => {
+    addEnvironmentRow(prefix, name, command.environment[name]);
+  });
+  updateEnvironmentEmpty(prefix);
+  setCommandError(prefix);
+}
+
+function commandFromEditor(prefix) {
+  const environment = {};
+  const names = new Map();
+  for (const row of $(`${prefix}EnvRows`).querySelectorAll(".environment-row")) {
+    const name = row.querySelector(".environment-name").value.trim();
+    const value = row.querySelector(".environment-value").value;
+    if (!name && !value) continue;
+    if (!name) {
+      setCommandError(prefix, "Environment variable names are required.");
+      return null;
+    }
+    if (name.includes("=")) {
+      setCommandError(prefix, `Environment variable "${name}" must not contain =.`);
+      return null;
+    }
+    const canonicalName = name.toUpperCase();
+    if (names.has(canonicalName)) {
+      setCommandError(prefix, `Environment variables "${names.get(canonicalName)}" and "${name}" conflict on Windows.`);
+      return null;
+    }
+    names.set(canonicalName, name);
+    environment[name] = value;
+  }
+  setCommandError(prefix);
+  return {
+    path: $(`${prefix}Path`).value.trim(),
+    args: splitArgs($(`${prefix}Args`).value),
+    workingDirectory: $(`${prefix}Cwd`).value.trim(),
+    interpreter: $(`${prefix}Interpreter`).value,
+    environment,
+  };
+}
+
+document.querySelectorAll(".environment-editor").forEach(editor => {
+  const prefix = editor.dataset.commandPrefix;
+  editor.querySelector(".env-add").addEventListener("click", () => addEnvironmentRow(prefix, "", "", true));
+});
+
 function fmtDate(value) {
   if (!value) return "—";
   return new Date(value).toLocaleString();
@@ -351,10 +430,7 @@ function openProcess(existing = null) {
   $("processForm").reset();
   $("processId").value = existing?.id || "";
   $("processName").value = existing?.name || "";
-  $("processPath").value = existing?.command?.path || "";
-  $("processArgs").value = formatArgs(existing?.command?.args || []);
-  $("processCwd").value = existing?.command?.workingDirectory || "";
-  $("processInterpreter").value = existing?.command?.interpreter || "auto";
+  populateCommandEditor("process", existing?.command);
   $("processRestart").value = existing?.restart?.mode || "on-failure";
   $("processAutostart").checked = !!existing?.autostart;
   $("processDialogTitle").textContent = existing ? "Edit process" : "Add process";
@@ -365,15 +441,12 @@ function editProcess(id) { openProcess(processes.find(v => v.definition.id === i
 $("processForm").addEventListener("submit", async e => {
   e.preventDefault();
   const id = $("processId").value;
+  const command = commandFromEditor("process");
+  if (!command) return;
   const body = {
     name: $("processName").value.trim(),
     autostart: $("processAutostart").checked,
-    command: {
-      path: $("processPath").value.trim(),
-      args: splitArgs($("processArgs").value),
-      workingDirectory: $("processCwd").value.trim(),
-      interpreter: $("processInterpreter").value,
-    },
+    command,
     restart: {
       mode: $("processRestart").value,
       initialDelaySeconds: 2,
@@ -384,7 +457,7 @@ $("processForm").addEventListener("submit", async e => {
   try {
     await api(id ? `api/v1/processes/${id}` : "api/v1/processes", {method: id ? "PUT" : "POST", body: JSON.stringify(body)});
     $("processDialog").close(); await refresh();
-  } catch (err) { toast(err.message); }
+  } catch (err) { setCommandError("process", err.message); }
 });
 
 function setScheduleFields(prefix, type) {
@@ -415,9 +488,7 @@ function openJob(existing = null) {
   $("jobForm").reset();
   $("jobId").value = existing?.id || "";
   $("jobName").value = existing?.name || "";
-  $("jobPath").value = existing?.command?.path || "";
-  $("jobArgs").value = formatArgs(existing?.command?.args || []);
-  $("jobInterpreter").value = existing?.command?.interpreter || "auto";
+  populateCommandEditor("job", existing?.command);
   $("jobEnabled").checked = existing ? !!existing.enabled : true;
   fillSchedule("job", existing?.schedule || {});
   $("jobDialogTitle").textContent = existing ? "Edit scheduled job" : "Add scheduled job";
@@ -428,22 +499,20 @@ function editJob(id) { openJob(jobs.find(v => v.definition.id === id)?.definitio
 $("jobForm").addEventListener("submit", async e => {
   e.preventDefault();
   const id = $("jobId").value;
+  const command = commandFromEditor("job");
+  if (!command) return;
   const body = {
     name: $("jobName").value.trim(),
     enabled: $("jobEnabled").checked,
     type: "command",
     overlapPolicy: "skip",
     schedule: scheduleFrom("job"),
-    command: {
-      path: $("jobPath").value.trim(),
-      args: splitArgs($("jobArgs").value),
-      interpreter: $("jobInterpreter").value,
-    }
+    command,
   };
   try {
     await api(id ? `api/v1/jobs/${id}` : "api/v1/jobs", {method: id ? "PUT" : "POST", body: JSON.stringify(body)});
     $("jobDialog").close(); await refresh();
-  } catch (err) { toast(err.message); }
+  } catch (err) { setCommandError("job", err.message); }
 });
 
 function openBackup(existing = null) {
