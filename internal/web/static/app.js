@@ -372,11 +372,14 @@ function renderJobRow(v) {
 
 function renderBackupRow(v) {
   const d = v.definition, s = v.status, b = d.backup || {};
+  const provider = b.engine || "robocopy", cfg = b[provider === "rdiff-backup" ? "rdiffBackup" : provider] || b;
+  const source = provider === "restic" ? (cfg.sources || []).join(", ") : cfg.source;
+  const target = provider === "restic" ? cfg.repository : cfg.destination;
   const state = s.running ? "running" : (s.lastSuccess === false ? "failure" : "idle");
   return `<article class="row">
-    <div class="row-head"><div><h3>${escapeHtml(d.name)}</h3><div class="meta">${escapeHtml(b.source)} → ${escapeHtml(b.destination)}</div></div>${statusBadge(state)}</div>
+    <div class="row-head"><div><h3>${escapeHtml(d.name)}</h3><div class="meta">${escapeHtml(provider)} · ${escapeHtml(source || "")} → ${escapeHtml(target || "")}</div></div>${statusBadge(state)}</div>
     <div class="row-details">
-      <div class="kv"><span>Mode</span><span>${escapeHtml(b.mode || "copy")}</span></div>
+      <div class="kv"><span>Provider</span><span>${escapeHtml(provider)}</span></div>
       <div class="kv"><span>Schedule</span><span>${escapeHtml(scheduleText(d.schedule))}</span></div>
       <div class="kv"><span>Last run</span><span>${fmtDate(s.lastRunAt)}</span></div>
       <div class="kv"><span>Last result</span><span>${s.lastSuccess == null ? "—" : (s.lastSuccess ? "Success" : "Failed")}</span></div>
@@ -710,19 +713,31 @@ function openBackup(existing = null) {
   const b = existing?.backup || {};
   $("backupId").value = existing?.id || "";
   $("backupName").value = existing?.name || "";
-  $("backupSource").value = b.source || "";
-  $("backupDestination").value = b.destination || "";
-  $("backupMode").value = b.mode || "copy";
-  $("backupRetries").value = b.retries ?? 2;
+  const provider = b.engine || "robocopy", r = b.robocopy || b, restic = b.restic || {}, rdiff = b.rdiffBackup || {};
+  $("backupProvider").value = provider;
+  $("backupSource").value = r.source || ""; $("backupDestination").value = r.destination || ""; $("backupMode").value = r.mode || "copy"; $("backupRetries").value = r.retries ?? 2;
+  $("resticRepository").value=restic.repository||""; $("resticSources").value=(restic.sources||[]).join("\n"); $("resticExcludes").value=(restic.excludes||[]).join("\n"); $("resticTags").value=(restic.tags||[]).join("\n"); $("resticVss").checked=!!restic.useVss; $("resticCheck").checked=!!restic.checkAfterBackup; $("resticPasswordFile").value=restic.passwordFile||""; $("resticExecutable").value=restic.executable||"";
+  const rt=restic.retention||{}; $("resticRetentionEnabled").checked=!!restic.retention; $("resticKeepLast").value=rt.keepLast||""; $("resticKeepDaily").value=rt.keepDaily||""; $("resticKeepWeekly").value=rt.keepWeekly||""; $("resticKeepMonthly").value=rt.keepMonthly||""; $("resticKeepYearly").value=rt.keepYearly||""; $("resticKeepWithin").value=rt.keepWithin||""; $("resticPrune").checked=!!rt.prune;
+  $("rdiffSource").value=rdiff.source||""; $("rdiffDestination").value=rdiff.destination||""; $("rdiffExcludes").value=(rdiff.excludes||[]).join("\n"); $("rdiffRetentionEnabled").checked=!!rdiff.retention; $("rdiffOlderThan").value=rdiff.retention?.olderThan||""; $("rdiffVerify").checked=!!rdiff.verifyAfterBackup; $("rdiffExecutable").value=rdiff.executable||"";
   $("backupEnabled").checked = existing ? !!existing.enabled : true;
   fillSchedule("backup", existing?.schedule || {type:"daily", timeOfDay:"03:00"});
   updateMirrorWarning();
+  updateBackupProvider();
   $("backupDialogTitle").textContent = existing ? "Edit backup" : "Add backup";
   $("backupDialog").showModal();
 }
 function editBackup(id) { openBackup(jobs.find(v => v.definition.id === id)?.definition); }
 function updateMirrorWarning() { $("mirrorWarning").classList.toggle("hidden", $("backupMode").value !== "mirror"); }
 $("backupMode").addEventListener("change", updateMirrorWarning);
+function lines(id) { return $(id).value.split("\n").map(v=>v.trim()).filter(Boolean); }
+function updateBackupProvider() {
+  const p=$("backupProvider").value, robo=p==="robocopy";
+  ["backupMode","backupSource","backupDestination","backupRetries"].forEach(id=>$(id).closest("label").classList.toggle("hidden",!robo));
+  $("resticFields").classList.toggle("hidden",p!=="restic"); $("rdiffFields").classList.toggle("hidden",p!=="rdiff-backup");
+  $("mirrorWarning").classList.toggle("hidden",!robo || $("backupMode").value!=="mirror");
+  $("resticRetentionFields").classList.toggle("hidden",!$("resticRetentionEnabled").checked); $("rdiffRetentionWrap").classList.toggle("hidden",!$("rdiffRetentionEnabled").checked);
+}
+$("backupProvider").addEventListener("change", updateBackupProvider); $("resticRetentionEnabled").addEventListener("change",updateBackupProvider); $("rdiffRetentionEnabled").addEventListener("change",updateBackupProvider);
 
 $("backupForm").addEventListener("submit", async e => {
   e.preventDefault();
@@ -733,15 +748,11 @@ $("backupForm").addEventListener("submit", async e => {
     type: "backup",
     overlapPolicy: "skip",
     schedule: scheduleFrom("backup"),
-    backup: {
-      engine: "robocopy",
-      source: $("backupSource").value.trim(),
-      destination: $("backupDestination").value.trim(),
-      mode: $("backupMode").value,
-      retries: Number($("backupRetries").value),
-      retryWaitSeconds: 5,
-    }
+    backup: { engine: $("backupProvider").value }
   };
+  if (body.backup.engine === "robocopy") body.backup.robocopy={source:$("backupSource").value.trim(),destination:$("backupDestination").value.trim(),mode:$("backupMode").value,retries:Number($("backupRetries").value),retryWaitSeconds:5};
+  if (body.backup.engine === "restic") { const retention=$("resticRetentionEnabled").checked?{keepLast:Number($("resticKeepLast").value)||0,keepDaily:Number($("resticKeepDaily").value)||0,keepWeekly:Number($("resticKeepWeekly").value)||0,keepMonthly:Number($("resticKeepMonthly").value)||0,keepYearly:Number($("resticKeepYearly").value)||0,keepWithin:$("resticKeepWithin").value.trim(),prune:$("resticPrune").checked}:null; body.backup.restic={repository:$("resticRepository").value.trim(),sources:lines("resticSources"),excludes:lines("resticExcludes"),tags:lines("resticTags"),useVss:$("resticVss").checked,checkAfterBackup:$("resticCheck").checked,passwordFile:$("resticPasswordFile").value.trim(),executable:$("resticExecutable").value.trim(),retention}; }
+  if (body.backup.engine === "rdiff-backup") body.backup.rdiffBackup={source:$("rdiffSource").value.trim(),destination:$("rdiffDestination").value.trim(),excludes:lines("rdiffExcludes"),verifyAfterBackup:$("rdiffVerify").checked,executable:$("rdiffExecutable").value.trim(),retention:$("rdiffRetentionEnabled").checked?{olderThan:$("rdiffOlderThan").value.trim()}:null};
   try {
     await api(id ? `api/v1/jobs/${id}` : "api/v1/jobs", {method: id ? "PUT" : "POST", body: JSON.stringify(body)});
     $("backupDialog").close(); await refresh();

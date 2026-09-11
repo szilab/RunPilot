@@ -21,7 +21,7 @@ RunPilot should integrate specialist tools such as Robocopy, Restic or future pa
 - Exponential restart backoff
 - Interval, daily and cron scheduled jobs
 - Manual job execution
-- Typed backup jobs using Windows `robocopy.exe`
+- Typed backup jobs using Robocopy, Restic and rdiff-backup
 - Robocopy copy/update and mirror modes
 - Captured stdout/stderr and execution history
 - Embedded web GUI and REST API
@@ -43,7 +43,7 @@ Planned/possible capabilities include:
 - **Software** — install, upgrade and remove portable applications through the RunPilot-owned Scoop provider; WinGet may be a future provider for conventional Windows software.
 - **History and health** — shared execution history, logs and host/workload status.
 
-An external integration may serve more than one capability. For example, a future Restic integration can provide both backup execution and storage browsing/version restore while sharing repository configuration, executable discovery and credentials.
+An external integration may serve more than one capability. Restic currently provides backup execution, native retention and repository checking; repository browsing, historical versions and restore remain separate follow-up work.
 
 RunPilot should not emulate unsupported backend features merely to make integrations look identical. If Robocopy does not provide versioned repository semantics, versioned backup should use a tool that natively provides them rather than adding a home-grown backup format to RunPilot.
 
@@ -121,14 +121,44 @@ schedule:
 overlapPolicy: skip
 backup:
   engine: robocopy
-  source: D:\Data
-  destination: F:\Backup\Data
-  mode: copy
-  retries: 2
-  retryWaitSeconds: 5
+  robocopy:
+    source: D:\Data
+    destination: F:\Backup\Data
+    mode: copy
+    retries: 2
+    retryWaitSeconds: 5
 ```
 
 `mirror` mode maps to Robocopy `/MIR` and can delete destination-only files. The UI displays an explicit warning before saving it.
+
+Restic uses a repository and native snapshots; it can run `forget` retention (optionally with `--prune`) and a post-backup repository check. Passwords are not stored in configuration: use an optional `passwordFile` path or Restic's normal externally supplied environment.
+
+```yaml
+backup:
+  engine: restic
+  restic:
+    repository: F:\Restic
+    sources: [D:\Documents, D:\Photos]
+    excludes: ["*.tmp"]
+    tags: [home]
+    useVss: true
+    retention: { keepDaily: 7, keepMonthly: 12, prune: true }
+    checkAfterBackup: true
+```
+
+rdiff-backup keeps its own directly browsable current mirror and historical increments at the destination. RunPilot can ask it to remove older increments and verify a completed backup.
+
+```yaml
+backup:
+  engine: rdiff-backup
+  rdiffBackup:
+    source: D:\Photos
+    destination: F:\Backup\Photos
+    retention: { olderThan: 3M }
+    verifyAfterBackup: true
+```
+
+Repository/version browsing and restore workflows are intentionally not part of the Backup capability yet.
 
 Software Management is configured with a typed, RunPilot-owned Scoop provider:
 
@@ -167,8 +197,7 @@ The first implementation deliberately keeps persistence simple. A later mileston
 2. Add graceful stop policies and configurable stop timeouts.
 3. Add live log streaming (SSE/WebSocket), rotation and retention.
 4. Add job cancellation and richer running-job state.
-5. Refine the integration boundary and add additional typed backup tools, with Restic as the preferred direction for versioned/snapshot backup semantics.
-6. Add Restic snapshot/version browsing, download and restore. Its read/version capabilities will intentionally differ from the writable Local Filesystem provider.
+5. Add Restic snapshot/version browsing, download and restore. Its read/version capabilities will intentionally differ from the writable Local Filesystem provider.
 7. Add encrypted secret/environment/integration credential storage using Windows DPAPI or an equivalent protected mechanism.
 8. Add a double-click/tray management shell for install/start/stop/open-UI actions.
 9. Add further typed Software providers such as WinGet for conventional Windows software where appropriate.

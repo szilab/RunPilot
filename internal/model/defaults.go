@@ -29,14 +29,22 @@ func NormalizeJob(j *JobDefinition) {
 		if j.Backup.Engine == "" {
 			j.Backup.Engine = "robocopy"
 		}
-		if j.Backup.Mode == "" {
-			j.Backup.Mode = BackupCopy
+		if j.Backup.Engine == "robocopy" && j.Backup.Robocopy == nil {
+			j.Backup.Robocopy = &RobocopyBackupSpec{Source: j.Backup.Source, Destination: j.Backup.Destination, Mode: j.Backup.Mode, ExcludeDirs: j.Backup.ExcludeDirs, ExcludeFiles: j.Backup.ExcludeFiles, Retries: j.Backup.Retries, RetryWaitSeconds: j.Backup.RetryWaitSeconds, AdditionalArgs: j.Backup.AdditionalArgs}
+			j.Backup.Source, j.Backup.Destination, j.Backup.Mode = "", "", ""
+			j.Backup.ExcludeDirs, j.Backup.ExcludeFiles, j.Backup.AdditionalArgs = nil, nil, nil
+			j.Backup.Retries, j.Backup.RetryWaitSeconds = 0, 0
 		}
-		if j.Backup.Retries < 0 {
-			j.Backup.Retries = 0
-		}
-		if j.Backup.RetryWaitSeconds <= 0 {
-			j.Backup.RetryWaitSeconds = 5
+		if r := j.Backup.Robocopy; r != nil {
+			if r.Mode == "" {
+				r.Mode = BackupCopy
+			}
+			if r.Retries < 0 {
+				r.Retries = 0
+			}
+			if r.RetryWaitSeconds <= 0 {
+				r.RetryWaitSeconds = 5
+			}
 		}
 	}
 }

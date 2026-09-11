@@ -71,13 +71,13 @@
 
       <section id="backupsPage" class="page">
         <div class="notice">
-          <strong>Backup engine: Windows Robocopy</strong>
+          <strong>Backup providers: Robocopy, Restic and rdiff-backup</strong>
           <span>Copy and mirror jobs use the built-in <code>robocopy.exe</code>. Exit codes 0–7 are treated as successful/non-fatal.</span>
         </div>
         <div id="backupGrid" class="row-list"></div>
         <div id="backupEmpty" class="empty hidden">
           <h2>No backup jobs</h2>
-          <p>Schedule folder copies or mirrors using Windows Robocopy.</p>
+          <p>Create scheduled copy, repository snapshot, or increment-based backups.</p>
         </div>
       </section>
 
@@ -230,20 +230,21 @@
   <dialog id="backupDialog" class="dialog">
     <form method="dialog" id="backupForm">
       <div class="dialog-head">
-        <div><h2 id="backupDialogTitle">Add backup</h2><p>Schedule Robocopy using a safe preset.</p></div>
+        <div><h2 id="backupDialogTitle">Add backup</h2><p>Schedule a backup using the selected provider.</p></div>
         <button class="icon-btn" type="button" data-dismiss="backupDialog" aria-label="Close">×</button>
       </div>
       <input type="hidden" id="backupId">
       <div class="form-grid">
         <label>Name<input id="backupName" required></label>
+        <label>Provider<select id="backupProvider"><option value="robocopy">Robocopy</option><option value="restic">Restic</option><option value="rdiff-backup">rdiff-backup</option></select></label>
         <label>Mode
           <select id="backupMode">
             <option value="copy">Copy / update</option>
             <option value="mirror">Mirror (deletes destination extras)</option>
           </select>
         </label>
-        <label class="span-2">Source folder<input id="backupSource" placeholder="D:\Data" required></label>
-        <label class="span-2">Destination folder<input id="backupDestination" placeholder="F:\Backup\Data" required></label>
+        <label class="span-2">Source folder<input id="backupSource" placeholder="D:\Data"></label>
+        <label class="span-2">Destination folder<input id="backupDestination" placeholder="F:\Backup\Data"></label>
         <label>Schedule
           <select id="backupScheduleType">
             <option value="daily">Daily</option>
@@ -256,6 +257,23 @@
         <label id="backupCronWrap" class="hidden">Cron<input id="backupCron" placeholder="0 0 3 * * *"></label>
         <label>Retries<input id="backupRetries" type="number" min="0" value="2"></label>
         <label class="check"><input id="backupEnabled" type="checkbox" checked> Schedule enabled</label>
+        <div id="resticFields" class="span-2 provider-fields hidden">
+          <label>Repository<input id="resticRepository" placeholder="F:\Restic"></label>
+          <label>Source paths (one per line)<textarea id="resticSources" rows="3" placeholder="D:\Documents"></textarea></label>
+          <label>Excludes (one per line)<textarea id="resticExcludes" rows="2"></textarea></label>
+          <label>Tags (one per line)<textarea id="resticTags" rows="2"></textarea></label>
+          <label class="check"><input id="resticVss" type="checkbox"> Use Windows filesystem snapshot (VSS)</label>
+          <label class="check"><input id="resticCheck" type="checkbox"> Check repository after backup</label>
+          <label class="span-2">Password file path (optional)<input id="resticPasswordFile" placeholder="C:\Secure\restic-password.txt"></label>
+          <label class="check span-2"><input id="resticRetentionEnabled" type="checkbox"> Run Restic forget after backup</label>
+          <div id="resticRetentionFields" class="retention-fields span-2 hidden"><label>Keep last<input id="resticKeepLast" type="number" min="0"></label><label>Keep daily<input id="resticKeepDaily" type="number" min="0"></label><label>Keep weekly<input id="resticKeepWeekly" type="number" min="0"></label><label>Keep monthly<input id="resticKeepMonthly" type="number" min="0"></label><label>Keep yearly<input id="resticKeepYearly" type="number" min="0"></label><label>Keep within<input id="resticKeepWithin" placeholder="1y"></label><label class="check span-2"><input id="resticPrune" type="checkbox"> Prune repository</label></div>
+          <label class="span-2">Advanced: executable path (optional)<input id="resticExecutable" placeholder="restic.exe"></label>
+        </div>
+        <div id="rdiffFields" class="span-2 provider-fields hidden">
+          <label>Source folder<input id="rdiffSource" placeholder="D:\Photos"></label><label>Destination folder<input id="rdiffDestination" placeholder="F:\Backups\Photos"></label>
+          <p class="muted span-2">Destination remains a directly browsable current mirror. Do not edit <code>rdiff-backup-data</code>.</p>
+          <label class="span-2">Excludes (one per line)<textarea id="rdiffExcludes" rows="2"></textarea></label><label class="check"><input id="rdiffRetentionEnabled" type="checkbox"> Remove old increments after backup</label><label id="rdiffRetentionWrap" class="hidden">Older than<input id="rdiffOlderThan" placeholder="3M"></label><label class="check"><input id="rdiffVerify" type="checkbox"> Verify after backup</label><label class="span-2">Advanced: executable path (optional)<input id="rdiffExecutable" placeholder="rdiff-backup.exe"></label>
+        </div>
       </div>
       <div id="mirrorWarning" class="warning hidden">Mirror mode uses <code>/MIR</code>. Files that exist only in the destination can be deleted.</div>
       <div class="dialog-actions">

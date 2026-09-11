@@ -11,7 +11,7 @@ RunPilot should integrate existing specialist tools instead of reimplementing th
 Examples:
 
 - RunPilot supervises native processes; it does not replace the Windows process model.
-- RunPilot schedules and configures Robocopy or Restic; it does not implement its own backup format or deduplication engine.
+- RunPilot schedules and configures Robocopy, Restic or rdiff-backup; it does not implement its own backup format, deduplication engine or retention model.
 - RunPilot may expose Docker/Compose lifecycle operations in the future; it should not become a WSL or Docker orchestrator.
 - RunPilot exposes software installation through external providers; it should not become a package manager.
 
@@ -38,7 +38,7 @@ These capabilities should share RunPilot infrastructure such as configuration, s
 
 An integration encapsulates knowledge about an external tool or runtime. One integration may support multiple RunPilot capabilities.
 
-For example, a future Restic integration can provide both:
+For example, the Restic integration currently provides backup jobs and can later add its distinct Storage/browser operations without duplicating repository configuration:
 
 ```text
                     Restic integration
@@ -50,7 +50,7 @@ For example, a future Restic integration can provide both:
                                dump / restore
 ```
 
-Repository configuration, executable discovery, credentials and command construction should be shared by that integration rather than duplicated independently by backup and storage code.
+Repository configuration, executable discovery, password-file references and command construction stay with the typed Restic backup integration. Storage browsing and restore are not implemented yet and must not be implied by a backup definition.
 
 Tool-specific configuration should remain typed. Avoid a universal configuration model containing every feature offered by every possible backend. Capabilities unsupported by a selected tool should not be emulated inside RunPilot merely to make all integrations look identical.
 
@@ -129,9 +129,11 @@ Robocopy exit codes 0-7 are success/non-fatal states; 8+ is failure.
 
 Robocopy should remain a copy/mirror integration. RunPilot must not build its own versioned-backup layer on top of Robocopy simply because Robocopy does not provide repository snapshots or version history.
 
-### Additional backup tools
+### Restic and rdiff-backup
 
-When a feature requires semantics not offered by the active tool, use an integration for a tool that natively provides those semantics. A future Restic integration is the preferred direction for snapshot/versioned backup, retention, repository verification and restore workflows.
+Restic provides repository snapshot backups, native `forget` retention (optionally pruning) and repository checks. rdiff-backup provides a directly browsable current destination mirror plus native historical increments, increment removal and verification. Their commands are emitted as sequential provider-owned execution plans, so a backup can be followed by retention and verification while remaining one RunPilot job run/history record.
+
+Restic repository browsing, historical-version browsing, download and restore, and rdiff-backup restore/version UI are intentionally separate Storage/follow-up work. Backup destinations are not automatically exposed on the Storage page.
 
 Each backup integration may expose a tool-specific editor and operations. A capability descriptor can be used for discovery and UI decisions, but it should not force unrelated tools into a lowest-common-denominator or artificial universal backup schema.
 

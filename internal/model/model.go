@@ -65,7 +65,24 @@ const (
 )
 
 type BackupSpec struct {
-	Engine           string     `json:"engine" yaml:"engine"`
+	Engine      string              `json:"engine" yaml:"engine"`
+	Robocopy    *RobocopyBackupSpec `json:"robocopy,omitempty" yaml:"robocopy,omitempty"`
+	Restic      *ResticBackupSpec   `json:"restic,omitempty" yaml:"restic,omitempty"`
+	RdiffBackup *RdiffBackupSpec    `json:"rdiffBackup,omitempty" yaml:"rdiffBackup,omitempty"`
+
+	// Legacy Robocopy fields are accepted on load and normalized into Robocopy.
+	// They remain only to keep existing runpilot.yaml files working.
+	Source           string     `json:"source,omitempty" yaml:"source,omitempty"`
+	Destination      string     `json:"destination,omitempty" yaml:"destination,omitempty"`
+	Mode             BackupMode `json:"mode,omitempty" yaml:"mode,omitempty"`
+	ExcludeDirs      []string   `json:"excludeDirs,omitempty" yaml:"excludeDirs,omitempty"`
+	ExcludeFiles     []string   `json:"excludeFiles,omitempty" yaml:"excludeFiles,omitempty"`
+	Retries          int        `json:"retries,omitempty" yaml:"retries,omitempty"`
+	RetryWaitSeconds int        `json:"retryWaitSeconds,omitempty" yaml:"retryWaitSeconds,omitempty"`
+	AdditionalArgs   []string   `json:"additionalArgs,omitempty" yaml:"additionalArgs,omitempty"`
+}
+
+type RobocopyBackupSpec struct {
 	Source           string     `json:"source" yaml:"source"`
 	Destination      string     `json:"destination" yaml:"destination"`
 	Mode             BackupMode `json:"mode" yaml:"mode"`
@@ -74,6 +91,40 @@ type BackupSpec struct {
 	Retries          int        `json:"retries" yaml:"retries"`
 	RetryWaitSeconds int        `json:"retryWaitSeconds" yaml:"retryWaitSeconds"`
 	AdditionalArgs   []string   `json:"additionalArgs,omitempty" yaml:"additionalArgs,omitempty"`
+}
+
+type ResticRetention struct {
+	KeepLast    int    `json:"keepLast,omitempty" yaml:"keepLast,omitempty"`
+	KeepDaily   int    `json:"keepDaily,omitempty" yaml:"keepDaily,omitempty"`
+	KeepWeekly  int    `json:"keepWeekly,omitempty" yaml:"keepWeekly,omitempty"`
+	KeepMonthly int    `json:"keepMonthly,omitempty" yaml:"keepMonthly,omitempty"`
+	KeepYearly  int    `json:"keepYearly,omitempty" yaml:"keepYearly,omitempty"`
+	KeepWithin  string `json:"keepWithin,omitempty" yaml:"keepWithin,omitempty"`
+	Prune       bool   `json:"prune,omitempty" yaml:"prune,omitempty"`
+}
+
+type ResticBackupSpec struct {
+	Executable       string           `json:"executable,omitempty" yaml:"executable,omitempty"`
+	Repository       string           `json:"repository" yaml:"repository"`
+	PasswordFile     string           `json:"passwordFile,omitempty" yaml:"passwordFile,omitempty"`
+	Sources          []string         `json:"sources" yaml:"sources"`
+	Excludes         []string         `json:"excludes,omitempty" yaml:"excludes,omitempty"`
+	Tags             []string         `json:"tags,omitempty" yaml:"tags,omitempty"`
+	UseVSS           bool             `json:"useVss,omitempty" yaml:"useVss,omitempty"`
+	Retention        *ResticRetention `json:"retention,omitempty" yaml:"retention,omitempty"`
+	CheckAfterBackup bool             `json:"checkAfterBackup,omitempty" yaml:"checkAfterBackup,omitempty"`
+}
+
+type RdiffBackupRetention struct {
+	OlderThan string `json:"olderThan" yaml:"olderThan"`
+}
+type RdiffBackupSpec struct {
+	Executable        string                `json:"executable,omitempty" yaml:"executable,omitempty"`
+	Source            string                `json:"source" yaml:"source"`
+	Destination       string                `json:"destination" yaml:"destination"`
+	Excludes          []string              `json:"excludes,omitempty" yaml:"excludes,omitempty"`
+	Retention         *RdiffBackupRetention `json:"retention,omitempty" yaml:"retention,omitempty"`
+	VerifyAfterBackup bool                  `json:"verifyAfterBackup,omitempty" yaml:"verifyAfterBackup,omitempty"`
 }
 
 type JobDefinition struct {

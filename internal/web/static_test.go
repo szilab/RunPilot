@@ -26,6 +26,9 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		`type="button" data-dismiss="processDialog"`,
 		`type="button" data-dismiss="jobDialog"`,
 		`type="button" data-dismiss="backupDialog"`,
+		`id="backupProvider"`,
+		`id="resticFields"`,
+		`id="rdiffFields"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("index.html does not contain %q", want)
@@ -43,7 +46,7 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(app)
-	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "Loading applications", "api/v1/software/providers", "/buckets", "api/v1/overview", `class="row"`} {
+	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "Loading applications", "api/v1/software/providers", "/buckets", "api/v1/overview", "function updateBackupProvider", `class="row"`} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js does not contain %q", want)
 		}
