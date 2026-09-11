@@ -104,6 +104,8 @@ type Config struct {
 }
 
 type DiskStatus struct {
+	Device     string `json:"device,omitempty"`
+	Label      string `json:"label,omitempty"`
 	Path       string `json:"path"`
 	TotalBytes uint64 `json:"totalBytes"`
 	FreeBytes  uint64 `json:"freeBytes"`

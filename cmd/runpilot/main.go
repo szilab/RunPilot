@@ -11,7 +11,7 @@ import (
 
 	"github.com/szilab/RunPilot/internal/config"
 	"github.com/szilab/RunPilot/internal/daemon"
-	"github.com/szilab/RunPilot/internal/winservice"
+	"github.com/szilab/RunPilot/internal/service"
 )
 
 const version = "0.1.0-dev"
@@ -39,7 +39,7 @@ func run() error {
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		return winservice.Run(*dataDir, daemon.Options{Port: *port, BasePath: *basePath})
+		return service.Run(*dataDir, daemon.Options{Port: *port, BasePath: *basePath})
 	case "service":
 		return runServiceCommand(args[1:])
 	case "version", "--version", "-v":
@@ -80,29 +80,29 @@ func runServiceCommand(args []string) error {
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		return winservice.Install(*dataDir, daemon.Options{Port: *port, BasePath: *basePath})
+		return service.Install(*dataDir, daemon.Options{Port: *port, BasePath: *basePath})
 	case "uninstall":
-		return winservice.Uninstall()
+		return service.Uninstall()
 	case "start":
-		return winservice.Start()
+		return service.Start()
 	case "stop":
-		return winservice.Stop()
+		return service.Stop()
 	default:
 		return fmt.Errorf("unknown service subcommand %q", args[0])
 	}
 }
 
 func usage() {
-	fmt.Print(`RunPilot - Windows process manager and task scheduler
+	fmt.Print(`RunPilot - cross-platform process manager and task scheduler
 
 Usage:
   runpilot run [--data-dir PATH] [--port N] [--base-path PATH]
                                                 Run in the foreground
   runpilot service install [--data-dir PATH] [--port N] [--base-path PATH]
-                                                Install the Windows service
-  runpilot service start                     Start the Windows service
-  runpilot service stop                      Stop the Windows service
-  runpilot service uninstall                 Remove the Windows service
+                                                Install the native service
+  runpilot service start                     Start the native service
+  runpilot service stop                      Stop the native service
+  runpilot service uninstall                 Remove the native service
   runpilot version                           Print version
 
 With no arguments RunPilot starts in foreground mode.

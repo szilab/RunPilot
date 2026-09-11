@@ -1,25 +1,24 @@
 # RunPilot
 
-RunPilot is a lightweight Windows process manager, task scheduler and backup-job launcher written in Go. One native Windows service manages all configured workloads and exposes an embedded local web UI.
+RunPilot is a lightweight cross-platform process manager, scheduler and host utility for Windows and Linux. One native daemon manages configured workloads and exposes an embedded local web UI.
 
 The project takes the useful operating model of Perch — one service, one dashboard, many managed processes — but uses its own implementation and a broader typed job model.
 
 ## MVP capabilities
 
-- Native Windows service (`RunPilot Process Manager`)
+- Native daemon integration: Windows Service Control Manager and Linux systemd
 - Long-running process supervision
-- `.exe`, `.bat`/`.cmd`, `.ps1` and `.py` launch support
+- Direct executables, Python and PowerShell launch support; CMD on Windows and sh/bash on Linux
 - Autostart and `never` / `on-failure` / `always` restart policies
 - Exponential restart backoff
 - Interval, daily and cron scheduled jobs
 - Manual job execution
-- Typed backup jobs using Windows `robocopy.exe`
-- Robocopy copy/update and mirror modes
+- Typed backup jobs: Windows Robocopy plus Restic and rdiff-backup where installed
 - Captured stdout/stderr and execution history
 - Embedded web GUI and REST API
 - Overview dashboard with host CPU, memory, disk and workload health
 - Token-authenticated API bound to `127.0.0.1` by default
-- YAML configuration under `%ProgramData%\RunPilot`
+- YAML configuration under `%ProgramData%\RunPilot` (Windows) or `/var/lib/runpilot` (Linux daemon)
 
 ## Development
 
@@ -51,14 +50,15 @@ server:
 ```
 
 Use the same flags with `service install` to persist them in the installed
-Windows service command line. With the example above, publish the application
+native service command line. With the example above, publish the application
 through a reverse proxy at `https://mydomain.com/runpilot/`, forwarding that
 prefix unchanged to RunPilot. The UI and API both use the configured prefix.
 
-## Windows build
+## Build and install
 
 ```bash
 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/runpilot.exe ./cmd/runpilot
+GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/runpilot-linux-amd64 ./cmd/runpilot
 ```
 
 On Windows, from an elevated terminal:
@@ -69,6 +69,20 @@ On Windows, from an elevated terminal:
 ```
 
 The default data directory is `%ProgramData%\RunPilot`.
+
+On Linux, run service operations as root. `service install` writes and enables
+`/etc/systemd/system/runpilot.service`, pointing at the current executable and
+selected data directory. The default daemon data directory is `/var/lib/runpilot`.
+
+```bash
+sudo ./runpilot service install
+sudo ./runpilot service start
+sudo ./runpilot service stop
+sudo ./runpilot service uninstall
+```
+
+`RUNPILOT_DATA_DIR` has priority over platform defaults; `--data-dir` overrides
+the default for an individual foreground run or installed service.
 
 ## Configuration model
 
@@ -99,8 +113,8 @@ backup:
 ## Architecture
 
 ```text
-runpilot.exe
-├── Windows Service host
+runpilot
+├── Windows SCM or Linux systemd host
 ├── Core controller
 │   ├── Process manager
 │   ├── Scheduler

@@ -11,7 +11,7 @@
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark">RP</div>
-        <div><strong>RunPilot</strong><span>Windows automation</span></div>
+        <div><strong>RunPilot</strong><span>Process management</span></div>
       </div>
       <nav>
         <button class="nav active" data-page="overview">Overview</button>
@@ -53,7 +53,7 @@
         <div id="processGrid" class="row-list"></div>
         <div id="processEmpty" class="empty hidden">
           <h2>No managed processes</h2>
-          <p>Add an executable, PowerShell script, batch file or Python program.</p>
+          <p>Add an executable or supported script.</p>
         </div>
       </section>
 
@@ -67,13 +67,13 @@
 
       <section id="backupsPage" class="page">
         <div class="notice">
-          <strong>Backup engine: Windows Robocopy</strong>
-          <span>Copy and mirror jobs use the built-in <code>robocopy.exe</code>. Exit codes 0–7 are treated as successful/non-fatal.</span>
+          <strong>Typed backup engines</strong>
+          <span>Use Robocopy on Windows, or Restic and rdiff-backup where installed.</span>
         </div>
         <div id="backupGrid" class="row-list"></div>
         <div id="backupEmpty" class="empty hidden">
           <h2>No backup jobs</h2>
-          <p>Schedule folder copies or mirrors using Windows Robocopy.</p>
+          <p>Schedule a typed filesystem backup.</p>
         </div>
       </section>
 
@@ -121,6 +121,8 @@
             <option value="powershell">PowerShell</option>
             <option value="cmd">CMD / batch</option>
             <option value="python">Python</option>
+            <option value="sh">sh</option>
+            <option value="bash">bash</option>
           </select>
         </label>
         <label class="span-2">Executable or script path<input id="processPath" placeholder="C:\Tools\myapp.exe" required></label>
@@ -158,6 +160,8 @@
             <option value="powershell">PowerShell</option>
             <option value="cmd">CMD / batch</option>
             <option value="python">Python</option>
+            <option value="sh">sh</option>
+            <option value="bash">bash</option>
           </select>
         </label>
         <label class="span-2">Executable or script path<input id="jobPath" required></label>
@@ -184,12 +188,19 @@
   <dialog id="backupDialog" class="dialog">
     <form method="dialog" id="backupForm">
       <div class="dialog-head">
-        <div><h2 id="backupDialogTitle">Add backup</h2><p>Schedule Robocopy using a safe preset.</p></div>
+        <div><h2 id="backupDialogTitle">Add backup</h2><p>Schedule a typed backup engine.</p></div>
         <button class="icon-btn" type="button" data-dismiss="backupDialog" aria-label="Close">×</button>
       </div>
       <input type="hidden" id="backupId">
       <div class="form-grid">
         <label>Name<input id="backupName" required></label>
+        <label>Engine
+          <select id="backupEngine">
+            <option value="robocopy">Robocopy (Windows)</option>
+            <option value="restic">Restic</option>
+            <option value="rdiff-backup">rdiff-backup</option>
+          </select>
+        </label>
         <label>Mode
           <select id="backupMode">
             <option value="copy">Copy / update</option>

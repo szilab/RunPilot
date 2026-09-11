@@ -31,6 +31,9 @@ func DefaultDataDir() string {
 			return filepath.Join(p, "RunPilot")
 		}
 	}
+	if runtime.GOOS == "linux" {
+		return "/var/lib/runpilot"
+	}
 	return filepath.Join(".", "runpilot-data")
 }
 

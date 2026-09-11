@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/szilab/RunPilot/internal/model"
@@ -39,5 +40,16 @@ func TestStorePersists(t *testing.T) {
 	}
 	if s2.TokenCreated() {
 		t.Fatal("existing configuration unexpectedly generated a token")
+	}
+}
+
+func TestDefaultDataDirHonorsEnvironmentAndLinuxDefault(t *testing.T) {
+	t.Setenv("RUNPILOT_DATA_DIR", "/custom/runpilot")
+	if got := DefaultDataDir(); got != "/custom/runpilot" {
+		t.Fatalf("environment data directory = %q", got)
+	}
+	t.Setenv("RUNPILOT_DATA_DIR", "")
+	if runtime.GOOS == "linux" && DefaultDataDir() != "/var/lib/runpilot" {
+		t.Fatalf("Linux default = %q", DefaultDataDir())
 	}
 }

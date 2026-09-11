@@ -2,7 +2,9 @@
 
 ## Product boundary
 
-RunPilot has one privileged native Windows service. The service owns process execution, scheduling, run history and the HTTP API. The browser is only a management client; it never launches workloads directly.
+RunPilot has one privileged native daemon: Windows Service Control Manager on Windows and systemd on Linux. The daemon owns process execution, scheduling, run history and the HTTP API. The browser is only a management client; it never launches workloads directly.
+
+Core RunPilot functionality must remain platform-neutral. OS-specific functionality belongs behind small platform, service, or provider adapters selected by Go build constraints or runtime capability detection. The capability API tells clients which native service manager, interpreters, and Windows-only integrations are available.
 
 The initial product intentionally separates three concepts:
 
@@ -16,8 +18,8 @@ This prevents the process supervisor and scheduler from becoming one large shell
 
 ```text
                          ┌────────────────────────────┐
-                         │      runpilot.exe          │
-                         │ Native Windows Service     │
+                         │       runpilot             │
+                         │ Windows SCM / Linux systemd│
                          └─────────────┬──────────────┘
                                        │
                    ┌───────────────────┼────────────────────┐
@@ -45,7 +47,7 @@ MVP persistence is deliberately transparent:
 - `history.jsonl` — completed run records
 - `runs/<run-id>.log` — captured stdout/stderr
 
-Default location: `%ProgramData%\RunPilot`.
+Default location: `%ProgramData%\RunPilot` on Windows and `/var/lib/runpilot` for Linux daemon use. `RUNPILOT_DATA_DIR` is the highest-priority default override, while an explicit `--data-dir` remains available for foreground and service installation.
 
 SQLite is a sensible next persistence step when query requirements, retention and migration needs justify it. The REST/domain interfaces should remain stable when that migration happens.
 
@@ -62,9 +64,9 @@ Cron syntax in the MVP supports `*`, `*/N`, numeric values, lists and numeric ra
 
 Overlap defaults to `skip`, which is especially important for backup jobs.
 
-## Backup adapter: Robocopy
+## Backup adapters
 
-The first adapter uses `robocopy.exe`, present in modern supported Windows versions. RunPilot builds arguments itself instead of storing an opaque shell command.
+Robocopy uses `robocopy.exe`, present in modern supported Windows versions. It is explicitly unavailable on Linux. Restic and rdiff-backup are portable typed adapters when their binaries are installed. RunPilot builds arguments itself instead of storing an opaque shell command.
 
 Presets:
 
@@ -84,7 +86,7 @@ The next adapters can implement the same typed interface (for example `wbadmin`)
 A process definition contains:
 
 - command/script
-- interpreter selection (`auto`, direct, PowerShell, CMD, Python)
+- interpreter selection (`auto`, direct, PowerShell, Python; CMD on Windows; sh/bash on Linux)
 - arguments
 - working directory
 - environment additions
@@ -92,7 +94,7 @@ A process definition contains:
 - restart policy
 - exponential restart backoff
 
-The MVP terminates Windows process trees through `taskkill /T /F`. This is intentionally an implementation seam. The production supervisor should move to native Windows Job Objects so descendants are owned and terminated deterministically.
+Windows terminates process trees through `taskkill /T /F`. Linux starts each managed command in its own process group, sends SIGTERM to that group, then SIGKILL if descendants remain. This keeps stop/restart scoped to the managed workload rather than leaving child processes behind.
 
 ## Security
 

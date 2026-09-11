@@ -14,6 +14,7 @@ import (
 
 	"github.com/szilab/RunPilot/internal/core"
 	"github.com/szilab/RunPilot/internal/model"
+	"github.com/szilab/RunPilot/internal/platform"
 )
 
 //go:embed static/*
@@ -123,11 +124,12 @@ func (s *Server) auth(next http.Handler) http.Handler {
 func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	cfg := s.ctrl.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":       "RunPilot",
-		"version":    "0.1.0-dev",
-		"dataDir":    s.ctrl.DataDir(),
-		"configPath": s.ctrl.ConfigPath(),
-		"bind":       cfg.Server.Bind,
+		"name":         "RunPilot",
+		"version":      "0.1.0-dev",
+		"dataDir":      s.ctrl.DataDir(),
+		"configPath":   s.ctrl.ConfigPath(),
+		"bind":         cfg.Server.Bind,
+		"capabilities": platform.CurrentCapabilities(),
 	})
 }
 

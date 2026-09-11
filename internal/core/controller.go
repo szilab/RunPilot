@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/szilab/RunPilot/internal/backup"
 	"github.com/szilab/RunPilot/internal/config"
 	"github.com/szilab/RunPilot/internal/history"
 	"github.com/szilab/RunPilot/internal/jobs"
@@ -200,6 +201,9 @@ func (c *Controller) UpsertJob(j model.JobDefinition) (model.JobDefinition, erro
 	case model.JobBackup:
 		if j.Backup == nil || strings.TrimSpace(j.Backup.Source) == "" || strings.TrimSpace(j.Backup.Destination) == "" {
 			return j, fmt.Errorf("backup job requires source and destination")
+		}
+		if _, err := backup.Build(*j.Backup); err != nil {
+			return j, err
 		}
 		j.Command = nil
 	}

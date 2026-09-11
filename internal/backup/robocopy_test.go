@@ -1,12 +1,19 @@
 package backup
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/szilab/RunPilot/internal/model"
 )
 
 func TestBuildMirror(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		if _, err := Build(model.BackupSpec{Engine: "robocopy", Source: "/source", Destination: "/destination"}); err == nil {
+			t.Fatal("robocopy should be unavailable off Windows")
+		}
+		return
+	}
 	cmd, err := Build(model.BackupSpec{
 		Engine:      "robocopy",
 		Source:      `C:\Data`,
@@ -28,6 +35,18 @@ func TestBuildMirror(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("missing /MIR")
+	}
+}
+
+func TestPortableBackupEngines(t *testing.T) {
+	for _, engine := range []string{"restic", "rdiff-backup"} {
+		cmd, err := Build(model.BackupSpec{Engine: engine, Source: "source", Destination: "destination"})
+		if err != nil {
+			t.Fatalf("%s: %v", engine, err)
+		}
+		if cmd.Path == "" {
+			t.Fatalf("%s produced no command", engine)
+		}
 	}
 }
 

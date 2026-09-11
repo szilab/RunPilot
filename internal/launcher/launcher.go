@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/szilab/RunPilot/internal/model"
+	"github.com/szilab/RunPilot/internal/platform"
 )
 
 func Build(spec model.CommandSpec) (*exec.Cmd, error) {
@@ -38,6 +39,12 @@ func Build(spec model.CommandSpec) (*exec.Cmd, error) {
 		}
 		line := windowsCommandLine(spec.Path, spec.Args)
 		cmd = exec.Command("cmd.exe", "/d", "/s", "/c", line)
+	case "sh", "bash":
+		if runtime.GOOS == "windows" {
+			return nil, fmt.Errorf("%s interpreter is only available on Unix-like systems", interpreter)
+		}
+		args := append([]string{spec.Path}, spec.Args...)
+		cmd = exec.Command(interpreter, args...)
 	case "python":
 		exe := "python.exe"
 		if runtime.GOOS != "windows" {
@@ -56,6 +63,7 @@ func Build(spec model.CommandSpec) (*exec.Cmd, error) {
 	for k, v := range spec.Environment {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
+	platform.ConfigureCommand(cmd)
 	return cmd, nil
 }
 
@@ -67,6 +75,10 @@ func inferInterpreter(path string) string {
 		return "cmd"
 	case ".py":
 		return "python"
+	case ".sh":
+		return "sh"
+	case ".bash":
+		return "bash"
 	default:
 		return "direct"
 	}

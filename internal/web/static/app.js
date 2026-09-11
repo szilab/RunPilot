@@ -8,12 +8,13 @@ let logTimer = null;
 let logSource = null;
 let refreshTimer = null;
 let refreshing = false;
+let capabilities = null;
 
 const pageMeta = {
   overview: ["Overview", "RunPilot service and resource health at a glance.", null],
   processes: ["Processes", "Long-running applications supervised by the RunPilot service.", "Add process"],
   jobs: ["Scheduled jobs", "One-shot commands launched on an interval, daily time or cron expression.", "Add job"],
-  backups: ["Backups", "Scheduled filesystem backups powered by Windows built-in tools.", "Add backup"],
+  backups: ["Backups", "Scheduled filesystem backups powered by typed engine adapters.", "Add backup"],
   history: ["History", "Recent process exits and job executions with exit code and captured output.", null],
 };
 
@@ -130,15 +131,18 @@ async function refresh() {
   if (refreshing || !token) return;
   refreshing = true;
   try {
-    const [p, j, h, o] = await Promise.all([
+    const [p, j, h, o, system] = await Promise.all([
       api("api/v1/processes"),
       api("api/v1/jobs"),
       api("api/v1/runs?lines=100"),
-      api("api/v1/overview")
+      api("api/v1/overview"),
+      api("api/v1/system")
     ]);
     processes = p;
     jobs = j;
     overview = o;
+    capabilities = system.capabilities || null;
+    applyCapabilities();
     renderOverview();
     renderProcesses();
     renderJobs();
@@ -150,6 +154,16 @@ async function refresh() {
   } finally {
     refreshing = false;
   }
+}
+
+function applyCapabilities() {
+  if (!capabilities) return;
+  for (const id of ["processInterpreter", "jobInterpreter"]) {
+    for (const option of $(id).options) {
+      option.hidden = option.value !== "auto" && !capabilities.commandInterpreters.includes(option.value);
+    }
+  }
+  $("backupEngine").querySelector('option[value="robocopy"]').hidden = !capabilities.robocopy;
 }
 
 function renderOverview() {
@@ -169,8 +183,9 @@ function renderOverview() {
     const used = Math.max(0, (disk.totalBytes || 0) - (disk.freeBytes || 0));
     const usedPercent = percent(used, disk.totalBytes);
     return `<article class="disk-card">
-      <h3>${escapeHtml(disk.path)}</h3>
-      <div class="disk-summary"><span>${fmtBytes(disk.freeBytes)} free from ${fmtBytes(disk.totalBytes)}</span><strong>${fmtPercent(usedPercent)} used</strong></div>
+      <h3>${escapeHtml(disk.label || (disk.device ? "Unlabeled partition" : disk.path))}</h3>
+      ${disk.device ? `<div class="disk-device">${escapeHtml(disk.device)}</div>` : ""}
+      <div class="disk-summary"><span>${escapeHtml(disk.path)} · ${fmtBytes(disk.freeBytes)} free from ${fmtBytes(disk.totalBytes)}</span><strong>${fmtPercent(usedPercent)} used</strong></div>
       ${meter(usedPercent, usedPercent >= 90 ? "red" : "blue")}
     </article>`;
   }).join("") : `<div class="empty compact"><h2>No disk metrics</h2><p>Disk information is not available.</p></div>`;
@@ -434,6 +449,7 @@ function openBackup(existing = null) {
   $("backupSource").value = b.source || "";
   $("backupDestination").value = b.destination || "";
   $("backupMode").value = b.mode || "copy";
+  $("backupEngine").value = b.engine || "robocopy";
   $("backupRetries").value = b.retries ?? 2;
   $("backupEnabled").checked = existing ? !!existing.enabled : true;
   fillSchedule("backup", existing?.schedule || {type:"daily", timeOfDay:"03:00"});
@@ -455,7 +471,7 @@ $("backupForm").addEventListener("submit", async e => {
     overlapPolicy: "skip",
     schedule: scheduleFrom("backup"),
     backup: {
-      engine: "robocopy",
+      engine: $("backupEngine").value,
       source: $("backupSource").value.trim(),
       destination: $("backupDestination").value.trim(),
       mode: $("backupMode").value,

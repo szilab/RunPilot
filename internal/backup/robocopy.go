@@ -2,6 +2,7 @@ package backup
 
 import (
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -9,12 +10,41 @@ import (
 )
 
 func Build(spec model.BackupSpec) (model.CommandSpec, error) {
-	if !strings.EqualFold(spec.Engine, "robocopy") && spec.Engine != "" {
-		return model.CommandSpec{}, fmt.Errorf("unsupported backup engine %q", spec.Engine)
-	}
 	if strings.TrimSpace(spec.Source) == "" || strings.TrimSpace(spec.Destination) == "" {
 		return model.CommandSpec{}, fmt.Errorf("backup source and destination are required")
 	}
+	engine := strings.ToLower(strings.TrimSpace(spec.Engine))
+	if engine == "" {
+		engine = "robocopy"
+	}
+	switch engine {
+	case "robocopy":
+		if runtime.GOOS != "windows" {
+			return model.CommandSpec{}, fmt.Errorf("robocopy backup engine is only available on Windows")
+		}
+		return buildRobocopy(spec)
+	case "restic":
+		if spec.Mode == model.BackupMirror {
+			return model.CommandSpec{}, fmt.Errorf("restic does not support mirror mode")
+		}
+		args := []string{"-r", spec.Destination, "backup", spec.Source}
+		for _, excluded := range append(spec.ExcludeDirs, spec.ExcludeFiles...) {
+			args = append(args, "--exclude", excluded)
+		}
+		return model.CommandSpec{Path: "restic", Args: append(args, spec.AdditionalArgs...), Interpreter: "direct"}, nil
+	case "rdiff-backup":
+		args := []string{}
+		for _, excluded := range append(spec.ExcludeDirs, spec.ExcludeFiles...) {
+			args = append(args, "--exclude", excluded)
+		}
+		args = append(args, spec.Source, spec.Destination)
+		return model.CommandSpec{Path: "rdiff-backup", Args: append(args, spec.AdditionalArgs...), Interpreter: "direct"}, nil
+	default:
+		return model.CommandSpec{}, fmt.Errorf("unsupported backup engine %q", spec.Engine)
+	}
+}
+
+func buildRobocopy(spec model.BackupSpec) (model.CommandSpec, error) {
 	args := []string{spec.Source, spec.Destination}
 	switch spec.Mode {
 	case model.BackupMirror:
