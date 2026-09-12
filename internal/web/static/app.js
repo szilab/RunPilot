@@ -8,10 +8,12 @@ let softwareProviders = [], softwareProviderID = "", softwarePackages = [], soft
 let storageClipboard = null, editingTextPath = null, storageShowHidden = false;
 let overview = null;
 let systemInfo = null, terminalInfo = null, terminalTabs = [], activeTerminalID = "";
+let dockerRuntime = null, dockerProjects = [], dockerVolumes = [], dockerNetworks = [], dockerBusy = new Set(), dockerPendingContainerStates = new Map(), dockerEditing = null, dockerAttachTerminal = null;
 let logTimer = null;
 let logSource = null;
 let refreshTimer = null;
 let refreshing = false;
+let connectionTimer = null, connectionOnline = false, connectionChecked = false, connectionWasLost = false, reloadingAfterReconnect = false;
 const themeStorageKey = "runpilot.theme";
 
 const pageMeta = {
@@ -22,6 +24,7 @@ const pageMeta = {
   storage: ["Storage", "", "Tároló hozzáadása"],
   software: ["Software", "Install and maintain portable applications in a RunPilot-managed Scoop root on Windows.", null],
   terminal: ["Terminal", "Interactive shells run with the same OS authority as the RunPilot service.", null],
+  docker: ["Docker", "Docker Compose projects, volumes, and networks managed with the RunPilot service identity.", "Create project"],
   history: ["History", "Recent process exits and job executions with exit code and captured output.", null],
 };
 
@@ -31,13 +34,14 @@ async function api(path, options = {}) {
   if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const res = await fetch(path, {...options, headers});
   if (res.status === 401) {
-    setConnected(false);
-    throw new Error("Unauthorized");
+    const error = new Error("Unauthorized"); error.serverReachable = true;
+    throw error;
   }
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
     try { message = (await res.json()).error || message; } catch {}
-    throw new Error(message);
+    const error = new Error(message); error.serverReachable = true;
+    throw error;
   }
   if (res.status === 204) return null;
   const ct = res.headers.get("content-type") || "";
@@ -45,8 +49,16 @@ async function api(path, options = {}) {
 }
 
 function setConnected(ok) {
+  if (!ok && (connectionOnline || connectionChecked)) connectionWasLost = true;
+  connectionChecked = true;
+  const restored = ok && connectionWasLost;
+  connectionOnline = ok;
   $("connectionDot").classList.toggle("ok", ok);
   $("connectionText").textContent = ok ? "Connected" : "Offline";
+  if (restored && !reloadingAfterReconnect) {
+    reloadingAfterReconnect = true;
+    window.location.reload();
+  }
 }
 
 function applyTheme(theme) {
@@ -236,12 +248,13 @@ async function refresh() {
   if (refreshing || !token) return;
   refreshing = true;
   try {
-    const [p, j, h, o, st, sw] = await Promise.all([
+    const [p, j, h, o, st, sw, docker] = await Promise.all([
       api("api/v1/processes"),
       api("api/v1/jobs"),
       api("api/v1/runs?lines=100"),
       api("api/v1/overview"), api("api/v1/storage"),
-      currentPage === "software" ? api("api/v1/software/providers") : Promise.resolve(null)
+      currentPage === "software" ? api("api/v1/software/providers") : Promise.resolve(null),
+      currentPage === "docker" ? Promise.all([api("api/v1/docker/projects"), api("api/v1/docker/volumes"), api("api/v1/docker/networks")]) : Promise.resolve(null)
     ]);
     processes = p;
     jobs = j;
@@ -263,10 +276,11 @@ async function refresh() {
     renderHistory(h);
     renderStorage();
     if (currentPage === "software") renderSoftware();
+    if (docker) applyDockerSnapshot(docker);
     setConnected(true);
   } catch (e) {
     softwareLoading = false; softwareLoadingKey = "";
-    setConnected(false);
+    setConnected(!!e.serverReachable);
     if (e.message === "Unauthorized") $("loginDialog").showModal();
     else toast(e.message);
     if (currentPage === "software") renderSoftware();
@@ -312,6 +326,25 @@ function startAutoRefresh() {
   refreshTimer = setInterval(() => {
     if (!document.hidden) refresh();
   }, 5000);
+}
+
+async function probeConnection() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3500);
+  try {
+    await fetch("api/v1/system", {headers:{Authorization:`Bearer ${token}`}, signal:controller.signal});
+    setConnected(true);
+  } catch {
+    setConnected(false);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function startConnectionMonitor() {
+  if (connectionTimer) return;
+  connectionTimer = setInterval(() => { if (!document.hidden) probeConnection(); }, 5000);
+  probeConnection();
 }
 
 function renderProcesses() {
@@ -423,7 +456,7 @@ function renderStorage() {
   $("storageBrowser").classList.toggle("hidden", !provider);
   if (provider) { select.value = storage.some(d => d.id === previous) ? previous : provider.id; if (!storageLocation) browseStorage(select.value, ""); }
 }
-function openStorageDialog(provider = null) { const local=provider?.local||{}; $("storageId").value=provider?.id||""; $("storageDialogTitle").textContent=provider?"Storage provider szerkesztése":"Tároló hozzáadása"; $("storageName").value=provider?.name||""; $("storageType").value=provider?.type||"local"; $("storageScope").value=local.scope||"root"; $("storageRoot").value=local.root||""; $("storageRootWrap").classList.toggle("hidden",$("storageScope").value==="host"); $("storageDialog").showModal(); }
+function openStorageDialog(provider = null) { if (provider?.type === "docker-volume") { toast("Docker Volume Storage providers are configured from Docker > Volumes."); return; } const local=provider?.local||{}; $("storageId").value=provider?.id||""; $("storageDialogTitle").textContent=provider?"Storage provider szerkesztése":"Tároló hozzáadása"; $("storageName").value=provider?.name||""; $("storageType").value=provider?.type||"local"; $("storageScope").value=local.scope||"root"; $("storageRoot").value=local.root||""; $("storageRootWrap").classList.toggle("hidden",$("storageScope").value==="host"); $("storageDialog").showModal(); }
 function isEditableText(name) { return !/\.[^./\\]+$/.test(name) || /\.(txt|log|yaml|yml|json|ini|cfg|conf|toml|xml|csv|md|bat|cmd|ps1|go|js|html|css|ts|tsx|jsx|py|rb|java|c|h|cpp|cs|rs|sh|sql)$/i.test(name); }
 function button(label, title, action, disabled = false) { const b=document.createElement("button"); b.className="row-icon"+(title==="Letöltés"?" download-icon":""); b.type="button"; b.textContent=label; b.title=title; b.disabled=disabled; b.addEventListener("click", event=>{event.stopPropagation();action()}); return b; }
 function actionSlot(control = null) { if (control) return control; const slot=document.createElement("span");slot.className="row-icon-slot";slot.setAttribute("aria-hidden","true");return slot; }
@@ -431,7 +464,9 @@ function entryIcon(entry) { if (entry.type === "directory" || entry.type === "fi
 function renderBreadcrumbs(id, value) { const root=$("storageBreadcrumbs"); root.replaceChildren(); const home=document.createElement("button");home.className="breadcrumb-link";home.textContent="Ez a gép";home.addEventListener("click",()=>browseStorage(id,""));root.append(home); let built=""; for(const segment of value ? value.split("/") : []) { const sep=document.createElement("span");sep.textContent="/";root.append(sep);built=built?`${built}/${segment}`:segment;const link=document.createElement("button");link.className="breadcrumb-link";link.textContent=segment;const target=built;link.addEventListener("click",()=>browseStorage(id,target));root.append(link); } }
 async function browseStorage(id, p = "") {
   try {
-    const provider=storage.find(x=>x.id===id); if (!provider || provider.state?.status !== "ready") { toast(provider?.state?.reason || "Storage provider is unavailable"); return; }
+    const provider=storage.find(x=>x.id===id); if (!provider || !["ready","read-only"].includes(provider.state?.status)) { toast(provider?.state?.reason || "Storage provider is unavailable"); return; }
+    const stateNotice=$("storageStateNotice"), readOnly=provider.state?.status === "read-only";
+    stateNotice.classList.toggle("hidden",!readOnly); stateNotice.innerHTML=readOnly?`<strong>Storage is read-only</strong><span>${escapeHtml(provider.state?.reason || "This provider is currently read-only.")}</span>`:"";
     const listing=await api(`api/v1/storage/${id}/entries?`+new URLSearchParams({path:p,showHidden:storageShowHidden})); storageLocation=id; storagePath=listing.path;
     const toolbarCaps=provider.capabilities||{}; $("storageUpload").parentElement.classList.toggle("hidden",!toolbarCaps.upload); $("storageCreate").classList.toggle("hidden",!toolbarCaps.createDirectory);
     $("storageProvider").value=id; renderBreadcrumbs(id,listing.path);
@@ -466,7 +501,7 @@ function setStorageClipboard(operation, providerId, entry) { storageClipboard={p
 async function pasteStorage(id) { if(!storageClipboard||storageClipboard.providerId!==id)return; try { const endpoint=storageClipboard.operation==="copy"?"copy":"move"; await api(`api/v1/storage/${id}/${endpoint}`,{method:"POST",body:JSON.stringify({sourcePath:storageClipboard.path,destinationDirectory:storagePath})}); const message=storageClipboard.operation==="copy"?"Másolva":"Áthelyezve"; if(storageClipboard.operation==="move")storageClipboard=null;toast(message);browseStorage(id,storagePath); }catch(e){toast(e.message)} }
 function syntaxSpan(kind, value) { return `<span class="syntax-${kind}">${escapeHtml(value)}</span>`; }
 function highlightText(content, name) {
-  const ext=(name.split(".").pop()||"").toLowerCase(); const structured=["json","yaml","yml","toml","ini","xml","html","css"].includes(ext);
+  const ext=(name.split(".").pop()||"").toLowerCase(), yaml=["yaml","yml"].includes(ext), env=ext==="env"; const structured=["json","yaml","yml","toml","ini","xml","html","css"].includes(ext);
   return content.split("\n").map(line=>{
     if (/^\s*(#|\/\/)/.test(line)) return syntaxSpan("comment",line);
     const chunks=line.split(/("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g);
@@ -475,11 +510,14 @@ function highlightText(content, name) {
       let safe=escapeHtml(part);
       if (structured) safe=safe.replace(/\b(true|false|null|yes|no)\b/gi,'<span class="syntax-keyword">$1</span>').replace(/\b(-?\d+(?:\.\d+)?)\b/g,'<span class="syntax-number">$1</span>');
       else safe=safe.replace(/\b(func|function|return|if|else|for|while|package|import|const|var|let|class|public|private|def|true|false|null|nil)\b/g,'<span class="syntax-keyword">$1</span>');
+      if (yaml) safe=safe.replace(/^(\s*(?:-\s+)?)([A-Za-z0-9_.-]+)(\s*:)/,'$1<span class="syntax-key">$2</span>$3');
+      if (env) safe=safe.replace(/^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_]*)(=)/,'$1<span class="syntax-key">$2</span>$3');
       return safe;
     }).join("");
   }).join("\n")+"\n";
 }
 function updateTextHighlight() { const code=$("textHighlight").querySelector("code"); code.innerHTML=highlightText($("textEditorContent").value,editingTextPath?.path||""); }
+function updateDockerFileHighlight() { const code=$("dockerFileHighlight").querySelector("code"); code.innerHTML=highlightText($("dockerFileContent").value,dockerEditing?.kind==="env"?".env":"compose.yaml"); }
 async function openTextEditor(id,path,name) { try { const data=await api(`api/v1/storage/${id}/text?`+new URLSearchParams({path})); editingTextPath={id,path};$("textEditorTitle").textContent=`Szerkesztés: ${name}`;$("textEditorPath").textContent=path;$("textEditorContent").value=data.content;updateTextHighlight();$("textEditorDialog").showModal(); }catch(e){toast(e.message)} }
 async function saveTextEditor() { if(!editingTextPath)return;try{await api(`api/v1/storage/${editingTextPath.id}/text`,{method:"PUT",body:JSON.stringify({path:editingTextPath.path,content:$("textEditorContent").value})});$("textEditorDialog").close();toast("Fájl mentve");browseStorage(storageLocation,storagePath)}catch(e){toast(e.message)} }
 
@@ -589,11 +627,130 @@ async function loadSoftwareView(force = false) {
 }
 function softwareSearch() { loadSoftwareView(true); }
 
+function renderDocker() {
+  const notice = $("dockerNotice"), ready = dockerRuntime?.available;
+  notice.classList.toggle("hidden", !!ready);
+  notice.innerHTML = ready ? "" : `<strong>Docker unavailable</strong><span>${escapeHtml(dockerRuntime?.message || "Docker status has not been checked.")}${dockerRuntime?.identity ? ` Running as ${escapeHtml(dockerRuntime.identity)}.` : ""}</span>`;
+  $("dockerProjectGrid").innerHTML = dockerProjects.map(project => dockerProjectCard(project, ready)).join("");
+  $("dockerVolumeList").innerHTML = dockerVolumes.map(volume => dockerVolumeRow(volume, ready)).join("");
+  $("dockerNetworkList").innerHTML = dockerNetworks.map(network => dockerNetworkRow(network, ready)).join("");
+  $("dockerProjectEmpty").classList.toggle("hidden", dockerProjects.length > 0 || !ready);
+  $("dockerVolumeEmpty").classList.toggle("hidden", dockerVolumes.length > 0 || !ready);
+  $("dockerNetworkEmpty").classList.toggle("hidden", dockerNetworks.length > 0 || !ready);
+}
+function applyDockerSnapshot(snapshot) {
+  dockerRuntime = snapshot[0].runtime; dockerProjects = snapshot[0].projects || []; dockerVolumes = snapshot[1].volumes || []; dockerNetworks = snapshot[2].networks || [];
+  for (const [key, pending] of dockerPendingContainerStates) {
+    const container = dockerProjects.flatMap(project => project.containers || []).find(item => item.id === pending.id);
+    const reachedExpectedState = pending.running == null ? !container : !!container && (container.state === "running") === pending.running;
+    if (reachedExpectedState) { dockerPendingContainerStates.delete(key); dockerBusy.delete(key); }
+  }
+  renderDocker();
+}
+async function refreshDockerSnapshot() {
+  try {
+    const snapshot = await Promise.all([api("api/v1/docker/projects"), api("api/v1/docker/volumes"), api("api/v1/docker/networks")]);
+    applyDockerSnapshot(snapshot);
+    setConnected(true);
+    return true;
+  } catch (error) {
+    setConnected(!!error.serverReachable);
+    toast(error.message);
+    return false;
+  }
+}
+function dockerNetworkRow(network, ready) {
+  const busy=dockerBusy.has(`network:${network.name}`), usage=!network.inUse ? "Unused" : network.runningUse ? "In use by running container" : "Used by stopped container";
+  const protectedNetwork=["bridge","host","none"].includes(network.name);
+  const detail=network.composeProject ? `Compose: ${network.composeProject}${network.composeNetwork ? ` / ${network.composeNetwork}` : ""}` : `${network.driver || "unknown driver"} · ${network.scope || "local"}`;
+  return `<article class="docker-volume-row" title="${escapeHtml(detail)}"><strong>${escapeHtml(network.name)}</strong><span class="docker-volume-users" title="${escapeHtml(usage)}${(network.usedBy||[]).length ? ` · ${escapeHtml(network.usedBy.join(", "))}` : ""}"><span class="docker-dot ${network.inUse ? (network.runningUse ? "green" : "yellow") : "gray"}"></span>${escapeHtml(usage)}</span>${protectedNetwork ? "" : `<button class="button danger small" onclick="deleteDockerNetwork('${escapeHtml(network.name)}')" ${!ready || network.inUse || busy ? "disabled" : ""}>Delete</button>`}</article>`;
+}
+function dockerVolumeRow(volume, ready) {
+  const busy = dockerBusy.has(`volume:${volume.name}`), usage = !volume.inUse ? "Unused" : volume.runningUse ? "In use by running container" : "Used by stopped container";
+  const detail = volume.composeProject ? `Compose: ${volume.composeProject}${volume.composeVolume ? ` / ${volume.composeVolume}` : ""}` : `${volume.driver || "unknown driver"} · ${volume.scope || "local"}`;
+  const users = `<span class="docker-volume-users" title="${escapeHtml(usage)}${(volume.usedBy || []).length ? ` · ${escapeHtml(volume.usedBy.join(", "))}` : ""}"><span class="docker-dot ${volume.inUse ? (volume.runningUse ? "green" : "yellow") : "gray"}"></span>${escapeHtml(usage)}</span>`;
+  return `<article class="docker-volume-row" title="${escapeHtml(detail)}"><strong>${escapeHtml(volume.name)}</strong>${users}${volume.storageProviderId ? `<span class="docker-volume-storage" title="Exposed through RunPilot Storage">Storage</span>` : ""}<button class="button danger small" onclick="deleteDockerVolume('${escapeHtml(volume.name)}')" ${!ready || volume.inUse || !!volume.storageProviderId || busy ? "disabled" : ""}>Delete</button></article>`;
+}
+function dockerProjectCard(project, ready) {
+  const busy = dockerBusy.has(project.name), managed = !!project.managed, hasCompose = !!project.composeFileExists;
+  const active = ["running","partial","degraded"].includes(project.state);
+  const canUp = ready && hasCompose && !busy && ["down","stopped"].includes(project.state);
+  const canStart = ready && hasCompose && !busy && project.state === "stopped";
+  const canStop = ready && !busy && active;
+  const canDown = ready && hasCompose && !busy && project.state !== "down";
+  const actions = managed ? `<div class="docker-actions">
+    <div class="docker-action-group docker-action-lifecycle"><button class="button small" onclick="dockerAction('${project.name}','up')" ${canUp ? "" : "disabled"}>Up</button><button class="button small" onclick="dockerAction('${project.name}','start')" ${canStart ? "" : "disabled"}>Start</button><button class="button small" onclick="dockerAction('${project.name}','stop')" ${canStop ? "" : "disabled"}>Stop</button><button class="button small" onclick="dockerAction('${project.name}','down')" ${canDown ? "" : "disabled"}>Down</button></div>
+    <div class="docker-action-group docker-action-files"><button class="button secondary small" onclick="openDockerFile('${project.name}','compose')" ${busy ? "disabled" : ""}>compose.yaml</button><button class="button secondary small" onclick="openDockerFile('${project.name}','env')" ${busy ? "disabled" : ""}>.env</button></div><div class="docker-action-group docker-action-destructive"><button class="button danger small" onclick="deleteDockerProject('${project.name}')" ${!ready || project.state !== "down" || busy ? "disabled" : ""}>Delete</button></div>
+  </div>${busy ? `<div class="docker-busy" role="status"><span class="spinner" aria-hidden="true"></span>Running Compose command…</div>` : ""}` : "";
+  const containers = (project.containers || []).map(c => dockerContainerRow(c, ready && managed)).join("");
+  return `<article class="docker-card"><div class="docker-card-head"><h2>${escapeHtml(project.name)}</h2><span class="status ${escapeHtml(project.state === "running" ? "running" : project.state === "degraded" ? "failure" : project.state || "idle")}">${escapeHtml(project.state || "unknown")}</span></div>${actions}${containers}${project.configPath && !managed ? `<div class="docker-path">${escapeHtml(project.configPath)}</div>` : ""}</article>`;
+}
+function dockerContainerRow(container, ready) {
+  const busy=dockerBusy.has(`container:${container.id}`), running=container.state === "running";
+  const canAttach=ready && running && !busy && !!systemInfo?.capabilities?.terminal;
+  const controls=`<div class="docker-container-actions"><div class="docker-action-group docker-action-lifecycle"><button class="row-icon docker-container-icon" title="Start" aria-label="Start container" onclick="dockerContainerAction('${container.id}','start')" ${ready && !running && !busy ? "" : "disabled"}>▶</button><button class="row-icon docker-container-icon" title="Stop" aria-label="Stop container" onclick="dockerContainerAction('${container.id}','stop')" ${ready && running && !busy ? "" : "disabled"}>■</button></div><div class="docker-action-group docker-action-destructive"><button class="row-icon docker-container-icon" title="Delete stopped container" aria-label="Delete stopped container" onclick="dockerContainerAction('${container.id}','delete')" ${ready && !running && !busy ? "" : "disabled"}>🗑</button></div><div class="docker-action-group docker-action-support"><button class="row-icon docker-container-icon" title="Open terminal" aria-label="Open container terminal" onclick="dockerAttachContainer('${container.id}')" ${canAttach ? "" : "disabled"}>↪</button><button class="row-icon docker-container-icon" title="View logs" aria-label="View logs" onclick="openDockerContainerLog('${container.id}')" ${ready && !busy ? "" : "disabled"}>▤</button></div></div>`;
+  return `<div class="docker-container"><span class="docker-dot ${escapeHtml(container.tone || "gray")}"></span><div class="docker-container-main"><strong>${escapeHtml(container.service || container.name)}</strong>${controls}</div><span>${escapeHtml(container.state || "unknown")}${container.health ? ` · ${escapeHtml(container.health)}` : ""}</span></div>`;
+}
+async function dockerAction(name, action) { dockerBusy.add(name); renderDocker(); try { await api(`api/v1/docker/projects/${encodeURIComponent(name)}/actions/${action}`, {method:"POST"}); toast(`${name}: ${action} completed`); } catch(e) { toast(e.message); } finally { dockerBusy.delete(name); await refresh(); } }
+async function dockerContainerAction(id, action) {
+  const key=`container:${id}`;
+  if(action==="delete"&&!confirm("Delete this stopped container?"))return;
+  dockerBusy.add(key); renderDocker();
+  try {
+    await api(`api/v1/docker/containers/${encodeURIComponent(id)}/actions/${action}`,{method:"POST"});
+    dockerPendingContainerStates.set(key,{id,running:action === "start" ? true : action === "stop" ? false : null});
+    toast(`Container ${action} completed`);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    await refreshDockerSnapshot();
+  } catch(e) {
+    dockerBusy.delete(key); dockerPendingContainerStates.delete(key); renderDocker(); toast(e.message);
+  }
+}
+function openDockerContainerLog(id) { openLog("Container logs",()=>api(`api/v1/docker/containers/${encodeURIComponent(id)}/logs`)); }
+async function dockerAttachContainer(id) {
+  if (!systemInfo?.capabilities?.terminal) { toast("Interactive terminals are unavailable"); return; }
+  disposeDockerAttachTerminal();
+  const dialog = $("dockerAttachDialog"), pane = $("dockerAttachPane");
+  dialog.showModal();
+  pane.replaceChildren();
+  const term = new Terminal({cursorBlink:true, scrollback:5000, fontFamily:'"Cascadia Code", Consolas, monospace', fontSize:14, theme:{background:'#0b1220'}});
+  const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(pane); fit.fit();
+  const session = {term, fit, socket:null, observer:null}; dockerAttachTerminal = session;
+  term.onData(data => { if (session.socket?.readyState === WebSocket.OPEN) session.socket.send(new TextEncoder().encode(data)); });
+  session.observer = new ResizeObserver(() => { fit.fit(); if (session.socket?.readyState === WebSocket.OPEN) session.socket.send(JSON.stringify({type:"resize",cols:term.cols,rows:term.rows})); });
+  session.observer.observe(pane);
+  try {
+    const ticket = await api(`api/v1/docker/containers/${encodeURIComponent(id)}/attach-ticket`, {method:"POST", body:JSON.stringify({cols:term.cols, rows:term.rows})});
+    if (dockerAttachTerminal !== session) return;
+    const socket = new WebSocket(terminalWebSocketURL(ticket.ticket)); session.socket = socket; socket.binaryType = "arraybuffer";
+    socket.onmessage = event => { if (dockerAttachTerminal === session && event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data)); };
+    socket.onerror = () => { if (dockerAttachTerminal === session) term.writeln("\r\nTerminal connection failed."); };
+    socket.onclose = event => { if (dockerAttachTerminal === session && !event.wasClean) term.writeln(`\r\n${event.reason || "Terminal connection closed."}`); };
+    socket.onopen = () => { socket.send(JSON.stringify({type:"resize",cols:term.cols,rows:term.rows})); term.focus(); };
+  } catch (error) { term.writeln(`\r\n${error.message}`); toast(error.message); }
+}
+function disposeDockerAttachTerminal() { const session = dockerAttachTerminal; dockerAttachTerminal = null; session?.observer?.disconnect(); session?.socket?.close(); session?.term?.dispose(); }
+async function deleteDockerProject(name) { if (!confirm(`Delete the RunPilot project directory for ${name}? This removes compose files and .env only; it never removes Docker images or volumes.`)) return; dockerBusy.add(name); renderDocker(); try { await api(`api/v1/docker/projects/${encodeURIComponent(name)}`, {method:"DELETE"}); toast("Compose project deleted"); } catch(e) { toast(e.message); } finally { dockerBusy.delete(name); await refresh(); } }
+async function deleteDockerVolume(name) { if (!confirm(`Permanently delete Docker volume ${name} and all of its data? This cannot be undone.`)) return; const key=`volume:${name}`; dockerBusy.add(key);renderDocker();try{await api(`api/v1/docker/volumes/${encodeURIComponent(name)}`,{method:"DELETE"});toast("Docker volume deleted");}catch(e){toast(e.message)}finally{dockerBusy.delete(key);await refresh();} }
+async function deleteDockerNetwork(name) { if (!confirm(`Delete Docker network ${name}? This cannot be undone.`)) return; const key=`network:${name}`;dockerBusy.add(key);renderDocker();try{await api(`api/v1/docker/networks/${encodeURIComponent(name)}`,{method:"DELETE"});toast("Docker network deleted");}catch(e){toast(e.message)}finally{dockerBusy.delete(key);await refresh();} }
+async function openDockerFile(name, kind) { try { const out = await api(`api/v1/docker/projects/${encodeURIComponent(name)}/files/${kind}`); dockerEditing = {name,kind}; $("dockerFileTitle").textContent = `${out.content ? "Edit" : "Create"} ${kind === "compose" ? "compose.yaml" : ".env"}`; $("dockerFilePath").textContent = `${name}/${kind === "compose" ? "compose.yaml" : ".env"}`; $("dockerFileContent").value = out.content || (kind === "compose" ? "services: {}\n" : ""); updateDockerFileHighlight(); $("dockerFileDialog").showModal(); } catch(e) { toast(e.message); } }
+async function saveDockerFile() { if (!dockerEditing) return; try { await api(`api/v1/docker/projects/${encodeURIComponent(dockerEditing.name)}/files/${dockerEditing.kind}`, {method:"PUT", body:JSON.stringify({content:$("dockerFileContent").value})}); $("dockerFileDialog").close(); toast("File saved"); await refresh(); } catch(e) { toast(e.message); } }
+function openDockerCreate() { $("dockerProjectName").value=""; $("dockerCreateError").classList.add("hidden"); $("dockerCreateDialog").showModal(); }
+$("dockerCreateForm").addEventListener("submit", async e => { e.preventDefault(); const name=$("dockerProjectName").value.trim(); try { await api("api/v1/docker/projects", {method:"POST",body:JSON.stringify({name})}); $("dockerCreateDialog").close(); await refresh(); } catch(err) { $("dockerCreateError").textContent=err.message; $("dockerCreateError").classList.remove("hidden"); } });
+function openDockerVolumeCreate() { $("dockerVolumeName").value="";$("dockerVolumeError").classList.add("hidden");$("dockerVolumeDialog").showModal(); }
+$("dockerVolumeForm").addEventListener("submit",async e=>{e.preventDefault();try{await api("api/v1/docker/volumes",{method:"POST",body:JSON.stringify({name:$("dockerVolumeName").value.trim()})});$("dockerVolumeDialog").close();await refresh();}catch(err){$("dockerVolumeError").textContent=err.message;$("dockerVolumeError").classList.remove("hidden");}});
+function openDockerNetworkCreate() { $("dockerNetworkName").value="";$("dockerNetworkError").classList.add("hidden");$("dockerNetworkDialog").showModal(); }
+$("dockerNetworkForm").addEventListener("submit",async e=>{e.preventDefault();try{await api("api/v1/docker/networks",{method:"POST",body:JSON.stringify({name:$("dockerNetworkName").value.trim()})});$("dockerNetworkDialog").close();await refresh();}catch(err){$("dockerNetworkError").textContent=err.message;$("dockerNetworkError").classList.remove("hidden");}});
+$("saveDockerFile").addEventListener("click", saveDockerFile); $("closeDockerFile").addEventListener("click",()=>$("dockerFileDialog").close()); $("cancelDockerFile").addEventListener("click",()=>$("dockerFileDialog").close());
+$("closeDockerAttach").addEventListener("click",()=>$("dockerAttachDialog").close());
+$("dockerAttachDialog").addEventListener("close",disposeDockerAttachTerminal);
+
 async function loadTerminalInfo() {
   systemInfo = await api("api/v1/system");
   configurePlatformAwareFields(systemInfo.capabilities || {});
   const enabled = !!systemInfo?.capabilities?.terminal;
   $("terminalNav").classList.toggle("hidden", !enabled);
+	$("dockerNav").classList.toggle("hidden", !systemInfo?.capabilities?.dockerCompose);
   if (!enabled) return;
   terminalInfo = await api("api/v1/terminal");
   const select = $("terminalShell");
@@ -657,10 +814,7 @@ function sendTerminalResize(tab) {
   if (tab.socket?.readyState === WebSocket.OPEN) tab.socket.send(JSON.stringify({type:"resize", cols:tab.term.cols, rows:tab.term.rows}));
 }
 
-async function newTerminal() {
-  if (!terminalInfo?.available) { toast("Terminal is unavailable"); return; }
-  const shell = (terminalInfo.shells || []).find(item => item.id === $("terminalShell").value) || terminalInfo.shells[0];
-  if (!shell) { toast("Shell executable was not found."); return; }
+async function openTerminalSession(shell, requestTicket) {
   const id = crypto.randomUUID();
   const pane = document.createElement("div"); pane.className = "terminal-pane active"; pane.id = `terminal-pane-${id}`; $("terminalPanes").append(pane);
   const term = new Terminal({cursorBlink:true, scrollback:5000, fontFamily:'"Cascadia Code", Consolas, monospace', fontSize:14, theme:{background:'#0b1220'}});
@@ -669,13 +823,20 @@ async function newTerminal() {
   term.onData(data => { if (tab.socket?.readyState === WebSocket.OPEN) tab.socket.send(new TextEncoder().encode(data)); });
   tab.observer = new ResizeObserver(() => { fit.fit(); sendTerminalResize(tab); }); tab.observer.observe(pane);
   try {
-    const ticket = await api("api/v1/terminal/ticket", {method:"POST", body:JSON.stringify({shell:shell.id, cols:term.cols, rows:term.rows})});
+    const ticket = await requestTicket(term);
     const socket = new WebSocket(terminalWebSocketURL(ticket.ticket)); tab.socket = socket; socket.binaryType = "arraybuffer";
     socket.onmessage = event => { if (event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data)); };
     socket.onerror = () => term.writeln("\r\nTerminal connection failed.");
     socket.onclose = event => { if (!event.wasClean) term.writeln(`\r\n${event.reason || "Terminal connection closed."}`); };
     socket.onopen = () => { sendTerminalResize(tab); term.focus(); };
   } catch (error) { term.writeln(`\r\n${error.message}`); toast(error.message); }
+}
+
+async function newTerminal() {
+  if (!terminalInfo?.available) { toast("Terminal is unavailable"); return; }
+  const shell = (terminalInfo.shells || []).find(item => item.id === $("terminalShell").value) || terminalInfo.shells[0];
+  if (!shell) { toast("Shell executable was not found."); return; }
+  await openTerminalSession(shell, term => api("api/v1/terminal/ticket", {method:"POST", body:JSON.stringify({shell:shell.id, cols:term.cols, rows:term.rows})}));
 }
 
 function closeTerminal(id) {
@@ -694,7 +855,10 @@ function setPage(page) {
   $("pageSubtitle").textContent = sub;
   $("primaryAction").textContent = action || "";
   $("primaryAction").classList.toggle("hidden", !action);
+	$("dockerVolumeAction").classList.toggle("hidden", page !== "docker");
+	$("dockerNetworkAction").classList.toggle("hidden", page !== "docker");
 	if (page === "software") renderSoftware();
+	if (page === "docker") renderDocker();
 	if (page === "terminal" && terminalInfo?.available && terminalTabs.length === 0) newTerminal();
   refresh();
 }
@@ -708,6 +872,8 @@ $("softwareProviderSelect").addEventListener("change", event => changeSoftwarePr
 $("softwareSearchInput").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareSearch(); } });
 $("softwareBucketSource").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareAddBucket(); } });
 $("newTerminal").addEventListener("click", newTerminal);
+$("dockerVolumeAction").addEventListener("click", openDockerVolumeCreate);
+$("dockerNetworkAction").addEventListener("click", openDockerNetworkCreate);
 document.querySelectorAll("[data-dismiss]").forEach(button => button.addEventListener("click", () => {
   $(button.dataset.dismiss).close();
 }));
@@ -716,6 +882,7 @@ $("primaryAction").addEventListener("click", () => {
   if (currentPage === "jobs") openJob();
   if (currentPage === "backups") openBackup();
   if (currentPage === "storage") openStorageDialog();
+	if (currentPage === "docker") openDockerCreate();
 });
 $("storageEmptyAdd").addEventListener("click",()=>openStorageDialog());
 $("storageEdit").addEventListener("click",()=>{const provider=storage.find(x=>x.id===$("storageProvider").value);if(provider)openStorageDialog(provider)});
@@ -729,6 +896,8 @@ $("storageForm").addEventListener("submit",async e=>{e.preventDefault();const sc
 $("saveTextEditor").addEventListener("click",saveTextEditor);$("closeTextEditor").addEventListener("click",()=>$("textEditorDialog").close());$("cancelTextEditor").addEventListener("click",()=>$("textEditorDialog").close());
 $("textEditorContent").addEventListener("input",updateTextHighlight);
 $("textEditorContent").addEventListener("scroll",e=>{ $("textHighlight").scrollTop=e.target.scrollTop; $("textHighlight").scrollLeft=e.target.scrollLeft; });
+$("dockerFileContent").addEventListener("input",updateDockerFileHighlight);
+$("dockerFileContent").addEventListener("scroll",e=>{ $("dockerFileHighlight").scrollTop=e.target.scrollTop; $("dockerFileHighlight").scrollLeft=e.target.scrollLeft; });
 
 function openProcess(existing = null) {
   $("processForm").reset();
@@ -909,6 +1078,7 @@ $("loginForm").addEventListener("submit", async e => {
     await loadTerminalInfo();
     await refresh();
     startAutoRefresh();
+    startConnectionMonitor();
   } catch {
     token = old;
     $("loginError").textContent = "The token was rejected.";
@@ -922,11 +1092,13 @@ $("loginForm").addEventListener("submit", async e => {
     $("loginDialog").showModal();
     return;
   }
+  setConnected(false);
+  startConnectionMonitor();
   await refresh();
   try { await loadTerminalInfo(); } catch (e) { if (e.message !== "Unauthorized") toast(e.message); }
   startAutoRefresh();
 })();
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) refresh();
+  if (!document.hidden) { refresh(); probeConnection(); }
 });

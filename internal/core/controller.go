@@ -8,6 +8,7 @@ import (
 
 	"github.com/szilab/RunPilot/internal/backup"
 	"github.com/szilab/RunPilot/internal/config"
+	"github.com/szilab/RunPilot/internal/dockercompose"
 	"github.com/szilab/RunPilot/internal/history"
 	"github.com/szilab/RunPilot/internal/jobs"
 	"github.com/szilab/RunPilot/internal/model"
@@ -26,6 +27,7 @@ type Controller struct {
 	jobs      *jobs.Runner
 	scheduler *scheduler.Scheduler
 	software  *software.Manager
+	docker    *dockercompose.Manager
 }
 
 func Open(dataDir string) (*Controller, error) {
@@ -49,6 +51,7 @@ func Open(dataDir string) (*Controller, error) {
 		jobs:      jr,
 		scheduler: scheduler.New(jr),
 		software:  software.NewManager(dataDir),
+		docker:    dockercompose.NewManager(dataDir),
 	}
 	snap := cfg.Snapshot()
 	c.processes.Reconcile(snap.Processes)
@@ -121,11 +124,12 @@ func (c *Controller) DeleteStorage(id string) error {
 func (c *Controller) StorageProvider(id string) (storage.Provider, error) {
 	for _, d := range c.config.Snapshot().Storage {
 		if d.ID == id {
-			return storage.ProviderFor(d)
+			return storage.ProviderFor(d, c.docker)
 		}
 	}
 	return nil, fmt.Errorf("unknown storage %q", id)
 }
+func (c *Controller) Docker() *dockercompose.Manager { return c.docker }
 
 func (c *Controller) SoftwareDefinitions() []model.SoftwareProviderDefinition {
 	definitions := c.config.Snapshot().Software.Providers

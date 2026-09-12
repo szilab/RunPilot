@@ -11,6 +11,9 @@ RunPilot is a Windows and Linux Go application. Keep the runtime as a single nat
 - Treat Robocopy exit codes 0-7 as successful/non-fatal and 8+ as failure.
 - New GUI capabilities should use the existing REST API/domain model rather than duplicating execution logic.
 - Interactive Terminal sessions are PTY-backed runtime sessions and remain separate from non-interactive Process and Scheduler command execution.
+- Docker support is Linux-only and restricted to explicit Compose-project operations plus fixed, managed-Compose-container lifecycle, logs, and PTY terminal actions. Keep managed projects under `<dataDir>/compose`, leave external Compose projects read-only, and never add a generic Docker command API or automatic Docker privilege escalation.
+- Docker volumes are lifecycle-managed only in the Docker domain. Storage may expose a selected local-driver volume through its typed `docker-volume` provider but must resolve mountpoints through Docker inspection, keep them out of REST responses, and preserve read-only access while running containers use the volume. Backup engines remain provider-neutral.
+- Docker network support is limited to discovery, named bridge-network creation, and deletion after a no-container-reference check. Do not add arbitrary network options, container attachment controls, or generic Docker networking APIs.
 
 ## Validation
 Before finishing a change run:

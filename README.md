@@ -49,7 +49,7 @@ An external integration may serve more than one capability. Restic currently pro
 
 RunPilot should not emulate unsupported backend features merely to make integrations look identical. If Robocopy does not provide versioned repository semantics, versioned backup should use a tool that natively provides them rather than adding a home-grown backup format to RunPilot.
 
-Similarly, future Docker/Compose support should attach to an already functional external runtime and expose useful GUI lifecycle/status/log operations. Provisioning WSL, installing or operating Docker daemons, implementing container networking or recreating Docker orchestration are not currently part of the RunPilot product boundary.
+Docker support attaches to an already functional external runtime and is limited to explicit Compose projects, Compose-labelled containers, named volumes, and named networks. Provisioning WSL, installing or operating Docker daemons, generic Docker execution, or recreating Docker orchestration are not part of the RunPilot product boundary.
 
 See `ARCHITECTURE.md` for the detailed capability/integration model and guardrails.
 
@@ -223,6 +223,20 @@ runpilot.exe
 ```
 
 The first implementation deliberately keeps persistence simple. A later milestone can migrate history/configuration to embedded SQLite once the domain/API has stabilized.
+
+## Docker Compose (Linux)
+
+RunPilot has a deliberately narrow, Linux-only Docker Compose v2 feature. Managed projects are directories below `<data-dir>/compose/<project-name>/`; each can contain `compose.yaml` and a secret-bearing `.env` file. Project directories are the registry, so a managed project appears before its first `up`.
+
+The Docker page has projects, volumes, and networks. It discovers other Compose projects through Docker too, but leaves them read-only. RunPilot never adopts or edits them. Managed projects expose only `up -d`, `start`, `stop`, and `down`; commands always include the project name, project directory, and Compose file. `down` does not remove volumes or images. A managed directory can be deleted only after Docker confirms there are no containers with its Compose project label. Containers in managed projects can be started, stopped, and deleted only when stopped; their logs can be viewed and a running container can open a PTY-backed `docker exec -it <id> /bin/sh` terminal. These actions validate the container ID, Compose project label, and managed-project directory before using fixed Docker arguments; they are not a general container-control or command API.
+
+Volumes are discovered with Docker metadata and show Compose ownership only when Compose labels exist. RunPilot can create named local-driver volumes, and may delete a volume only when no running or stopped container references it and it is not exposed through RunPilot Storage. Deletion never uses force. A selected local volume can be added as a typed `docker-volume` Storage provider; removal of that provider only stops exposing the data and never deletes the Docker volume. Non-local drivers remain visible but unavailable for browsing. Running-volume Storage is read-only.
+
+Docker volume mountpoints are resolved only through `docker volume inspect` internally and are never sent through the Storage API. This prepares a future provider-neutral Backup source flow; no Docker volume backup job exists yet. A filesystem backup of a volume used by a running application, especially a database, is not automatically application-consistent. Future backup support must explicitly require downtime or provide a separate quiescing strategy.
+
+Docker networks are also visible on the Docker page. RunPilot can create named bridge networks and delete an unused network only after Docker confirms that no running or stopped container references it. Compose ownership is shown only from Compose labels. It does not expose network driver options, attach/detach controls, firewall configuration, or generic Docker networking commands.
+
+Docker authority is exactly the authority of the process running RunPilot. The page tests the Docker CLI, Compose v2 plugin, and daemon access under that identity, distinguishing missing CLI/plugin, unavailable daemon, and permission denial. It never invokes sudo, changes Docker socket permissions, or modifies group membership.
 
 ## Near-term roadmap
 

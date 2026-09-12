@@ -2,6 +2,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"time"
@@ -74,19 +75,51 @@ type TextEditor interface {
 
 type StateProvider interface{ State() State }
 
+// BackupSource is an internal resolved filesystem location for a future
+// backup source reference. It is deliberately not serialized through the API.
+type BackupSource struct{ Path string }
+type BackupSourceProvider interface {
+	ResolveBackupSource(string) (BackupSource, error)
+}
+
+// DockerVolumeDetails and DockerVolumeResolver keep Docker resolution behind
+// the provider factory. Storage never constructs a Docker daemon mount path.
+type DockerVolumeDetails struct{ Driver, Mountpoint string }
+type DockerVolumeUsage struct{ Running bool }
+type DockerVolumeResolver interface {
+	VolumeDetails(context.Context, string) (DockerVolumeDetails, error)
+	VolumeUsage(context.Context, string) (DockerVolumeUsage, error)
+}
+
 // NormalizeDefinition keeps provider-specific configuration rules with the
 // provider factory, so callers do not need to inspect Local settings.
 func NormalizeDefinition(d *model.StorageDefinition) error {
-	if d.Type != model.StorageLocal || d.Local == nil {
+	switch d.Type {
+	case model.StorageLocal:
+		if d.Local == nil {
+			return fmt.Errorf("local storage configuration is required")
+		}
+		_, err := NewLocal(*d.Local)
+		return err
+	case model.StorageDockerVolume:
+		if d.DockerVolume == nil || d.DockerVolume.Volume == "" {
+			return fmt.Errorf("Docker volume storage requires a volume name")
+		}
+		return nil
+	default:
 		return fmt.Errorf("unsupported storage provider")
 	}
-	_, err := NewLocal(*d.Local)
-	return err
 }
 
-func ProviderFor(d model.StorageDefinition) (Provider, error) {
+func ProviderFor(d model.StorageDefinition, resolvers ...DockerVolumeResolver) (Provider, error) {
 	if err := NormalizeDefinition(&d); err != nil {
 		return nil, err
 	}
-	return NewLocal(*d.Local)
+	if d.Type == model.StorageLocal {
+		return NewLocal(*d.Local)
+	}
+	if len(resolvers) == 0 || resolvers[0] == nil {
+		return nil, fmt.Errorf("Docker volume resolver is unavailable")
+	}
+	return NewDockerVolume(*d.DockerVolume, resolvers[0])
 }

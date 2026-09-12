@@ -19,6 +19,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/szilab/RunPilot/internal/core"
+	"github.com/szilab/RunPilot/internal/dockercompose"
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/platform"
 	"github.com/szilab/RunPilot/internal/software"
@@ -37,11 +38,13 @@ type Server struct {
 	terminal         *terminal.Manager
 	terminalTickets  map[string]terminalTicket
 	terminalTicketMu sync.Mutex
+	docker           *dockercompose.Manager
 }
 type terminalTicket struct {
-	Shell      string
-	Cols, Rows uint16
-	Expires    time.Time
+	Shell        string
+	DockerExecID string
+	Cols, Rows   uint16
+	Expires      time.Time
 }
 type downloadTicket struct {
 	StorageID, Path string
@@ -57,7 +60,7 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, terminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), terminalTickets: map[string]terminalTicket{}}, nil
+	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, terminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), terminalTickets: map[string]terminalTicket{}, docker: ctrl.Docker()}, nil
 }
 
 func (s *Server) BasePath() string { return s.basePath }
@@ -71,6 +74,23 @@ func (s *Server) Handler() http.Handler {
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/v1/system", s.handleSystem)
+	api.HandleFunc("GET /api/v1/docker", s.handleDockerRuntime)
+	api.HandleFunc("GET /api/v1/docker/projects", s.handleDockerProjects)
+	api.HandleFunc("GET /api/v1/docker/volumes", s.handleDockerVolumes)
+	api.HandleFunc("POST /api/v1/docker/volumes", s.handleDockerCreateVolume)
+	api.HandleFunc("DELETE /api/v1/docker/volumes/{name}", s.handleDockerDeleteVolume)
+	api.HandleFunc("POST /api/v1/docker/volumes/{name}/storage", s.handleDockerAddVolumeStorage)
+	api.HandleFunc("GET /api/v1/docker/networks", s.handleDockerNetworks)
+	api.HandleFunc("POST /api/v1/docker/networks", s.handleDockerCreateNetwork)
+	api.HandleFunc("DELETE /api/v1/docker/networks/{name}", s.handleDockerDeleteNetwork)
+	api.HandleFunc("POST /api/v1/docker/containers/{id}/actions/{action}", s.handleDockerContainerAction)
+	api.HandleFunc("GET /api/v1/docker/containers/{id}/logs", s.handleDockerContainerLogs)
+	api.HandleFunc("POST /api/v1/docker/containers/{id}/attach-ticket", s.handleDockerContainerAttachTicket)
+	api.HandleFunc("POST /api/v1/docker/projects", s.handleDockerCreateProject)
+	api.HandleFunc("DELETE /api/v1/docker/projects/{name}", s.handleDockerDeleteProject)
+	api.HandleFunc("POST /api/v1/docker/projects/{name}/actions/{action}", s.handleDockerAction)
+	api.HandleFunc("GET /api/v1/docker/projects/{name}/files/{kind}", s.handleDockerReadFile)
+	api.HandleFunc("PUT /api/v1/docker/projects/{name}/files/{kind}", s.handleDockerWriteFile)
 	api.HandleFunc("GET /api/v1/terminal", s.handleTerminalInfo)
 	api.HandleFunc("POST /api/v1/terminal/ticket", s.handleTerminalTicket)
 	api.HandleFunc("GET /api/v1/overview", s.handleOverview)
@@ -193,6 +213,297 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) dockerSupported(w http.ResponseWriter) bool {
+	if !platform.CurrentCapabilities().DockerCompose {
+		writeError(w, http.StatusNotImplemented, dockercompose.ErrUnsupported)
+		return false
+	}
+	return true
+}
+
+func (s *Server) handleDockerRuntime(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.docker.Runtime(r.Context()))
+}
+func (s *Server) handleDockerProjects(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	runtime, projects, err := s.docker.List(r.Context())
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runtime": runtime, "projects": projects})
+}
+func (s *Server) handleDockerVolumes(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	runtime, volumes, err := s.docker.ListVolumes(r.Context())
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	providers := map[string]string{}
+	for _, d := range s.ctrl.StorageDefinitions() {
+		if d.Type == model.StorageDockerVolume && d.DockerVolume != nil {
+			providers[d.DockerVolume.Volume] = d.ID
+		}
+	}
+	for i := range volumes {
+		volumes[i].StorageProviderID = providers[volumes[i].Name]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runtime": runtime, "volumes": volumes})
+}
+func (s *Server) handleDockerCreateVolume(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	v, err := s.docker.CreateVolume(r.Context(), body.Name)
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, v)
+}
+func (s *Server) handleDockerDeleteVolume(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	exposed := false
+	for _, d := range s.ctrl.StorageDefinitions() {
+		if d.Type == model.StorageDockerVolume && d.DockerVolume != nil && d.DockerVolume.Volume == r.PathValue("name") {
+			exposed = true
+			break
+		}
+	}
+	if err := s.docker.DeleteVolume(r.Context(), r.PathValue("name"), exposed); err != nil {
+		dockerError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (s *Server) handleDockerAddVolumeStorage(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	name := r.PathValue("name")
+	if !dockercompose.ValidVolumeName(name) {
+		dockerError(w, dockercompose.ErrInvalidName)
+		return
+	}
+	for _, d := range s.ctrl.StorageDefinitions() {
+		if d.Type == model.StorageDockerVolume && d.DockerVolume != nil && d.DockerVolume.Volume == name {
+			writeJSON(w, http.StatusOK, d)
+			return
+		}
+	}
+	// Confirm this is a real Docker volume before persisting a provider definition.
+	if _, err := s.docker.VolumeDetails(r.Context(), name); err != nil {
+		dockerError(w, err)
+		return
+	}
+	d, err := s.ctrl.UpsertStorage(model.StorageDefinition{Name: name, Type: model.StorageDockerVolume, DockerVolume: &model.DockerVolumeStorageSpec{Volume: name}})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, d)
+}
+func (s *Server) handleDockerNetworks(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	runtime, networks, err := s.docker.ListNetworks(r.Context())
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runtime": runtime, "networks": networks})
+}
+func (s *Server) handleDockerCreateNetwork(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	network, err := s.docker.CreateNetwork(r.Context(), body.Name)
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, network)
+}
+func (s *Server) handleDockerDeleteNetwork(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	if err := s.docker.DeleteNetwork(r.Context(), r.PathValue("name")); err != nil {
+		dockerError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (s *Server) handleDockerContainerAction(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	if err := s.docker.ContainerAction(r.Context(), r.PathValue("id"), r.PathValue("action")); err != nil {
+		dockerError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (s *Server) handleDockerContainerLogs(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	logs, err := s.docker.ContainerLogs(r.Context(), r.PathValue("id"))
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(logs))
+}
+func (s *Server) handleDockerContainerAttachTicket(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	if err := s.docker.TerminalContainer(r.Context(), r.PathValue("id")); err != nil {
+		dockerError(w, err)
+		return
+	}
+	var request struct{ Cols, Rows uint16 }
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if request.Cols == 0 {
+		request.Cols = 80
+	}
+	if request.Rows == 0 {
+		request.Rows = 24
+	}
+	if request.Cols > 500 || request.Rows > 300 {
+		writeError(w, http.StatusBadRequest, errors.New("terminal dimensions are too large"))
+		return
+	}
+	ticket, err := secureTicket()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.terminalTicketMu.Lock()
+	s.terminalTickets[ticket] = terminalTicket{DockerExecID: r.PathValue("id"), Cols: request.Cols, Rows: request.Rows, Expires: time.Now().Add(time.Minute)}
+	s.terminalTicketMu.Unlock()
+	writeJSON(w, http.StatusCreated, map[string]string{"ticket": ticket})
+}
+func (s *Server) handleDockerCreateProject(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	p, err := s.docker.Create(body.Name)
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, p)
+}
+func (s *Server) handleDockerAction(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	if err := s.docker.Action(r.Context(), r.PathValue("name"), r.PathValue("action")); err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+}
+func (s *Server) handleDockerDeleteProject(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	if err := s.docker.Delete(r.Context(), r.PathValue("name")); err != nil {
+		dockerError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (s *Server) handleDockerReadFile(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	content, err := s.docker.ReadFile(r.PathValue("name"), r.PathValue("kind"))
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"content": content})
+}
+func (s *Server) handleDockerWriteFile(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	var body struct {
+		Content string `json:"content"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if err := s.docker.WriteFile(r.PathValue("name"), r.PathValue("kind"), body.Content); err != nil {
+		dockerError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func dockerError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, dockercompose.ErrInvalidName), strings.Contains(err.Error(), "invalid Compose action"), strings.Contains(err.Error(), "invalid managed file"):
+		writeError(w, http.StatusBadRequest, err)
+	case errors.Is(err, dockercompose.ErrProjectNotFound):
+		writeError(w, http.StatusNotFound, err)
+	case errors.Is(err, dockercompose.ErrReadOnly):
+		writeError(w, http.StatusForbidden, err)
+	case errors.Is(err, dockercompose.ErrBusy), errors.Is(err, dockercompose.ErrProjectNotDown):
+		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, dockercompose.ErrRuntimeUnavailable):
+		writeError(w, http.StatusServiceUnavailable, err)
+	case errors.Is(err, dockercompose.ErrUnsupported):
+		writeError(w, http.StatusNotImplemented, err)
+	case errors.Is(err, dockercompose.ErrFileTooLarge):
+		writeError(w, http.StatusRequestEntityTooLarge, err)
+	case errors.Is(err, dockercompose.ErrVolumeInUse), errors.Is(err, dockercompose.ErrVolumeStorage), errors.Is(err, dockercompose.ErrNetworkInUse), errors.Is(err, dockercompose.ErrProtectedNetwork), errors.Is(err, dockercompose.ErrNetworkExists):
+		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, dockercompose.ErrContainerRunning):
+		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, dockercompose.ErrContainerNotFound):
+		writeError(w, http.StatusNotFound, err)
+	case errors.Is(err, dockercompose.ErrContainerReadOnly):
+		writeError(w, http.StatusForbidden, err)
+	default:
+		writeError(w, http.StatusInternalServerError, err)
+	}
+}
+
 func (s *Server) handleTerminalInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"available":    s.terminal.Available(),
@@ -269,7 +580,12 @@ func (s *Server) handleTerminalConnect(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close(websocket.StatusPolicyViolation, "terminal connection expired or already used")
 		return
 	}
-	session, err := s.terminal.Start(ticket.Shell, ticket.Cols, ticket.Rows)
+	var session *terminal.Session
+	if ticket.DockerExecID != "" {
+		session, err = s.terminal.StartCommand("Container terminal", "docker", []string{"exec", "-i", "-t", ticket.DockerExecID, "/bin/sh"}, ticket.Cols, ticket.Rows)
+	} else {
+		session, err = s.terminal.Start(ticket.Shell, ticket.Cols, ticket.Rows)
+	}
 	if err != nil {
 		_ = conn.Close(websocket.StatusInternalError, err.Error())
 		return

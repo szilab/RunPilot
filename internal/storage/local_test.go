@@ -109,3 +109,15 @@ func TestLocalScopeValidation(t *testing.T) {
 		t.Fatal("host scope accepted a root path")
 	}
 }
+
+func TestLocalResolvesInternalBackupSource(t *testing.T) {
+	root := t.TempDir()
+	p, err := NewLocal(model.LocalStorageSpec{Scope: model.LocalStorageScopeRoot, Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := p.ResolveBackupSource("")
+	if err != nil || source.Path == "" {
+		t.Fatalf("source %#v, %v", source, err)
+	}
+}

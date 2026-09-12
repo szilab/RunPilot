@@ -75,6 +75,21 @@ func (m *Manager) DefaultShell() string {
 }
 
 func (m *Manager) Start(shellID string, cols, rows uint16) (*Session, error) {
+	shell, ok := m.shell(shellID)
+	if !ok {
+		return nil, ErrUnknownShell
+	}
+	return m.startCommand(shell, shell.Path, nil, cols, rows)
+}
+
+// StartCommand starts a named, prevalidated interactive command in a PTY.
+// It is intentionally used only by narrow typed integrations such as Docker
+// container terminals, never as a generic command execution surface.
+func (m *Manager) StartCommand(name, path string, args []string, cols, rows uint16) (*Session, error) {
+	return m.startCommand(Shell{ID: "command", Name: name, Path: path, Available: true}, path, args, cols, rows)
+}
+
+func (m *Manager) startCommand(shell Shell, path string, args []string, cols, rows uint16) (*Session, error) {
 	if !Supported() {
 		return nil, ErrUnsupported
 	}
@@ -89,10 +104,6 @@ func (m *Manager) Start(shellID string, cols, rows uint16) (*Session, error) {
 	if len(m.sessions) >= m.max {
 		return nil, ErrSessionLimit
 	}
-	shell, ok := m.shell(shellID)
-	if !ok {
-		return nil, ErrUnknownShell
-	}
 	p, err := pty.New()
 	if err != nil {
 		return nil, fmt.Errorf("initialize PTY: %w", err)
@@ -101,7 +112,7 @@ func (m *Manager) Start(shellID string, cols, rows uint16) (*Session, error) {
 		_ = p.Close()
 		return nil, fmt.Errorf("resize PTY: %w", err)
 	}
-	cmd := p.Command(shell.Path)
+	cmd := p.Command(path, args...)
 	cmd.Dir = m.cwd
 	cmd.Env = terminalEnvironment(os.Environ())
 	if err := cmd.Start(); err != nil {

@@ -13,6 +13,7 @@ type Capabilities struct {
 	Robocopy            bool     `json:"robocopy"`
 	Scoop               bool     `json:"scoop"`
 	Terminal            bool     `json:"terminal"`
+	DockerCompose       bool     `json:"dockerCompose"`
 }
 
 func CurrentCapabilities() Capabilities {
@@ -27,5 +28,6 @@ func CurrentCapabilities() Capabilities {
 		c.CommandInterpreters = append(c.CommandInterpreters, "sh", "bash")
 	}
 	c.Terminal = c.Windows || c.Linux
+	c.DockerCompose = c.Linux
 	return c
 }

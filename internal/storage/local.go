@@ -63,6 +63,14 @@ func (l *Local) State() State {
 	return State{Status: "ready"}
 }
 
+func (l *Local) ResolveBackupSource(p string) (BackupSource, error) {
+	abs, err := l.resolve(p, false)
+	if err != nil {
+		return BackupSource{}, err
+	}
+	return BackupSource{Path: abs}, nil
+}
+
 func validNamespace(p string) ([]string, error) {
 	if p == "" {
 		return nil, nil

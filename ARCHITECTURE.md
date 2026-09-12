@@ -120,3 +120,13 @@ Before remote management is added, introduce TLS/reverse-proxy guidance, explici
 The MVP uses embedded static HTML/CSS/JavaScript. There is no frontend runtime dependency and no separate web server. The assets compile into `runpilot.exe`. The Terminal UI vendors xterm.js core, fit addon, CSS, and license notices as embedded production assets; it has no Node.js or CDN runtime dependency.
 
 A future React/Vue/Svelte frontend can replace the static client while preserving the same REST contract.
+
+## Docker Compose boundary
+
+`internal/dockercompose` is a Linux-only capability behind the existing platform capability model. It uses the Docker CLI with fixed argument arrays and an injectable runner, rather than the Docker SDK or a shell. Managed Compose projects persist as direct children of `<data-dir>/compose`; external Docker-discovered Compose projects are observable but read-only.
+
+RunPilot manages Docker only through explicit Compose-project operations plus constrained actions for containers in managed projects. No generic Docker command execution API is exposed. The Docker authority is the RunPilot process identity, with no automatic sudo, socket-permission, or docker-group changes. Project deletion is directory-only and requires Docker to confirm that no project containers remain; lifecycle `down` never implicitly removes volumes or images. Container actions accept only a validated hexadecimal ID, re-inspect and verify the Compose label and managed-project directory, and use fixed `docker container start`, `stop`, `rm`, `logs --tail`, or PTY-backed `exec -i -t <id> /bin/sh` arguments. Deletion is rejected while the container runs.
+
+Docker volumes are a sibling Docker domain, not a special Backup-engine setting. Docker discovery identifies volume ownership from labels and container references from batched container inspection. A volume is removable only when unreferenced and absent from RunPilot Storage configuration. `docker-volume` Storage definitions resolve a local-driver mountpoint through Docker inspection and delegate filesystem operations to the root-scoped Local provider; mountpoints remain internal. Dynamic running-container usage changes their Storage capability to read-only and is rechecked by backend mutation calls. Both Local and Docker Volume providers implement the internal backup-source resolution interface, preparing future Storage references without making Restic or rdiff-backup Docker-aware.
+
+Networks follow the same narrow Docker boundary: discovery, Compose-label association, named bridge-network creation, and deletion only when no container references the network. RunPilot does not expose arbitrary network drivers/options or attach, detach, firewall, and routing controls.

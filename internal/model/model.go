@@ -183,7 +183,10 @@ type SoftwareProviderDefinition struct {
 // never alters the data at that location.
 type StorageType string
 
-const StorageLocal StorageType = "local"
+const (
+	StorageLocal        StorageType = "local"
+	StorageDockerVolume StorageType = "docker-volume"
+)
 
 type LocalStorageScope string
 
@@ -197,11 +200,18 @@ type LocalStorageSpec struct {
 	Root  string            `json:"root,omitempty" yaml:"root,omitempty"`
 }
 
+// DockerVolumeStorageSpec identifies a Docker volume without exposing its
+// daemon-managed host mountpoint in configuration or API responses.
+type DockerVolumeStorageSpec struct {
+	Volume string `json:"volume" yaml:"volume"`
+}
+
 type StorageDefinition struct {
-	ID    string            `json:"id" yaml:"id"`
-	Name  string            `json:"name" yaml:"name"`
-	Type  StorageType       `json:"type" yaml:"type"`
-	Local *LocalStorageSpec `json:"local,omitempty" yaml:"local,omitempty"`
+	ID           string                   `json:"id" yaml:"id"`
+	Name         string                   `json:"name" yaml:"name"`
+	Type         StorageType              `json:"type" yaml:"type"`
+	Local        *LocalStorageSpec        `json:"local,omitempty" yaml:"local,omitempty"`
+	DockerVolume *DockerVolumeStorageSpec `json:"dockerVolume,omitempty" yaml:"dockerVolume,omitempty"`
 }
 
 type DiskStatus struct {
