@@ -10,6 +10,7 @@ RunPilot is a Windows and Linux Go application. Keep the runtime as a single nat
 - Do not turn backup definitions into arbitrary shell scripts. Backup engines are typed adapters; Robocopy is Windows-only and Restic/rdiff-backup remain portable adapters.
 - Treat Robocopy exit codes 0-7 as successful/non-fatal and 8+ as failure.
 - New GUI capabilities should use the existing REST API/domain model rather than duplicating execution logic.
+- Interactive Terminal sessions are PTY-backed runtime sessions and remain separate from non-interactive Process and Scheduler command execution.
 
 ## Validation
 Before finishing a change run:

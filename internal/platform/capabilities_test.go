@@ -16,4 +16,7 @@ func TestCurrentCapabilitiesMatchRuntime(t *testing.T) {
 	if runtime.GOOS == "linux" && (!c.Linux || c.ServiceManager != "systemd" || c.Robocopy || c.Scoop) {
 		t.Fatalf("unexpected Linux capabilities: %#v", c)
 	}
+	if (runtime.GOOS == "windows" || runtime.GOOS == "linux") && !c.Terminal {
+		t.Fatalf("terminal capability is missing for %s", runtime.GOOS)
+	}
 }

@@ -17,21 +17,31 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/szilab/RunPilot/internal/core"
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/platform"
 	"github.com/szilab/RunPilot/internal/software"
 	"github.com/szilab/RunPilot/internal/storage"
+	"github.com/szilab/RunPilot/internal/terminal"
 )
 
 //go:embed static/*
 var staticFS embed.FS
 
 type Server struct {
-	ctrl     *core.Controller
-	basePath string
-	tickets  map[string]downloadTicket
-	ticketMu sync.Mutex
+	ctrl             *core.Controller
+	basePath         string
+	tickets          map[string]downloadTicket
+	ticketMu         sync.Mutex
+	terminal         *terminal.Manager
+	terminalTickets  map[string]terminalTicket
+	terminalTicketMu sync.Mutex
+}
+type terminalTicket struct {
+	Shell      string
+	Cols, Rows uint16
+	Expires    time.Time
 }
 type downloadTicket struct {
 	StorageID, Path string
@@ -47,7 +57,7 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}}, nil
+	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, terminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), terminalTickets: map[string]terminalTicket{}}, nil
 }
 
 func (s *Server) BasePath() string { return s.basePath }
@@ -61,6 +71,8 @@ func (s *Server) Handler() http.Handler {
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/v1/system", s.handleSystem)
+	api.HandleFunc("GET /api/v1/terminal", s.handleTerminalInfo)
+	api.HandleFunc("POST /api/v1/terminal/ticket", s.handleTerminalTicket)
 	api.HandleFunc("GET /api/v1/overview", s.handleOverview)
 	api.HandleFunc("GET /api/v1/processes", s.handleListProcesses)
 	api.HandleFunc("POST /api/v1/processes", s.handleCreateProcess)
@@ -110,6 +122,9 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/v1/software/providers/{id}/refresh", s.handleSoftwareRefresh)
 
 	mux.Handle("/api/", s.auth(api))
+	// A terminal connection is authenticated by its short-lived, single-use
+	// ticket. It intentionally does not accept the permanent API token in a URL.
+	mux.HandleFunc("GET /api/v1/terminal/connect", s.handleTerminalConnect)
 
 	sub, _ := fs.Sub(staticFS, "static")
 	static := http.FileServer(http.FS(sub))
@@ -135,6 +150,9 @@ func (s *Server) Handler() http.Handler {
 		mux.ServeHTTP(w, clone)
 	}))
 }
+
+// Close releases all interactive shell sessions during RunPilot shutdown.
+func (s *Server) Close() error { return s.terminal.Close() }
 
 func normalizeBasePath(value string) (string, error) {
 	value = strings.TrimSpace(value)
@@ -173,6 +191,154 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 		"bind":         cfg.Server.Bind,
 		"capabilities": platform.CurrentCapabilities(),
 	})
+}
+
+func (s *Server) handleTerminalInfo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"available":    s.terminal.Available(),
+		"shells":       s.terminal.Shells(),
+		"defaultShell": s.terminal.DefaultShell(),
+	})
+}
+
+func (s *Server) handleTerminalTicket(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Shell string `json:"shell"`
+		Cols  uint16 `json:"cols"`
+		Rows  uint16 `json:"rows"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if !s.terminal.Available() {
+		writeError(w, http.StatusServiceUnavailable, errors.New("terminal is not available on this host"))
+		return
+	}
+	if request.Shell != "" {
+		found := false
+		for _, shell := range s.terminal.Shells() {
+			if shell.ID == request.Shell {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeError(w, http.StatusBadRequest, terminal.ErrUnknownShell)
+			return
+		}
+	}
+	if request.Cols == 0 {
+		request.Cols = 80
+	}
+	if request.Rows == 0 {
+		request.Rows = 24
+	}
+	if request.Cols > 500 || request.Rows > 300 {
+		writeError(w, http.StatusBadRequest, errors.New("terminal dimensions are too large"))
+		return
+	}
+	ticket, err := secureTicket()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.terminalTicketMu.Lock()
+	s.terminalTickets[ticket] = terminalTicket{Shell: request.Shell, Cols: request.Cols, Rows: request.Rows, Expires: time.Now().Add(time.Minute)}
+	s.terminalTicketMu.Unlock()
+	// The browser resolves the WebSocket endpoint from document.baseURI so it
+	// retains the public scheme, host, port, and any configured base path.
+	// Returning only the ticket prevents a backend address from leaking into
+	// the browser-facing connection URL.
+	writeJSON(w, http.StatusCreated, map[string]string{"ticket": ticket})
+}
+
+func (s *Server) handleTerminalConnect(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("ticket") == "" {
+		http.Error(w, "terminal ticket required", http.StatusUnauthorized)
+		return
+	}
+	// coder/websocket validates Origin against the request Host by default.
+	// Do not set InsecureSkipVerify or broad origin patterns here.
+	conn, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.CloseNow()
+	ticket, ok := s.consumeTerminalTicket(r.URL.Query().Get("ticket"))
+	if !ok {
+		_ = conn.Close(websocket.StatusPolicyViolation, "terminal connection expired or already used")
+		return
+	}
+	session, err := s.terminal.Start(ticket.Shell, ticket.Cols, ticket.Rows)
+	if err != nil {
+		_ = conn.Close(websocket.StatusInternalError, err.Error())
+		return
+	}
+	defer session.Close()
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		buffer := make([]byte, 32*1024)
+		for {
+			n, readErr := session.Read(buffer)
+			if n > 0 {
+				if writeErr := conn.Write(ctx, websocket.MessageBinary, buffer[:n]); writeErr != nil {
+					return
+				}
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+	for {
+		kind, data, readErr := conn.Read(ctx)
+		if readErr != nil {
+			break
+		}
+		switch kind {
+		case websocket.MessageBinary:
+			if _, err := session.Write(data); err != nil {
+				return
+			}
+		case websocket.MessageText:
+			var control struct {
+				Type       string `json:"type"`
+				Cols, Rows uint16
+			}
+			if json.Unmarshal(data, &control) != nil || control.Type != "resize" || session.Resize(control.Cols, control.Rows) != nil {
+				_ = conn.Close(websocket.StatusPolicyViolation, "invalid terminal control message")
+				return
+			}
+		}
+	}
+	cancel()
+	_ = session.Close()
+	<-done
+}
+
+func (s *Server) consumeTerminalTicket(value string) (terminalTicket, bool) {
+	s.terminalTicketMu.Lock()
+	defer s.terminalTicketMu.Unlock()
+	ticket, ok := s.terminalTickets[value]
+	if ok {
+		delete(s.terminalTickets, value)
+	}
+	if !ok || time.Now().After(ticket.Expires) {
+		return terminalTicket{}, false
+	}
+	return ticket, true
+}
+
+func secureTicket() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", b), nil
 }
 
 func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {

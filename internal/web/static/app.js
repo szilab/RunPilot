@@ -7,6 +7,7 @@ let storage = [], storageLocation = null, storagePath = "";
 let softwareProviders = [], softwareProviderID = "", softwarePackages = [], softwareUpdates = [], softwareSearchResults = [], softwareBuckets = [], softwareTab = "installed", softwareBusy = false, softwareBusyLabel = "", softwareLoading = false, softwareLoadingKey = "", softwareLoadedKey = "", softwareLoadSequence = 0, softwareRootDrafts = {};
 let storageClipboard = null, editingTextPath = null, storageShowHidden = false;
 let overview = null;
+let systemInfo = null, terminalInfo = null, terminalTabs = [], activeTerminalID = "";
 let logTimer = null;
 let logSource = null;
 let refreshTimer = null;
@@ -17,9 +18,10 @@ const pageMeta = {
   overview: ["Overview", "RunPilot service and resource health at a glance.", null],
   processes: ["Processes", "Long-running applications supervised by the RunPilot service.", "Add process"],
   jobs: ["Scheduler", "One-shot commands launched on an interval, daily time or cron expression.", "Add job"],
-  backups: ["Backups", "Scheduled filesystem backups powered by Windows built-in tools.", "Add backup"],
+  backups: ["Backups", "Scheduled filesystem backups using Windows-specific and portable providers.", "Add backup"],
   storage: ["Storage", "", "Tároló hozzáadása"],
-  software: ["Software", "Install and maintain portable applications in a RunPilot-managed Scoop root.", null],
+  software: ["Software", "Install and maintain portable applications in a RunPilot-managed Scoop root on Windows.", null],
+  terminal: ["Terminal", "Interactive shells run with the same OS authority as the RunPilot service.", null],
   history: ["History", "Recent process exits and job executions with exit code and captured output.", null],
 };
 
@@ -131,6 +133,7 @@ function populateCommandEditor(prefix, command = {}) {
   });
   updateEnvironmentEmpty(prefix);
   setCommandError(prefix);
+	if (systemInfo?.capabilities) configurePlatformAwareFields(systemInfo.capabilities);
 }
 
 function commandFromEditor(prefix) {
@@ -150,7 +153,7 @@ function commandFromEditor(prefix) {
     }
     const canonicalName = name.toUpperCase();
     if (names.has(canonicalName)) {
-      setCommandError(prefix, `Environment variables "${names.get(canonicalName)}" and "${name}" conflict on Windows.`);
+      setCommandError(prefix, `Environment variables "${names.get(canonicalName)}" and "${name}" conflict on case-insensitive platforms.`);
       return null;
     }
     names.set(canonicalName, name);
@@ -586,6 +589,101 @@ async function loadSoftwareView(force = false) {
 }
 function softwareSearch() { loadSoftwareView(true); }
 
+async function loadTerminalInfo() {
+  systemInfo = await api("api/v1/system");
+  configurePlatformAwareFields(systemInfo.capabilities || {});
+  const enabled = !!systemInfo?.capabilities?.terminal;
+  $("terminalNav").classList.toggle("hidden", !enabled);
+  if (!enabled) return;
+  terminalInfo = await api("api/v1/terminal");
+  const select = $("terminalShell");
+  select.replaceChildren();
+  for (const shell of terminalInfo.shells || []) {
+    const option = document.createElement("option"); option.value = shell.id; option.textContent = shell.name; select.append(option);
+  }
+  select.value = terminalInfo.defaultShell || "";
+  $("terminalUnavailableMessage").textContent = terminalInfo.available ? "" : "No supported interactive shell could be started on this host.";
+  $("terminalUnavailable").classList.toggle("hidden", !!terminalInfo.available);
+  $("terminalWorkspace").classList.toggle("hidden", !terminalInfo.available);
+  $("newTerminal").disabled = !terminalInfo.available;
+}
+
+function configurePlatformAwareFields(capabilities) {
+  const labels = {direct:"Direct executable", python:"Python", powershell:"PowerShell", cmd:"CMD / batch", sh:"POSIX shell (sh)", bash:"Bash"};
+  const interpreters = new Set(capabilities.commandInterpreters || []);
+  document.querySelectorAll("select[id$='Interpreter']").forEach(select => {
+    const selected = select.value || "auto";
+    for (const option of select.options) {
+      if (option.value === "auto" || option.value === "direct") continue;
+      option.hidden = !interpreters.has(option.value);
+      option.disabled = !interpreters.has(option.value);
+      if (labels[option.value]) option.textContent = labels[option.value];
+    }
+    if (select.querySelector(`option[value="${selected}"]`)?.disabled) select.value = "auto";
+  });
+  const robocopy = $("backupProvider").querySelector('option[value="robocopy"]');
+  if (robocopy) { robocopy.disabled = !capabilities.robocopy; robocopy.hidden = !capabilities.robocopy; }
+  const vss = $("resticVss").closest("label");
+  if (vss) vss.classList.toggle("hidden", !capabilities.windows);
+}
+
+function renderTerminalTabs() {
+  const tabs = $("terminalTabs"); tabs.replaceChildren();
+  for (const tab of terminalTabs) {
+    const button = document.createElement("div"); button.className = `terminal-tab${tab.id === activeTerminalID ? " active" : ""}`; button.tabIndex = 0; button.setAttribute("role", "tab");
+    const label = document.createElement("span"); label.textContent = tab.shell.name; button.append(label);
+    const close = document.createElement("button"); close.type = "button"; close.className = "terminal-tab-close"; close.textContent = "×"; close.setAttribute("aria-label", `Close ${tab.shell.name}`);
+    close.addEventListener("click", event => { event.stopPropagation(); closeTerminal(tab.id); }); button.append(close);
+    button.addEventListener("click", () => activateTerminal(tab.id)); button.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); activateTerminal(tab.id); } }); tabs.append(button);
+  }
+  $("terminalWorkspace").classList.toggle("hidden", !terminalInfo?.available || terminalTabs.length === 0);
+}
+
+function activateTerminal(id) {
+  activeTerminalID = id;
+  terminalTabs.forEach(tab => tab.pane.classList.toggle("active", tab.id === id));
+  renderTerminalTabs();
+  const tab = terminalTabs.find(item => item.id === id); if (tab) { tab.fit.fit(); tab.term.focus(); sendTerminalResize(tab); }
+}
+
+function terminalWebSocketURL(ticket) {
+  const wsURL = new URL("api/v1/terminal/connect", document.baseURI);
+  wsURL.protocol = wsURL.protocol === "https:" ? "wss:" : "ws:";
+  wsURL.searchParams.set("ticket", ticket);
+  return wsURL;
+}
+
+function sendTerminalResize(tab) {
+  if (tab.socket?.readyState === WebSocket.OPEN) tab.socket.send(JSON.stringify({type:"resize", cols:tab.term.cols, rows:tab.term.rows}));
+}
+
+async function newTerminal() {
+  if (!terminalInfo?.available) { toast("Terminal is unavailable"); return; }
+  const shell = (terminalInfo.shells || []).find(item => item.id === $("terminalShell").value) || terminalInfo.shells[0];
+  if (!shell) { toast("Shell executable was not found."); return; }
+  const id = crypto.randomUUID();
+  const pane = document.createElement("div"); pane.className = "terminal-pane active"; pane.id = `terminal-pane-${id}`; $("terminalPanes").append(pane);
+  const term = new Terminal({cursorBlink:true, scrollback:5000, fontFamily:'"Cascadia Code", Consolas, monospace', fontSize:14, theme:{background:'#0b1220'}});
+  const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(pane); fit.fit();
+  const tab = {id, shell, pane, term, fit, socket:null, observer:null}; terminalTabs.push(tab); activateTerminal(id);
+  term.onData(data => { if (tab.socket?.readyState === WebSocket.OPEN) tab.socket.send(new TextEncoder().encode(data)); });
+  tab.observer = new ResizeObserver(() => { fit.fit(); sendTerminalResize(tab); }); tab.observer.observe(pane);
+  try {
+    const ticket = await api("api/v1/terminal/ticket", {method:"POST", body:JSON.stringify({shell:shell.id, cols:term.cols, rows:term.rows})});
+    const socket = new WebSocket(terminalWebSocketURL(ticket.ticket)); tab.socket = socket; socket.binaryType = "arraybuffer";
+    socket.onmessage = event => { if (event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data)); };
+    socket.onerror = () => term.writeln("\r\nTerminal connection failed.");
+    socket.onclose = event => { if (!event.wasClean) term.writeln(`\r\n${event.reason || "Terminal connection closed."}`); };
+    socket.onopen = () => { sendTerminalResize(tab); term.focus(); };
+  } catch (error) { term.writeln(`\r\n${error.message}`); toast(error.message); }
+}
+
+function closeTerminal(id) {
+  const index = terminalTabs.findIndex(tab => tab.id === id); if (index < 0) return;
+  const [tab] = terminalTabs.splice(index, 1); tab.observer?.disconnect(); tab.socket?.close(); tab.term.dispose(); tab.pane.remove();
+  activeTerminalID = terminalTabs[0]?.id || ""; if (activeTerminalID) activateTerminal(activeTerminalID); else renderTerminalTabs();
+}
+
 function setPage(page) {
   currentPage = page;
   document.querySelectorAll(".nav").forEach(n => n.classList.toggle("active", n.dataset.page === page));
@@ -597,6 +695,7 @@ function setPage(page) {
   $("primaryAction").textContent = action || "";
   $("primaryAction").classList.toggle("hidden", !action);
 	if (page === "software") renderSoftware();
+	if (page === "terminal" && terminalInfo?.available && terminalTabs.length === 0) newTerminal();
   refresh();
 }
 
@@ -608,6 +707,7 @@ $("softwareAddBucket").addEventListener("click", softwareAddBucket);
 $("softwareProviderSelect").addEventListener("change", event => changeSoftwareProvider(event.target.value));
 $("softwareSearchInput").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareSearch(); } });
 $("softwareBucketSource").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareAddBucket(); } });
+$("newTerminal").addEventListener("click", newTerminal);
 document.querySelectorAll("[data-dismiss]").forEach(button => button.addEventListener("click", () => {
   $(button.dataset.dismiss).close();
 }));
@@ -806,6 +906,7 @@ $("loginForm").addEventListener("submit", async e => {
     $("loginError").classList.add("hidden");
     $("loginDialog").close();
     setConnected(true);
+    await loadTerminalInfo();
     await refresh();
     startAutoRefresh();
   } catch {
@@ -822,6 +923,7 @@ $("loginForm").addEventListener("submit", async e => {
     return;
   }
   await refresh();
+  try { await loadTerminalInfo(); } catch (e) { if (e.message !== "Unauthorized") toast(e.message); }
   startAutoRefresh();
 })();
 

@@ -157,6 +157,18 @@ header p { margin: 0; color: #64748b; }
 .software-loading { display: grid; justify-items: center; align-content: center; gap: 9px; min-height: 230px; padding: 34px 20px; border: 1px dashed #94a3b8; border-radius: 12px; color: #64748b; text-align: center; }
 .software-loading strong { color: #334155; font-size: 15px; }
 .software-loading > span:last-child { font-size: 13px; }
+.terminal-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.terminal-toolbar select { width: min(300px, 100%); }
+.terminal-workspace { height: calc(100vh - 190px); min-height: 420px; display: grid; grid-template-rows: auto minmax(0, 1fr); border: 1px solid #28374a; border-radius: 10px; overflow: hidden; background: #0b1220; }
+.terminal-tabs { display: flex; gap: 3px; padding: 7px 8px 0; overflow-x: auto; background: #172235; }
+.terminal-tab { display: flex; align-items: center; gap: 8px; max-width: 240px; border: 0; border-radius: 7px 7px 0 0; padding: 7px 9px; color: #b9c7d9; background: transparent; white-space: nowrap; }
+.terminal-tab.active { color: white; background: #0b1220; }
+.terminal-tab-close { border: 0; padding: 0 2px; color: inherit; background: transparent; font-size: 17px; line-height: 1; }
+.terminal-panes, .terminal-pane { min-height: 0; height: 100%; }
+.terminal-pane { display: none; padding: 8px; }
+.terminal-pane.active { display: block; }
+.terminal-pane .xterm { height: 100%; }
+.terminal-pane .xterm-viewport { overflow-y: auto !important; }
 .spinner { width: 28px; height: 28px; border: 3px solid #cbd5e1; border-top-color: #2563eb; border-radius: 50%; animation: software-spin .8s linear infinite; }
 @keyframes software-spin { to { transform: rotate(360deg); } }
 code { font-family: "Cascadia Code", Consolas, monospace; }
@@ -294,6 +306,7 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
   .software-package-row { grid-template-columns: 1fr auto; row-gap: 13px; }
   .software-package-meta { grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .software-package-row .row-actions { grid-column: 1 / -1; }
+  .terminal-workspace { height: calc(100vh - 220px); }
   .storage-list-head { display: none; }
   .storage-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 7px; }
   .storage-row .storage-name { grid-column: 1 / -1; }

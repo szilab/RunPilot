@@ -29,6 +29,7 @@ RunPilot should integrate specialist tools such as Robocopy, Restic or future pa
 - Token-authenticated API bound to `127.0.0.1` by default
 - YAML configuration under `%ProgramData%\RunPilot`
 - Software Management through a RunPilot-owned isolated Scoop provider
+- Interactive Terminal tabs backed by a Linux PTY or Windows ConPTY
 
 ## Product direction
 
@@ -41,6 +42,7 @@ Planned/possible capabilities include:
 - **Backups** — GUI and scheduling around specialist backup tools.
 - **Storage** — writable Local Filesystem browsing (a restricted folder or all drives accessible to the service identity), plus future versioned providers.
 - **Software** — install, upgrade and remove portable applications through the RunPilot-owned Scoop provider; WinGet may be a future provider for conventional Windows software.
+- **Terminal** — short-lived interactive local shells in the web UI, using native PTY/ConPTY support rather than command execution pipes.
 - **History and health** — shared execution history, logs and host/workload status.
 
 An external integration may serve more than one capability. Restic currently provides backup execution, native retention and repository checking; repository browsing, historical versions and restore remain separate follow-up work.
@@ -83,7 +85,37 @@ server:
 Use the same flags with `service install` to persist them in the installed
 Windows service command line. With the example above, publish the application
 through a reverse proxy at `https://mydomain.com/runpilot/`, forwarding that
-prefix unchanged to RunPilot. The UI and API both use the configured prefix.
+prefix unchanged to RunPilot. The UI, REST API, and Terminal WebSocket all use
+this one RunPilot listener and configured prefix. No terminal-specific port or
+proxy target is required.
+
+The Terminal WebSocket endpoint is `api/v1/terminal/connect`. It is therefore
+`/api/v1/terminal/connect` with the root base path and
+`/runpilot/api/v1/terminal/connect` when `basePath: /runpilot` is configured.
+The browser builds its `ws:`/`wss:` URL from the GUI page's base URI, so the
+public host, port, TLS scheme, and prefix are preserved when TLS terminates at
+a reverse proxy.
+
+Configure a WebSocket-aware proxy to forward `/runpilot/*` (including Upgrade
+requests) to the same RunPilot upstream port, preserving both the `/runpilot`
+prefix and original `Host` header. Do not strip that prefix in the proxy when
+RunPilot is configured with `basePath: /runpilot`.
+
+## Interactive Terminal
+
+The Terminal page starts an interactive shell as the RunPilot service identity.
+It uses a real Linux PTY or Windows ConPTY, with embedded xterm.js assets; no
+Node.js runtime or public CDN is required after build. Each browser tab has one
+short-lived session: closing the tab, browser connection, or RunPilot shuts
+down its shell and process tree. Terminal bytes and commands are never saved by
+RunPilot.
+
+Terminal access is equivalent to arbitrary command execution as the account
+running RunPilot (for example `root`, `SYSTEM`, Administrator, or a dedicated
+service account). It is protected by the same API token boundary as process and
+job management. The browser first obtains a short-lived, single-use connection
+ticket through the authenticated REST API; the permanent token is never placed
+in the WebSocket URL.
 
 ## Windows build
 
@@ -185,6 +217,7 @@ runpilot.exe
 │   ├── One-shot job runner
 │   └── Typed external integrations
 ├── Future storage providers / software providers
+├── Runtime PTY/ConPTY terminal sessions (not persisted)
 ├── YAML config + JSONL run history + per-run logs
 └── Embedded HTTP API + web UI
 ```

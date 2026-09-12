@@ -6,13 +6,14 @@
   <title>RunPilot</title>
   <link rel="icon" type="image/png" href="runpilot-logo.png">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="vendor/xterm/xterm.css">
 </head>
 <body>
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">
         <img class="brand-mark" src="runpilot-logo.png" alt="RunPilot logo">
-        <div><strong>RunPilot</strong><span>Windows automation</span></div>
+        <div><strong>RunPilot</strong><span>Server automation</span></div>
       </div>
       <nav>
         <button class="nav active" data-page="overview">Overview</button>
@@ -21,6 +22,7 @@
         <button class="nav" data-page="backups">Backups</button>
         <button class="nav" data-page="storage">Storage</button>
         <button class="nav" data-page="software">Software</button>
+        <button id="terminalNav" class="nav hidden" data-page="terminal">Terminal</button>
         <button class="nav" data-page="history">History</button>
       </nav>
       <div class="side-foot">
@@ -57,7 +59,7 @@
         <div id="processGrid" class="row-list"></div>
         <div id="processEmpty" class="empty hidden">
           <h2>No managed processes</h2>
-          <p>Add an executable, PowerShell script, batch file or Python program.</p>
+          <p>Add an executable or script for a supported Windows or Linux interpreter.</p>
         </div>
       </section>
 
@@ -72,7 +74,7 @@
       <section id="backupsPage" class="page">
         <div class="notice">
           <strong>Backup providers: Robocopy, Restic and rdiff-backup</strong>
-          <span>Copy and mirror jobs use the built-in <code>robocopy.exe</code>. Exit codes 0–7 are treated as successful/non-fatal.</span>
+          <span>Robocopy is available on Windows; Restic and rdiff-backup work on either platform when installed. Robocopy exit codes 0–7 are successful/non-fatal.</span>
         </div>
         <div id="backupGrid" class="row-list"></div>
         <div id="backupEmpty" class="empty hidden">
@@ -116,6 +118,15 @@
         <div id="softwareBucketBar" class="software-bucket-bar hidden"><input id="softwareBucketName" placeholder="Bucket name"><input id="softwareBucketSource" placeholder="Optional HTTPS bucket URL"><button id="softwareAddBucket" class="button primary small">Add bucket</button></div>
         <div id="softwarePackages" class="row-list"></div>
       </section>
+
+      <section id="terminalPage" class="page">
+        <div class="terminal-toolbar">
+          <select id="terminalShell" aria-label="Terminal shell"></select>
+          <button id="newTerminal" class="button primary" type="button">+ New terminal</button>
+        </div>
+        <div id="terminalUnavailable" class="empty hidden"><h2>Terminal unavailable</h2><p id="terminalUnavailableMessage">Terminal is not supported on this host.</p></div>
+        <div id="terminalWorkspace" class="terminal-workspace hidden"><div id="terminalTabs" class="terminal-tabs"></div><div id="terminalPanes" class="terminal-panes"></div></div>
+      </section>
     </main>
   </div>
 
@@ -148,9 +159,11 @@
             <option value="powershell">PowerShell</option>
             <option value="cmd">CMD / batch</option>
             <option value="python">Python</option>
+            <option value="sh">POSIX shell (sh)</option>
+            <option value="bash">Bash</option>
           </select>
         </label>
-        <label class="span-2">Executable or script path<input id="processPath" placeholder="C:\Tools\myapp.exe" required></label>
+        <label class="span-2">Executable or script path<input id="processPath" placeholder="/opt/runpilot/myapp or C:\Tools\myapp.exe" required></label>
         <label class="span-2">Arguments<input id="processArgs" placeholder='--port 8080 --mode service'></label>
         <label class="span-2">Working directory<input id="processCwd" placeholder="Optional"></label>
         <div class="environment-editor span-2" data-command-prefix="process">
@@ -194,9 +207,11 @@
             <option value="powershell">PowerShell</option>
             <option value="cmd">CMD / batch</option>
             <option value="python">Python</option>
+            <option value="sh">POSIX shell (sh)</option>
+            <option value="bash">Bash</option>
           </select>
         </label>
-        <label class="span-2">Executable or script path<input id="jobPath" required></label>
+        <label class="span-2">Executable or script path<input id="jobPath" placeholder="/opt/runpilot/task.sh or C:\Tools\task.ps1" required></label>
         <label class="span-2">Arguments<input id="jobArgs"></label>
         <label class="span-2">Working directory<input id="jobCwd" placeholder="Optional"></label>
         <div class="environment-editor span-2" data-command-prefix="job">
@@ -243,8 +258,8 @@
             <option value="mirror">Mirror (deletes destination extras)</option>
           </select>
         </label>
-        <label class="span-2">Source folder<input id="backupSource" placeholder="D:\Data"></label>
-        <label class="span-2">Destination folder<input id="backupDestination" placeholder="F:\Backup\Data"></label>
+        <label class="span-2">Source folder<input id="backupSource" placeholder="/srv/data or D:\Data"></label>
+        <label class="span-2">Destination folder<input id="backupDestination" placeholder="/mnt/backup/data or F:\Backup\Data"></label>
         <label>Schedule
           <select id="backupScheduleType">
             <option value="daily">Daily</option>
@@ -258,21 +273,21 @@
         <label>Retries<input id="backupRetries" type="number" min="0" value="2"></label>
         <label class="check"><input id="backupEnabled" type="checkbox" checked> Schedule enabled</label>
         <div id="resticFields" class="span-2 provider-fields hidden">
-          <label>Repository<input id="resticRepository" placeholder="F:\Restic"></label>
-          <label>Source paths (one per line)<textarea id="resticSources" rows="3" placeholder="D:\Documents"></textarea></label>
+          <label>Repository<input id="resticRepository" placeholder="/mnt/restic or F:\Restic"></label>
+          <label>Source paths (one per line)<textarea id="resticSources" rows="3" placeholder="/home/user/Documents or D:\Documents"></textarea></label>
           <label>Excludes (one per line)<textarea id="resticExcludes" rows="2"></textarea></label>
           <label>Tags (one per line)<textarea id="resticTags" rows="2"></textarea></label>
           <label class="check"><input id="resticVss" type="checkbox"> Use Windows filesystem snapshot (VSS)</label>
           <label class="check"><input id="resticCheck" type="checkbox"> Check repository after backup</label>
-          <label class="span-2">Password file path (optional)<input id="resticPasswordFile" placeholder="C:\Secure\restic-password.txt"></label>
+          <label class="span-2">Password file path (optional)<input id="resticPasswordFile" placeholder="/etc/runpilot/restic-password or C:\Secure\restic-password.txt"></label>
           <label class="check span-2"><input id="resticRetentionEnabled" type="checkbox"> Run Restic forget after backup</label>
           <div id="resticRetentionFields" class="retention-fields span-2 hidden"><label>Keep last<input id="resticKeepLast" type="number" min="0"></label><label>Keep daily<input id="resticKeepDaily" type="number" min="0"></label><label>Keep weekly<input id="resticKeepWeekly" type="number" min="0"></label><label>Keep monthly<input id="resticKeepMonthly" type="number" min="0"></label><label>Keep yearly<input id="resticKeepYearly" type="number" min="0"></label><label>Keep within<input id="resticKeepWithin" placeholder="1y"></label><label class="check span-2"><input id="resticPrune" type="checkbox"> Prune repository</label></div>
-          <label class="span-2">Advanced: executable path (optional)<input id="resticExecutable" placeholder="restic.exe"></label>
+          <label class="span-2">Advanced: executable path (optional)<input id="resticExecutable" placeholder="restic or C:\Tools\restic.exe"></label>
         </div>
         <div id="rdiffFields" class="span-2 provider-fields hidden">
-          <label>Source folder<input id="rdiffSource" placeholder="D:\Photos"></label><label>Destination folder<input id="rdiffDestination" placeholder="F:\Backups\Photos"></label>
+          <label>Source folder<input id="rdiffSource" placeholder="/home/user/Photos or D:\Photos"></label><label>Destination folder<input id="rdiffDestination" placeholder="/mnt/backup/photos or F:\Backups\Photos"></label>
           <p class="muted span-2">Destination remains a directly browsable current mirror. Do not edit <code>rdiff-backup-data</code>.</p>
-          <label class="span-2">Excludes (one per line)<textarea id="rdiffExcludes" rows="2"></textarea></label><label class="check"><input id="rdiffRetentionEnabled" type="checkbox"> Remove old increments after backup</label><label id="rdiffRetentionWrap" class="hidden">Older than<input id="rdiffOlderThan" placeholder="3M"></label><label class="check"><input id="rdiffVerify" type="checkbox"> Verify after backup</label><label class="span-2">Advanced: executable path (optional)<input id="rdiffExecutable" placeholder="rdiff-backup.exe"></label>
+          <label class="span-2">Excludes (one per line)<textarea id="rdiffExcludes" rows="2"></textarea></label><label class="check"><input id="rdiffRetentionEnabled" type="checkbox"> Remove old increments after backup</label><label id="rdiffRetentionWrap" class="hidden">Older than<input id="rdiffOlderThan" placeholder="3M"></label><label class="check"><input id="rdiffVerify" type="checkbox"> Verify after backup</label><label class="span-2">Advanced: executable path (optional)<input id="rdiffExecutable" placeholder="rdiff-backup or C:\Tools\rdiff-backup.exe"></label>
         </div>
       </div>
       <div id="mirrorWarning" class="warning hidden">Mirror mode uses <code>/MIR</code>. Files that exist only in the destination can be deleted.</div>
@@ -296,6 +311,8 @@
   </dialog>
 
   <div id="toast" class="toast hidden"></div>
+  <script src="vendor/xterm/xterm.js"></script>
+  <script src="vendor/xterm/addon-fit.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
