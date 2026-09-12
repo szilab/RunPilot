@@ -60,7 +60,14 @@ func TestSoftwareProviderRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(s.Snapshot().Software.Providers) != 1 || s.Snapshot().Software.Providers[0].ID != "scoop" {
+	providers := s.Snapshot().Software.Providers
+	if runtime.GOOS != "windows" {
+		if len(providers) != 0 {
+			t.Fatalf("default software = %#v, want no Linux providers", s.Snapshot().Software)
+		}
+		return
+	}
+	if len(providers) != 1 || providers[0].ID != "scoop" {
 		t.Fatalf("default software = %#v", s.Snapshot().Software)
 	}
 	custom := filepath.Join(dir, "runpilot-software")
@@ -76,14 +83,19 @@ func TestSoftwareProviderRoundTrip(t *testing.T) {
 	}
 }
 
-func TestStorageDefinitionsRemainOptionalAfterNormalization(t *testing.T) {
+func TestDefaultStorageIsUnrestrictedLocalFilesystem(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := len(s.Snapshot().Storage); got != 0 {
-		t.Fatalf("default storage providers = %d, want 0", got)
+	providers := s.Snapshot().Storage
+	if len(providers) != 1 {
+		t.Fatalf("default storage providers = %#v, want one", providers)
+	}
+	provider := providers[0]
+	if provider.ID != "storage-local" || provider.Name != "Local filesystem" || provider.Type != model.StorageLocal || provider.Local == nil || provider.Local.Scope != model.LocalStorageScopeHost || provider.Local.Root != "" {
+		t.Fatalf("default storage provider = %#v", provider)
 	}
 	if err := s.Update(func(c *model.Config) error {
 		c.Storage = []model.StorageDefinition{{ID: "one", Name: "One", Type: model.StorageLocal, Local: &model.LocalStorageSpec{Scope: model.LocalStorageScopeHost}}}
@@ -103,5 +115,21 @@ func TestStorageDefinitionsRemainOptionalAfterNormalization(t *testing.T) {
 	}
 	if got := len(reopened.Snapshot().Storage); got != 0 {
 		t.Fatalf("removed storage definition was recreated: %#v", reopened.Snapshot().Storage)
+	}
+}
+
+func TestLegacyConfigWithoutStorageGetsDefaultProvider(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runpilot.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\nserver:\n  token: existing-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers := s.Snapshot().Storage
+	if len(providers) != 1 || providers[0].ID != "storage-local" || providers[0].Local == nil || providers[0].Local.Scope != model.LocalStorageScopeHost {
+		t.Fatalf("migrated storage providers = %#v", providers)
 	}
 }

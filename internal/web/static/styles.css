@@ -89,6 +89,7 @@ header p { margin: 0; color: #64748b; }
 .storage-entry.openable { cursor: pointer; }
 .storage-entry.openable:hover { background: #f8fafc; }
 .storage-toolbar > div:first-child { display: flex; align-items: baseline; gap: 14px; }
+.storage-provider-label { color: #111827; font-size: 15px; font-weight: 600; }
 #storageProvider { width: auto; min-width: 190px; padding: 6px 8px; font-size: 12px; }
 #storageBreadcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: -4px 0 12px; max-width: 100%; white-space: normal; }
 .breadcrumb-link { border: 0; padding: 2px 4px; border-radius: 4px; color: #1F437F; background: transparent; font: inherit; cursor: pointer; }
@@ -243,6 +244,7 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 :root[data-theme="dark"] .storage-list-head { background: #1d2a3e; border-color: #29374c; color: #aebdd0; }
 :root[data-theme="dark"] .storage-cell { color: #cbd5e1; }
 :root[data-theme="dark"] .breadcrumb-link, :root[data-theme="dark"] .row-icon { color: #9ec5ff; }
+:root[data-theme="dark"] .storage-provider-label { color: #f8fafc; }
 :root[data-theme="dark"] .breadcrumb-link:hover, :root[data-theme="dark"] .row-icon:hover:not(:disabled) { background: #1d2a3e; }
 :root[data-theme="dark"] .editor-shell { border-color: #3a4b64; }
 :root[data-theme="dark"] .dialog h2 { color: #f8fafc; }

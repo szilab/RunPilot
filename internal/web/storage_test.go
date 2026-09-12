@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/szilab/RunPilot/internal/core"
@@ -75,8 +76,15 @@ func TestSoftwareProviderConfigurationRequiresAuth(t *testing.T) {
 	authorized.Header.Set("Authorization", "Bearer "+ctrl.Snapshot().Server.Token)
 	r = httptest.NewRecorder()
 	s.Handler().ServeHTTP(r, authorized)
-	if r.Code != http.StatusOK {
+	wantStatus := http.StatusOK
+	if runtime.GOOS != "windows" {
+		wantStatus = http.StatusNotFound
+	}
+	if r.Code != wantStatus {
 		t.Fatalf("configuration status = %d: %s", r.Code, r.Body.String())
+	}
+	if runtime.GOOS != "windows" {
+		return
 	}
 	var provider struct{ ID string }
 	if err := json.NewDecoder(r.Body).Decode(&provider); err != nil {

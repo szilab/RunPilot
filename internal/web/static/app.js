@@ -18,7 +18,7 @@ const pageMeta = {
   processes: ["Processes", "Long-running applications supervised by the RunPilot service.", "Add process"],
   jobs: ["Scheduler", "One-shot commands launched on an interval, daily time or cron expression.", "Add job"],
   backups: ["Backups", "Scheduled filesystem backups powered by Windows built-in tools.", "Add backup"],
-  storage: ["Storage", "Helyi fájlrendszer kezelése.", "Tároló hozzáadása"],
+  storage: ["Storage", "", "Tároló hozzáadása"],
   software: ["Software", "Install and maintain portable applications in a RunPilot-managed Scoop root.", null],
   history: ["History", "Recent process exits and job executions with exit code and captured output.", null],
 };
@@ -405,12 +405,6 @@ function renderHistory(runs) {
   $("historyEmpty").classList.toggle("hidden", runs.length > 0);
 }
 
-function renderStorage() {
-  const local = storage.find(d => d.id === "storage-local") || storage[0];
-  $("storageEmpty").classList.toggle("hidden", !!local);
-  if (local && !storageLocation) browseStorage(local.id);
-}
-async function browseStorage(id, p = "") { try { const listing = await api(`api/v1/storage/${id}/entries?` + new URLSearchParams({path:p})); storageLocation=id; storagePath=listing.path; $("storageBrowserTitle").textContent=storage.find(x=>x.id===id)?.name || "Helyi fájlrendszer"; $("storageBreadcrumbs").textContent=listing.path || "Ez a gép"; $("storageUp").disabled=listing.parentPath == null; $("storageUp").onclick=()=>browseStorage(id,listing.parentPath || ""); const root=$("storageEntries"); root.replaceChildren(); listing.entries.forEach(e => { const row=document.createElement("article"); row.className="row storage-entry"; row.innerHTML=`<div class="row-head"><div><h3>${escapeHtml(e.name)}</h3><div class="meta">${escapeHtml(e.type)}</div></div></div><div class="row-details"><div class="kv"><span>Size</span><span>${fmtBytes(e.size)}</span></div><div class="kv"><span>Modified</span><span>${fmtDate(e.modifiedAt)}</span></div></div><div class="row-actions"></div>`; if(e.type!=="file") { row.classList.add("openable"); row.addEventListener("click",()=>browseStorage(id,e.path)); } const actions=row.querySelector(".row-actions"); const menu=document.createElement("select"); menu.className="storage-menu"; menu.innerHTML=`<option value="">További műveletek…</option>${e.type==="file"?'<option value="download">Letöltés</option>':''}${e.type!=="filesystem-root"?'<option value="copy">Másolás</option><option value="rename">Átnevezés</option><option value="move">Áthelyezés</option><option value="delete">Törlés</option>':''}`; menu.addEventListener("click",event=>event.stopPropagation()); menu.addEventListener("change",()=>{const action=menu.value;menu.value="";if(action==="download")downloadStorage(id,e.path);if(action==="copy")copyStorage(id,e.path);if(action==="rename")renameStorage(id,e.path);if(action==="move")moveStorage(id,e.path);if(action==="delete")deleteStorageObject(id,e.path,e.type)}); actions.append(menu); root.append(row) }); } catch(e) { toast(e.message); } }
 async function downloadStorage(id,p){try{const t=await api(`api/v1/storage/${id}/download-ticket`,{method:"POST",body:JSON.stringify({path:p})});window.location.assign(t.url)}catch(e){toast(e.message)}}
 async function deleteStorageObject(id,p,type){if(!confirm(`Delete ${type === "directory" ? "folder and all contents" : "file"}? This cannot be undone through RunPilot.`))return;try{await api(`api/v1/storage/${id}/delete`,{method:"POST",body:JSON.stringify({path:p})});browseStorage(id,storagePath)}catch(e){toast(e.message)}}
 async function renameStorage(id,p){const n=prompt("New name:");if(!n)return;try{await api(`api/v1/storage/${id}/rename`,{method:"POST",body:JSON.stringify({path:p,newName:n})});browseStorage(id,storagePath)}catch(e){toast(e.message)}}
@@ -437,9 +431,13 @@ async function browseStorage(id, p = "") {
     const provider=storage.find(x=>x.id===id); if (!provider || provider.state?.status !== "ready") { toast(provider?.state?.reason || "Storage provider is unavailable"); return; }
     const listing=await api(`api/v1/storage/${id}/entries?`+new URLSearchParams({path:p,showHidden:storageShowHidden})); storageLocation=id; storagePath=listing.path;
     const toolbarCaps=provider.capabilities||{}; $("storageUpload").parentElement.classList.toggle("hidden",!toolbarCaps.upload); $("storageCreate").classList.toggle("hidden",!toolbarCaps.createDirectory);
-    $("storageProvider").value=id; $("storageBrowserTitle").textContent=storage.find(x=>x.id===id)?.name || "Tároló"; renderBreadcrumbs(id,listing.path);
-    $("storageUp").disabled=listing.parentPath==null; $("storageUp").onclick=()=>browseStorage(id,listing.parentPath||"");
+    $("storageProvider").value=id; renderBreadcrumbs(id,listing.path);
     const root=$("storageEntries");root.replaceChildren(); const header=document.createElement("div");header.className="storage-list-head";header.innerHTML="<span>Name</span><span>Size</span><span>Modified</span><span>Actions</span>";root.append(header);
+    if (listing.parentPath != null) {
+      const parent=document.createElement("article");parent.className="row storage-entry storage-row openable";
+      const head=document.createElement("div");head.className="storage-name";const icon=document.createElement("span");icon.className="entry-icon folder";icon.setAttribute("aria-hidden","true");const title=document.createElement("h3");title.textContent="..";const meta=document.createElement("div");meta.className="meta";meta.textContent="parent folder";head.append(icon,title,meta);
+      const size=document.createElement("div");size.className="storage-cell";size.textContent="—";const modified=document.createElement("div");modified.className="storage-cell";modified.textContent="—";const actions=document.createElement("div");actions.className="row-actions";parent.append(head,size,modified,actions);parent.addEventListener("click",()=>browseStorage(id,listing.parentPath));root.append(parent);
+    }
     listing.entries.forEach(entry=>{
       const row=document.createElement("article");row.className="row storage-entry storage-row";
       const head=document.createElement("div");head.className="storage-name";const icon=document.createElement("span");icon.className=`entry-icon ${entryIcon(entry)}`;icon.setAttribute("aria-hidden","true");const title=document.createElement("h3");title.textContent=entry.name;head.append(icon);
@@ -516,7 +514,16 @@ function renderSoftware() {
   const card = $("softwareProviderCard"), packages = $("softwarePackages"), picker = $("softwareProviderSelect");
   picker.replaceChildren();
   softwareProviders.forEach(item => { const option = document.createElement("option"); option.value = item.id; option.textContent = `${item.name} (${item.type})`; picker.append(option); });
-  if (!provider) { card.innerHTML = `<div class="empty compact"><h2>Software provider unavailable</h2><p>RunPilot has no configured Software provider.</p></div>`; return; }
+  if (!provider) {
+    picker.parentElement.classList.add("hidden");
+    $("softwareTabs").classList.add("hidden");
+    $("softwareSearchBar").classList.add("hidden");
+    $("softwareBucketBar").classList.add("hidden");
+    card.innerHTML = `<div class="empty compact"><h2>No software providers available</h2><p>No supported software providers are configured for this operating system.</p></div>`;
+    packages.replaceChildren();
+    return;
+  }
+  picker.parentElement.classList.remove("hidden");
   picker.value = provider.id;
   const state = provider.state || "unavailable";
   const message = provider.message || "Preparing the managed Scoop runtime.";
@@ -589,10 +596,7 @@ function setPage(page) {
   $("pageSubtitle").textContent = sub;
   $("primaryAction").textContent = action || "";
   $("primaryAction").classList.toggle("hidden", !action);
-	if (page === "software" && !softwareProviders.length) {
-		$("softwareProviderCard").innerHTML = `<div class="empty compact"><h2>Preparing RunPilot Software Management…</h2><p>Initializing the managed Scoop runtime for this RunPilot data directory.</p></div>`;
-		$("softwarePackages").innerHTML = `<div class="software-loading" role="status"><span class="spinner" aria-hidden="true"></span><strong>Loading applications…</strong><span>Querying the selected provider.</span></div>`;
-	}
+	if (page === "software") renderSoftware();
   refresh();
 }
 

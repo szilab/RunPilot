@@ -128,7 +128,16 @@ func (c *Controller) StorageProvider(id string) (storage.Provider, error) {
 }
 
 func (c *Controller) SoftwareDefinitions() []model.SoftwareProviderDefinition {
-	return c.config.Snapshot().Software.Providers
+	definitions := c.config.Snapshot().Software.Providers
+	capabilities := platform.CurrentCapabilities()
+	available := make([]model.SoftwareProviderDefinition, 0, len(definitions))
+	for _, definition := range definitions {
+		if definition.Type == model.SoftwareProviderScoop && !capabilities.Scoop {
+			continue
+		}
+		available = append(available, definition)
+	}
+	return available
 }
 
 func (c *Controller) SoftwareProvider(id string) (software.Provider, error) {

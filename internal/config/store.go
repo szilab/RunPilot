@@ -117,7 +117,7 @@ func (s *Store) saveLocked() error {
 }
 
 func defaultConfig() model.Config {
-	return model.Config{
+	config := model.Config{
 		Version: 1,
 		Server: model.ServerConfig{
 			Bind:     "127.0.0.1:9070",
@@ -127,14 +127,21 @@ func defaultConfig() model.Config {
 		},
 		Processes: []model.ProcessDefinition{},
 		Jobs:      []model.JobDefinition{},
-		// Storage has no global switch and no implicit local provider. Users add
-		// the locations RunPilot may expose from the Storage page.
-		Storage: []model.StorageDefinition{},
-		Software: model.SoftwareConfig{Providers: []model.SoftwareProviderDefinition{{
+		// The local provider exposes every filesystem root accessible to the
+		// RunPilot service identity. Users may replace it with a root-scoped
+		// provider or remove it entirely.
+		Storage: []model.StorageDefinition{{
+			ID: "storage-local", Name: "Local filesystem", Type: model.StorageLocal,
+			Local: &model.LocalStorageSpec{Scope: model.LocalStorageScopeHost},
+		}},
+	}
+	if runtime.GOOS == "windows" {
+		config.Software.Providers = []model.SoftwareProviderDefinition{{
 			ID: "scoop", Name: "RunPilot Scoop", Type: model.SoftwareProviderScoop,
 			Scoop: &model.ScoopProviderSpec{},
-		}}},
+		}}
 	}
+	return config
 }
 
 func normalize(c *model.Config) {
@@ -150,23 +157,29 @@ func normalize(c *model.Config) {
 	if c.Server.Token == "" {
 		c.Server.Token = randomToken()
 	}
-	// Provider definitions are optional. In particular, do not recreate a
-	// removed Local provider during configuration normalization.
+	// Add the default host-scoped provider to legacy configurations that did
+	// not have a storage setting. An explicit empty list remains respected, so
+	// removing every provider is persistent.
 	if c.Storage == nil {
-		c.Storage = []model.StorageDefinition{}
+		c.Storage = []model.StorageDefinition{{
+			ID: "storage-local", Name: "Local filesystem", Type: model.StorageLocal,
+			Local: &model.LocalStorageSpec{Scope: model.LocalStorageScopeHost},
+		}}
 	}
-	hasScoop := false
-	for _, provider := range c.Software.Providers {
-		if provider.ID == "scoop" {
-			hasScoop = true
-			break
+	if runtime.GOOS == "windows" {
+		hasScoop := false
+		for _, provider := range c.Software.Providers {
+			if provider.ID == "scoop" {
+				hasScoop = true
+				break
+			}
 		}
-	}
-	if !hasScoop {
-		c.Software.Providers = append(c.Software.Providers, model.SoftwareProviderDefinition{
-			ID: "scoop", Name: "RunPilot Scoop", Type: model.SoftwareProviderScoop,
-			Scoop: &model.ScoopProviderSpec{},
-		})
+		if !hasScoop {
+			c.Software.Providers = append(c.Software.Providers, model.SoftwareProviderDefinition{
+				ID: "scoop", Name: "RunPilot Scoop", Type: model.SoftwareProviderScoop,
+				Scoop: &model.ScoopProviderSpec{},
+			})
+		}
 	}
 	for i := range c.Processes {
 		model.NormalizeProcess(&c.Processes[i])
