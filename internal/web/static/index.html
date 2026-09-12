@@ -18,13 +18,10 @@
       <nav>
         <button class="nav active" data-page="overview">Overview</button>
         <button id="dockerNav" class="nav hidden" data-page="docker">Docker</button>
-        <button class="nav" data-page="processes">Processes</button>
-        <button class="nav" data-page="jobs">Scheduler</button>
-        <button class="nav" data-page="backups">Backups</button>
         <button class="nav" data-page="storage">Storage</button>
+        <button class="nav" data-page="tasks">Tasks</button>
         <button class="nav" data-page="software">Software</button>
         <button id="terminalNav" class="nav hidden" data-page="terminal">Terminal</button>
-        <button class="nav" data-page="history">History</button>
       </nav>
       <div class="side-foot">
         <span id="connectionDot" class="dot"></span>
@@ -42,7 +39,7 @@
           <button id="themeToggle" class="button secondary theme-toggle" type="button" aria-pressed="false" title="Switch to dark theme">☾ <span>Dark theme</span></button>
           <button id="dockerNetworkAction" class="button secondary hidden" type="button">Create network</button>
           <button id="dockerVolumeAction" class="button secondary hidden" type="button">Create volume</button>
-          <button id="primaryAction" class="button primary">Add process</button>
+          <button id="primaryAction" class="button primary hidden">Add task</button>
         </div>
       </header>
 
@@ -58,54 +55,19 @@
         </section>
       </section>
 
-      <section id="processesPage" class="page">
-        <div id="processGrid" class="row-list"></div>
-        <div id="processEmpty" class="empty hidden">
-          <h2>No managed processes</h2>
-          <p>Add an executable or script for a supported Windows or Linux interpreter.</p>
-        </div>
-      </section>
-
-      <section id="jobsPage" class="page">
-        <div id="jobGrid" class="row-list"></div>
-        <div id="jobEmpty" class="empty hidden">
-          <h2>No scheduled command jobs</h2>
-          <p>Create interval, daily or cron-based command jobs.</p>
-        </div>
-      </section>
-
-      <section id="backupsPage" class="page">
-        <div class="notice">
-          <strong>Backup providers: Robocopy, Restic and rdiff-backup</strong>
-          <span>Robocopy is available on Windows; Restic and rdiff-backup work on either platform when installed. Robocopy exit codes 0–7 are successful/non-fatal.</span>
-        </div>
-        <div id="backupGrid" class="row-list"></div>
-        <div id="backupEmpty" class="empty hidden">
-          <h2>No backup jobs</h2>
-          <p>Create scheduled copy, repository snapshot, or increment-based backups.</p>
-        </div>
-      </section>
-
-      <section id="historyPage" class="page">
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Target</th><th>Type</th><th>Started</th><th>Result</th><th>Exit</th><th></th></tr></thead>
-            <tbody id="historyBody"></tbody>
-          </table>
-        </div>
-        <div id="historyEmpty" class="empty hidden">
-          <h2>No runs yet</h2>
-          <p>Process exits and scheduled/manual job executions will appear here.</p>
-        </div>
+      <section id="tasksPage" class="page">
+        <div class="section-head"><div class="task-filters" role="group" aria-label="Task type"><button class="button secondary small active" data-task-filter="all">All</button><button class="button secondary small" data-task-filter="continuous">Continuous</button><button class="button secondary small" data-task-filter="scheduled">Scheduled</button><button class="button secondary small" data-task-filter="backup">Backup</button></div></div>
+        <div id="taskGrid" class="row-list"></div>
+        <div id="taskEmpty" class="empty hidden"><h2>No tasks yet</h2><p>Add a continuous command, scheduled command, or backup.</p></div>
       </section>
 
       <section id="storagePage" class="page">
         <div id="storageBrowser">
           <div id="storageStateNotice" class="notice hidden"></div>
-          <div class="section-head storage-toolbar"><div><label for="storageProvider" class="storage-provider-label">Provider</label><select id="storageProvider" aria-label="Storage provider"></select></div><div class="row-actions"><button id="storageEdit" class="button secondary small">Edit provider</button><button id="storageRemove" class="button danger small">Remove provider</button><label class="check compact-check"><input id="storageShowHidden" type="checkbox"> Rejtett elemek</label><label class="button secondary small">Upload<input id="storageUpload" type="file" multiple hidden></label><button id="storageCreate" class="button secondary small">New folder</button></div></div>
+          <div class="section-head storage-toolbar"><div><label for="storageProvider" class="storage-provider-label">Location</label><select id="storageProvider" aria-label="Storage location"></select></div><div class="row-actions"><label class="check compact-check"><input id="storageShowHidden" type="checkbox"> Hidden files</label><label class="button secondary small">Upload<input id="storageUpload" type="file" multiple hidden></label><button id="storageNewFile" class="button secondary small">New file</button><button id="storageCreate" class="button secondary small">New folder</button></div></div>
           <div id="storageBreadcrumbs" class="meta"></div><div id="storageEntries" class="row-list"></div>
         </div>
-        <div id="storageEmpty" class="empty hidden"><h2>No Storage providers configured</h2><p>Add a Local filesystem provider to expose a location through RunPilot.</p><button id="storageEmptyAdd" class="button primary" type="button">Add Storage provider</button></div>
+        <div id="storageEmpty" class="empty hidden"><h2>Storage unavailable</h2><p>RunPilot could not initialize the local filesystem location.</p></div>
       </section>
 
       <section id="softwarePage" class="page">
@@ -157,7 +119,7 @@
   <dialog id="processDialog" class="dialog">
     <form method="dialog" id="processForm">
       <div class="dialog-head">
-        <div><h2 id="processDialogTitle">Add process</h2><p>Run continuously and supervise its lifecycle.</p></div>
+        <div><h2 id="processDialogTitle">Add continuous task</h2><p>Run continuously and supervise its lifecycle.</p></div>
         <button class="icon-btn" type="button" data-dismiss="processDialog" aria-label="Close">×</button>
       </div>
       <input type="hidden" id="processId">
@@ -197,7 +159,7 @@
       </div>
       <div class="dialog-actions">
         <button class="button secondary" type="button" data-dismiss="processDialog">Cancel</button>
-        <button id="saveProcessBtn" class="button primary" value="default">Save process</button>
+        <button id="saveProcessBtn" class="button primary" value="default">Save task</button>
       </div>
     </form>
   </dialog>
@@ -205,7 +167,7 @@
   <dialog id="jobDialog" class="dialog">
     <form method="dialog" id="jobForm">
       <div class="dialog-head">
-        <div><h2 id="jobDialogTitle">Add scheduled job</h2><p>Run a command once per schedule.</p></div>
+        <div><h2 id="jobDialogTitle">Add scheduled task</h2><p>Run a command once per schedule.</p></div>
         <button class="icon-btn" type="button" data-dismiss="jobDialog" aria-label="Close">×</button>
       </div>
       <input type="hidden" id="jobId">
@@ -248,7 +210,7 @@
       </div>
       <div class="dialog-actions">
         <button class="button secondary" type="button" data-dismiss="jobDialog">Cancel</button>
-        <button class="button primary" value="default">Save job</button>
+        <button class="button primary" value="default">Save task</button>
       </div>
     </form>
   </dialog>
@@ -256,7 +218,7 @@
   <dialog id="backupDialog" class="dialog">
     <form method="dialog" id="backupForm">
       <div class="dialog-head">
-        <div><h2 id="backupDialogTitle">Add backup</h2><p>Schedule a backup using the selected provider.</p></div>
+        <div><h2 id="backupDialogTitle">Add backup task</h2><p>Schedule a backup using the selected provider.</p></div>
         <button class="icon-btn" type="button" data-dismiss="backupDialog" aria-label="Close">×</button>
       </div>
       <input type="hidden" id="backupId">
@@ -309,7 +271,7 @@
     </form>
   </dialog>
 
-  <dialog id="storageDialog" class="dialog small"><form method="dialog" id="storageForm"><div class="dialog-head"><div><h2 id="storageDialogTitle">Tároló hozzáadása</h2><p>Choose a folder restriction or expose all filesystem roots accessible to the RunPilot service.</p></div><button class="icon-btn" type="button" data-dismiss="storageDialog">×</button></div><input id="storageId" type="hidden"><label>Név<input id="storageName" required></label><label>Típus<select id="storageType"><option value="local">Helyi fájlrendszer</option></select></label><label>Hozzáférés<select id="storageScope"><option value="root">Korlátozás mappára</option><option value="host">Teljes gép</option></select></label><label id="storageRootWrap">Gyökérmappa<input id="storageRoot" placeholder="/mnt/data or D:\Data"></label><div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="storageDialog">Mégse</button><button class="button primary">Mentés</button></div></form></dialog>
+  <dialog id="taskDialog" class="dialog small"><div class="dialog-head"><div><h2>Add task</h2><p>What should RunPilot execute?</p></div><button class="icon-btn" type="button" data-dismiss="taskDialog" aria-label="Close">×</button></div><div class="row-list"><button class="row task-choice" type="button" data-task-kind="continuous"><strong>Continuous command</strong><span class="meta">Run continuously and supervise/restart it.</span></button><button class="row task-choice" type="button" data-task-kind="scheduled"><strong>Scheduled command</strong><span class="meta">Run a command according to a schedule.</span></button><button class="row task-choice" type="button" data-task-kind="backup"><strong>Backup</strong><span class="meta">Run a configured backup according to a schedule.</span></button></div></dialog>
   <dialog id="textEditorDialog" class="dialog log-dialog"><div class="dialog-head"><div><h2 id="textEditorTitle">Fájl szerkesztése</h2><p id="textEditorPath"></p></div><button class="icon-btn" id="closeTextEditor" type="button">×</button></div><div class="editor-shell"><pre id="textHighlight" aria-hidden="true"><code></code></pre><textarea id="textEditorContent" class="text-editor" spellcheck="false"></textarea></div><div class="dialog-actions"><button class="button secondary" id="cancelTextEditor" type="button">Mégse</button><button class="button primary" id="saveTextEditor" type="button">Mentés</button></div></dialog>
 
   <dialog id="dockerCreateDialog" class="dialog small"><form method="dialog" id="dockerCreateForm"><div class="dialog-head"><div><h2>Create Compose project</h2><p>The project directory is created under RunPilot's data directory.</p></div><button class="icon-btn" type="button" data-dismiss="dockerCreateDialog">×</button></div><label>Project name<input id="dockerProjectName" pattern="[a-z0-9][a-z0-9_-]*" required placeholder="jellyfin"></label><p id="dockerCreateError" class="form-error hidden"></p><div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="dockerCreateDialog">Cancel</button><button class="button primary">Create project</button></div></form></dialog>

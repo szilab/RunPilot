@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ type Controller struct {
 	scheduler *scheduler.Scheduler
 	software  *software.Manager
 	docker    *dockercompose.Manager
+	storage   *storage.Registry
 }
 
 func Open(dataDir string) (*Controller, error) {
@@ -52,6 +54,11 @@ func Open(dataDir string) (*Controller, error) {
 		scheduler: scheduler.New(jr),
 		software:  software.NewManager(dataDir),
 		docker:    dockercompose.NewManager(dataDir),
+	}
+	if platform.CurrentCapabilities().DockerCompose {
+		c.storage = storage.NewRegistry(c.docker)
+	} else {
+		c.storage = storage.NewRegistry(nil)
 	}
 	snap := cfg.Snapshot()
 	c.processes.Reconcile(snap.Processes)
@@ -78,56 +85,11 @@ func (c *Controller) ConfigPath() string     { return c.config.Path() }
 func (c *Controller) Snapshot() model.Config { return c.config.Snapshot() }
 func (c *Controller) TokenCreated() bool     { return c.config.TokenCreated() }
 
-func (c *Controller) StorageDefinitions() []model.StorageDefinition {
-	return c.config.Snapshot().Storage
+func (c *Controller) StorageLocations(ctx context.Context) []storage.Descriptor {
+	return c.storage.List(ctx)
 }
-func (c *Controller) UpsertStorage(d model.StorageDefinition) (model.StorageDefinition, error) {
-	if strings.TrimSpace(d.Name) == "" {
-		return d, fmt.Errorf("storage name is required")
-	}
-	if err := storage.NormalizeDefinition(&d); err != nil {
-		return d, err
-	}
-	if d.ID == "" {
-		d.ID = config.NewID("storage")
-	}
-	err := c.config.Update(func(cfg *model.Config) error {
-		for i := range cfg.Storage {
-			if cfg.Storage[i].ID == d.ID {
-				cfg.Storage[i] = d
-				return nil
-			}
-		}
-		cfg.Storage = append(cfg.Storage, d)
-		return nil
-	})
-	return d, err
-}
-func (c *Controller) DeleteStorage(id string) error {
-	return c.config.Update(func(cfg *model.Config) error {
-		out := cfg.Storage[:0]
-		found := false
-		for _, d := range cfg.Storage {
-			if d.ID == id {
-				found = true
-				continue
-			}
-			out = append(out, d)
-		}
-		if !found {
-			return fmt.Errorf("unknown storage %q", id)
-		}
-		cfg.Storage = out
-		return nil
-	})
-}
-func (c *Controller) StorageProvider(id string) (storage.Provider, error) {
-	for _, d := range c.config.Snapshot().Storage {
-		if d.ID == id {
-			return storage.ProviderFor(d, c.docker)
-		}
-	}
-	return nil, fmt.Errorf("unknown storage %q", id)
+func (c *Controller) StorageProvider(ctx context.Context, id string) (storage.Provider, error) {
+	return c.storage.Provider(ctx, id)
 }
 func (c *Controller) Docker() *dockercompose.Manager { return c.docker }
 
@@ -223,6 +185,8 @@ func (c *Controller) Overview() model.Overview {
 			})
 		}
 	}
+	overview.TaskCount = overview.ProcessCount + overview.JobCount
+	overview.RunningTasks = overview.RunningProcesses + overview.RunningJobs
 	return overview
 }
 

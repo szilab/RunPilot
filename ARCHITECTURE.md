@@ -15,6 +15,8 @@ The initial product intentionally separates four concepts:
 
 This prevents the process supervisor and scheduler from becoming one large shell-command abstraction. Interactive Terminal sessions are PTY-backed runtime sessions and are separate from non-interactive Process and Scheduler command execution.
 
+The GUI presents the first three execution concepts as **Tasks**: Continuous commands, Scheduled commands, and Backups. This is a presentation/domain boundary only; `processmgr` supervises persistent processes while `scheduler` triggers one-shot `jobs` executions.
+
 ## Runtime
 
 ```text
@@ -127,6 +129,6 @@ A future React/Vue/Svelte frontend can replace the static client while preservin
 
 RunPilot manages Docker only through explicit Compose-project operations plus constrained actions for containers in managed projects. No generic Docker command execution API is exposed. The Docker authority is the RunPilot process identity, with no automatic sudo, socket-permission, or docker-group changes. Project deletion is directory-only and requires Docker to confirm that no project containers remain; lifecycle `down` never implicitly removes volumes or images. Container actions accept only a validated hexadecimal ID, re-inspect and verify the Compose label and managed-project directory, and use fixed `docker container start`, `stop`, `rm`, `logs --tail`, or PTY-backed `exec -i -t <id> /bin/sh` arguments. Deletion is rejected while the container runs.
 
-Docker volumes are a sibling Docker domain, not a special Backup-engine setting. Docker discovery identifies volume ownership from labels and container references from batched container inspection. A volume is removable only when unreferenced and absent from RunPilot Storage configuration. `docker-volume` Storage definitions resolve a local-driver mountpoint through Docker inspection and delegate filesystem operations to the root-scoped Local provider; mountpoints remain internal. Dynamic running-container usage changes their Storage capability to read-only and is rechecked by backend mutation calls. Both Local and Docker Volume providers implement the internal backup-source resolution interface, preparing future Storage references without making Restic or rdiff-backup Docker-aware.
+Docker volumes are a sibling Docker domain, not a special Backup-engine setting. Storage is a runtime registry, not persisted configuration: `local` is always available and `docker-volumes` is one Docker-backed virtual location whose root lists discovered volume names. A short-lived, unprivileged helper container mounts only the requested volume at a fixed container path for browsing and download; RunPilot never accesses Docker host mountpoints. Dynamic running-container usage makes a volume read-only and is rechecked by backend mutation calls. Docker-volume backup sources intentionally report unsupported until Docker-mediated export/staging exists. A volume is removable when Docker confirms no container references it; Storage visibility does not block deletion.
 
 Networks follow the same narrow Docker boundary: discovery, Compose-label association, named bridge-network creation, and deletion only when no container references the network. RunPilot does not expose arbitrary network drivers/options or attach, detach, firewall, and routing controls.

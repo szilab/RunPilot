@@ -79,7 +79,6 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/docker/volumes", s.handleDockerVolumes)
 	api.HandleFunc("POST /api/v1/docker/volumes", s.handleDockerCreateVolume)
 	api.HandleFunc("DELETE /api/v1/docker/volumes/{name}", s.handleDockerDeleteVolume)
-	api.HandleFunc("POST /api/v1/docker/volumes/{name}/storage", s.handleDockerAddVolumeStorage)
 	api.HandleFunc("GET /api/v1/docker/networks", s.handleDockerNetworks)
 	api.HandleFunc("POST /api/v1/docker/networks", s.handleDockerCreateNetwork)
 	api.HandleFunc("DELETE /api/v1/docker/networks/{name}", s.handleDockerDeleteNetwork)
@@ -112,9 +111,6 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/runs", s.handleRuns)
 	api.HandleFunc("GET /api/v1/runs/{id}/log", s.handleRunLog)
 	api.HandleFunc("GET /api/v1/storage", s.handleListStorage)
-	api.HandleFunc("POST /api/v1/storage", s.handleCreateStorage)
-	api.HandleFunc("PUT /api/v1/storage/{id}", s.handleUpdateStorage)
-	api.HandleFunc("DELETE /api/v1/storage/{id}", s.handleDeleteStorage)
 	api.HandleFunc("GET /api/v1/storage/{id}/entries", s.handleStorageEntries)
 	api.HandleFunc("POST /api/v1/storage/{id}/download-ticket", s.handleDownloadTicket)
 	api.HandleFunc("POST /api/v1/storage/{id}/upload", s.handleUpload)
@@ -247,15 +243,6 @@ func (s *Server) handleDockerVolumes(w http.ResponseWriter, r *http.Request) {
 		dockerError(w, err)
 		return
 	}
-	providers := map[string]string{}
-	for _, d := range s.ctrl.StorageDefinitions() {
-		if d.Type == model.StorageDockerVolume && d.DockerVolume != nil {
-			providers[d.DockerVolume.Volume] = d.ID
-		}
-	}
-	for i := range volumes {
-		volumes[i].StorageProviderID = providers[volumes[i].Name]
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"runtime": runtime, "volumes": volumes})
 }
 func (s *Server) handleDockerCreateVolume(w http.ResponseWriter, r *http.Request) {
@@ -279,45 +266,11 @@ func (s *Server) handleDockerDeleteVolume(w http.ResponseWriter, r *http.Request
 	if !s.dockerSupported(w) {
 		return
 	}
-	exposed := false
-	for _, d := range s.ctrl.StorageDefinitions() {
-		if d.Type == model.StorageDockerVolume && d.DockerVolume != nil && d.DockerVolume.Volume == r.PathValue("name") {
-			exposed = true
-			break
-		}
-	}
-	if err := s.docker.DeleteVolume(r.Context(), r.PathValue("name"), exposed); err != nil {
+	if err := s.docker.DeleteVolume(r.Context(), r.PathValue("name")); err != nil {
 		dockerError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-func (s *Server) handleDockerAddVolumeStorage(w http.ResponseWriter, r *http.Request) {
-	if !s.dockerSupported(w) {
-		return
-	}
-	name := r.PathValue("name")
-	if !dockercompose.ValidVolumeName(name) {
-		dockerError(w, dockercompose.ErrInvalidName)
-		return
-	}
-	for _, d := range s.ctrl.StorageDefinitions() {
-		if d.Type == model.StorageDockerVolume && d.DockerVolume != nil && d.DockerVolume.Volume == name {
-			writeJSON(w, http.StatusOK, d)
-			return
-		}
-	}
-	// Confirm this is a real Docker volume before persisting a provider definition.
-	if _, err := s.docker.VolumeDetails(r.Context(), name); err != nil {
-		dockerError(w, err)
-		return
-	}
-	d, err := s.ctrl.UpsertStorage(model.StorageDefinition{Name: name, Type: model.StorageDockerVolume, DockerVolume: &model.DockerVolumeStorageSpec{Volume: name}})
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, d)
 }
 func (s *Server) handleDockerNetworks(w http.ResponseWriter, r *http.Request) {
 	if !s.dockerSupported(w) {
@@ -491,7 +444,7 @@ func dockerError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotImplemented, err)
 	case errors.Is(err, dockercompose.ErrFileTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, err)
-	case errors.Is(err, dockercompose.ErrVolumeInUse), errors.Is(err, dockercompose.ErrVolumeStorage), errors.Is(err, dockercompose.ErrNetworkInUse), errors.Is(err, dockercompose.ErrProtectedNetwork), errors.Is(err, dockercompose.ErrNetworkExists):
+	case errors.Is(err, dockercompose.ErrVolumeInUse), errors.Is(err, dockercompose.ErrNetworkInUse), errors.Is(err, dockercompose.ErrProtectedNetwork), errors.Is(err, dockercompose.ErrNetworkExists):
 		writeError(w, http.StatusConflict, err)
 	case errors.Is(err, dockercompose.ErrContainerRunning):
 		writeError(w, http.StatusConflict, err)
@@ -804,70 +757,25 @@ func (s *Server) handleRunLog(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListStorage(w http.ResponseWriter, r *http.Request) {
-	type view struct {
-		model.StorageDefinition
-		Capabilities any           `json:"capabilities"`
-		State        storage.State `json:"state"`
-	}
-	out := make([]view, 0)
-	for _, d := range s.ctrl.StorageDefinitions() {
-		p, e := s.ctrl.StorageProvider(d.ID)
-		v := view{StorageDefinition: d, State: storage.State{Status: "unavailable", Reason: "Provider configuration is invalid"}}
-		if e == nil {
-			v.Capabilities = p.Capabilities()
-			v.State = storage.State{Status: "ready"}
-			if stateful, ok := p.(storage.StateProvider); ok {
-				v.State = stateful.State()
-			}
-		}
-		out = append(out, v)
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, s.ctrl.StorageLocations(r.Context()))
 }
-func (s *Server) handleCreateStorage(w http.ResponseWriter, r *http.Request) {
-	var d model.StorageDefinition
-	if !decodeJSON(w, r, &d) {
-		return
+func storageCapabilities(p storage.Provider, path string) storage.Capabilities {
+	if scoped, ok := p.(storage.PathCapabilitiesProvider); ok {
+		return scoped.CapabilitiesFor(path)
 	}
-	d.ID = ""
-	out, e := s.ctrl.UpsertStorage(d)
-	if e != nil {
-		writeError(w, http.StatusBadRequest, e)
-		return
-	}
-	writeJSON(w, http.StatusCreated, out)
-}
-func (s *Server) handleUpdateStorage(w http.ResponseWriter, r *http.Request) {
-	var d model.StorageDefinition
-	if !decodeJSON(w, r, &d) {
-		return
-	}
-	d.ID = r.PathValue("id")
-	out, e := s.ctrl.UpsertStorage(d)
-	if e != nil {
-		writeError(w, http.StatusBadRequest, e)
-		return
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-func (s *Server) handleDeleteStorage(w http.ResponseWriter, r *http.Request) {
-	if e := s.ctrl.DeleteStorage(r.PathValue("id")); e != nil {
-		writeError(w, http.StatusNotFound, e)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	return p.Capabilities()
 }
 func (s *Server) handleStorageEntries(w http.ResponseWriter, r *http.Request) {
-	p, e := s.ctrl.StorageProvider(r.PathValue("id"))
+	p, e := s.ctrl.StorageProvider(r.Context(), r.PathValue("id"))
 	if e != nil {
 		writeError(w, http.StatusNotFound, e)
-		return
-	}
-	if !p.Capabilities().Browse {
-		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("browse is not supported"))
 		return
 	}
 	storagePath := r.URL.Query().Get("path")
+	if !storageCapabilities(p, storagePath).Browse {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("browse is not supported"))
+		return
+	}
 	showHidden := r.URL.Query().Get("showHidden") == "true"
 	var out any
 	if filtered, ok := p.(interface {
@@ -890,12 +798,12 @@ func (s *Server) handleDownloadTicket(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &v) {
 		return
 	}
-	p, e := s.ctrl.StorageProvider(r.PathValue("id"))
+	p, e := s.ctrl.StorageProvider(r.Context(), r.PathValue("id"))
 	if e != nil {
 		writeError(w, http.StatusNotFound, e)
 		return
 	}
-	if !p.Capabilities().Download {
+	if !storageCapabilities(p, v.Path).Download {
 		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("download is not supported"))
 		return
 	}
@@ -935,7 +843,7 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	p, e := s.ctrl.StorageProvider(t.StorageID)
+	p, e := s.ctrl.StorageProvider(r.Context(), t.StorageID)
 	if e != nil {
 		http.NotFound(w, r)
 		return
@@ -966,7 +874,7 @@ func (s *Server) mutable(w http.ResponseWriter, id, action string) (interface {
 	Move(string, string) error
 	Delete(string) error
 }, bool) {
-	p, e := s.ctrl.StorageProvider(id)
+	p, e := s.ctrl.StorageProvider(context.Background(), id)
 	if e != nil {
 		writeError(w, 404, e)
 		return nil, false
@@ -989,7 +897,7 @@ func (s *Server) mutable(w http.ResponseWriter, id, action string) (interface {
 	return m, true
 }
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
-	p, e := s.ctrl.StorageProvider(r.PathValue("id"))
+	p, e := s.ctrl.StorageProvider(r.Context(), r.PathValue("id"))
 	if e != nil {
 		writeError(w, 404, e)
 		return
@@ -1081,7 +989,7 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &v) {
 		return
 	}
-	p, err := s.ctrl.StorageProvider(r.PathValue("id"))
+	p, err := s.ctrl.StorageProvider(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeError(w, 404, err)
 		return
@@ -1101,7 +1009,7 @@ func (s *Server) textEditor(w http.ResponseWriter, id string) (interface {
 	ReadText(string) (string, error)
 	WriteText(string, string) error
 }, bool) {
-	p, err := s.ctrl.StorageProvider(id)
+	p, err := s.ctrl.StorageProvider(context.Background(), id)
 	if err != nil {
 		writeError(w, 404, err)
 		return nil, false
@@ -1117,6 +1025,15 @@ func (s *Server) textEditor(w http.ResponseWriter, id string) (interface {
 	return e, true
 }
 func (s *Server) handleReadText(w http.ResponseWriter, r *http.Request) {
+	p, err := s.ctrl.StorageProvider(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if !storageCapabilities(p, r.URL.Query().Get("path")).Browse {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("reading is not supported"))
+		return
+	}
 	e, ok := s.textEditor(w, r.PathValue("id"))
 	if !ok {
 		return
@@ -1134,6 +1051,15 @@ func (s *Server) handleWriteText(w http.ResponseWriter, r *http.Request) {
 		Content string `json:"content"`
 	}
 	if !decodeJSON(w, r, &v) {
+		return
+	}
+	p, err := s.ctrl.StorageProvider(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if !storageCapabilities(p, v.Path).TextEdit {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("editing is not supported"))
 		return
 	}
 	e, ok := s.textEditor(w, r.PathValue("id"))

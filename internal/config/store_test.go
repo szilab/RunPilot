@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/szilab/RunPilot/internal/model"
@@ -83,53 +84,48 @@ func TestSoftwareProviderRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDefaultStorageIsUnrestrictedLocalFilesystem(t *testing.T) {
+func TestStorageIsNotPersisted(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	providers := s.Snapshot().Storage
-	if len(providers) != 1 {
-		t.Fatalf("default storage providers = %#v, want one", providers)
-	}
-	provider := providers[0]
-	if provider.ID != "storage-local" || provider.Name != "Local filesystem" || provider.Type != model.StorageLocal || provider.Local == nil || provider.Local.Scope != model.LocalStorageScopeHost || provider.Local.Root != "" {
-		t.Fatalf("default storage provider = %#v", provider)
-	}
-	if err := s.Update(func(c *model.Config) error {
-		c.Storage = []model.StorageDefinition{{ID: "one", Name: "One", Type: model.StorageLocal, Local: &model.LocalStorageSpec{Scope: model.LocalStorageScopeHost}}}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Update(func(c *model.Config) error {
-		c.Storage = []model.StorageDefinition{}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := Open(dir)
+	b, err := os.ReadFile(s.Path())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := len(reopened.Snapshot().Storage); got != 0 {
-		t.Fatalf("removed storage definition was recreated: %#v", reopened.Snapshot().Storage)
+	if containsStorageSection(string(b)) {
+		t.Fatalf("fresh config persists storage: %s", b)
 	}
 }
 
-func TestLegacyConfigWithoutStorageGetsDefaultProvider(t *testing.T) {
+func TestLegacyStorageConfigurationIsRemoved(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "runpilot.yaml")
-	if err := os.WriteFile(path, []byte("version: 1\nserver:\n  token: existing-token\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("version: 1\nserver:\n  token: existing-token\nstorage:\n  - id: storage-local\n    name: Local filesystem\n    type: local\n    local:\n      scope: host\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	providers := s.Snapshot().Storage
-	if len(providers) != 1 || providers[0].ID != "storage-local" || providers[0].Local == nil || providers[0].Local.Scope != model.LocalStorageScopeHost {
-		t.Fatalf("migrated storage providers = %#v", providers)
+	if s.Snapshot().Server.Token != "existing-token" {
+		t.Fatal("configuration data changed during migration")
 	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsStorageSection(string(b)) {
+		t.Fatalf("legacy storage was written back: %s", b)
+	}
+}
+
+func containsStorageSection(value string) bool {
+	for _, line := range strings.Split(value, "\n") {
+		if line == "storage:" {
+			return true
+		}
+	}
+	return false
 }

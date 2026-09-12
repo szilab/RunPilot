@@ -3,12 +3,13 @@ let token = localStorage.getItem("runpilot.token") || "";
 let currentPage = "overview";
 let processes = [];
 let jobs = [];
+let taskFilter = "all";
 let storage = [], storageLocation = null, storagePath = "";
 let softwareProviders = [], softwareProviderID = "", softwarePackages = [], softwareUpdates = [], softwareSearchResults = [], softwareBuckets = [], softwareTab = "installed", softwareBusy = false, softwareBusyLabel = "", softwareLoading = false, softwareLoadingKey = "", softwareLoadedKey = "", softwareLoadSequence = 0, softwareRootDrafts = {};
-let storageClipboard = null, editingTextPath = null, storageShowHidden = false;
+let storageClipboard = null, editingTextPath = null, storageShowHidden = false, storagePathCapabilities = null;
 let overview = null;
 let systemInfo = null, terminalInfo = null, terminalTabs = [], activeTerminalID = "";
-let dockerRuntime = null, dockerProjects = [], dockerVolumes = [], dockerNetworks = [], dockerBusy = new Set(), dockerPendingContainerStates = new Map(), dockerEditing = null, dockerAttachTerminal = null;
+let dockerRuntime = null, dockerProjects = [], dockerVolumes = [], dockerNetworks = [], dockerBusy = new Set(), dockerPendingContainerStates = new Map(), dockerProjectErrors = new Map(), dockerEditing = null, dockerAttachTerminal = null;
 let logTimer = null;
 let logSource = null;
 let refreshTimer = null;
@@ -18,14 +19,11 @@ const themeStorageKey = "runpilot.theme";
 
 const pageMeta = {
   overview: ["Overview", "RunPilot service and resource health at a glance.", null],
-  processes: ["Processes", "Long-running applications supervised by the RunPilot service.", "Add process"],
-  jobs: ["Scheduler", "One-shot commands launched on an interval, daily time or cron expression.", "Add job"],
-  backups: ["Backups", "Scheduled filesystem backups using Windows-specific and portable providers.", "Add backup"],
-  storage: ["Storage", "", "Tároló hozzáadása"],
+  storage: ["Storage", "Browse the local filesystem and automatically discovered Docker volumes.", null],
+  tasks: ["Tasks", "Continuous commands, scheduled commands, and backups managed in one place.", "Add task"],
   software: ["Software", "Install and maintain portable applications in a RunPilot-managed Scoop root on Windows.", null],
   terminal: ["Terminal", "Interactive shells run with the same OS authority as the RunPilot service.", null],
   docker: ["Docker", "Docker Compose projects, volumes, and networks managed with the RunPilot service identity.", "Create project"],
-  history: ["History", "Recent process exits and job executions with exit code and captured output.", null],
 };
 
 async function api(path, options = {}) {
@@ -248,10 +246,9 @@ async function refresh() {
   if (refreshing || !token) return;
   refreshing = true;
   try {
-    const [p, j, h, o, st, sw, docker] = await Promise.all([
+    const [p, j, o, st, sw, docker] = await Promise.all([
       api("api/v1/processes"),
       api("api/v1/jobs"),
-      api("api/v1/runs?lines=100"),
       api("api/v1/overview"), api("api/v1/storage"),
       currentPage === "software" ? api("api/v1/software/providers") : Promise.resolve(null),
       currentPage === "docker" ? Promise.all([api("api/v1/docker/projects"), api("api/v1/docker/volumes"), api("api/v1/docker/networks")]) : Promise.resolve(null)
@@ -271,9 +268,7 @@ async function refresh() {
       }
     }
     renderOverview();
-    renderProcesses();
-    renderJobs();
-    renderHistory(h);
+    renderTasks();
     renderStorage();
     if (currentPage === "software") renderSoftware();
     if (docker) applyDockerSnapshot(docker);
@@ -297,8 +292,7 @@ function renderOverview() {
     utilizationMetric("CPU", host.cpuPercent, host.cpuAveragePercent, "blue"),
     `<div class="metric"><span>Memory</span><strong>${escapeHtml(`${fmtBytes(memoryUsed)} / ${fmtBytes(host.memoryTotalBytes)}`)}</strong>${meter(percent(memoryUsed, host.memoryTotalBytes), "violet")}</div>`,
     utilizationMetric("GPU", host.gpuPercent, host.gpuAveragePercent, "pink", host.gpuAvailable),
-    ["Processes", `${overview.runningProcesses || 0} running / ${overview.processCount || 0}`, percent(overview.runningProcesses || 0, overview.processCount || 0), "green"],
-    ["Jobs", `${overview.runningJobs || 0} running / ${overview.jobCount || 0}`, percent(overview.runningJobs || 0, overview.jobCount || 0), "amber"],
+    ["Tasks", `${overview.runningTasks || 0} running / ${overview.taskCount || 0}`, percent(overview.runningTasks || 0, overview.taskCount || 0), "green"],
   ].map(metric => Array.isArray(metric) ? `<div class="metric"><span>${metric[0]}</span><strong>${escapeHtml(metric[1])}</strong>${meter(metric[2], metric[3])}</div>` : metric).join("");
 
   const disks = host.disks || [];
@@ -318,7 +312,7 @@ function renderOverview() {
   $("issueDetails").innerHTML = issues.length ? issues.map(issue => `<article class="row issue-row">
     <div class="row-head"><div><h3>${escapeHtml(issue.name)}</h3><div class="meta">${escapeHtml(issue.source)}</div></div>${statusBadge("failure")}</div>
     <div class="row-details"><div class="kv"><span>Details</span><span>${escapeHtml(issue.message)}</span></div></div>
-  </article>`).join("") : `<div class="empty compact"><h2>All clear</h2><p>No current process, job or host errors were reported.</p></div>`;
+  </article>`).join("") : `<div class="empty compact"><h2>All clear</h2><p>No current task or host errors were reported.</p></div>`;
 }
 
 function startAutoRefresh() {
@@ -347,55 +341,45 @@ function startConnectionMonitor() {
   probeConnection();
 }
 
-function renderProcesses() {
-  const grid = $("processGrid");
-  grid.innerHTML = processes.map(v => {
-    const d = v.definition, s = v.status;
-    const running = ["running","starting","stopping"].includes(s.state);
-    return `<article class="row">
+function renderContinuousTask(v) {
+  const d = v.definition, s = v.status;
+  const running = ["running","starting","stopping"].includes(s.state);
+  return `<article class="row">
       <div class="row-head">
-        <div><h3>${escapeHtml(d.name)}</h3><div class="meta">${escapeHtml(d.command.path)}</div></div>
+        <div><h3>${escapeHtml(d.name)}</h3><div class="meta">Continuous · ${escapeHtml(d.command.path)}</div></div>
         ${statusBadge(s.state)}
       </div>
       <div class="row-details">
-        <div class="kv"><span>PID</span><span>${s.pid || "—"}</span></div>
         <div class="kv"><span>Started</span><span>${fmtDate(s.startedAt)}</span></div>
         <div class="kv"><span>Restart</span><span>${escapeHtml(d.restart?.mode || "on-failure")}</span></div>
         <div class="kv"><span>Autostart</span><span>${d.autostart ? "Yes" : "No"}</span></div>
       </div>
       <div class="row-actions">
-        ${running
-          ? `<button class="button secondary small" onclick="processAction('${d.id}','stop')">Stop</button>
-             <button class="button secondary small" onclick="processAction('${d.id}','restart')">Restart</button>`
-          : `<button class="button primary small" onclick="processAction('${d.id}','start')">Start</button>`}
-        <button class="button secondary small" onclick="openProcessLog('${d.id}','${escapeHtml(d.name)}')">Log</button>
-        <button class="button secondary small" onclick="editProcess('${d.id}')">Edit</button>
-        <button class="button danger small" onclick="deleteProcess('${d.id}')">Delete</button>
-      </div>
-    </article>`;
-  }).join("");
-  $("processEmpty").classList.toggle("hidden", processes.length > 0);
+        ${running ? `<button class="button secondary small" onclick="processAction('${d.id}','stop')">Stop</button><button class="button secondary small" onclick="processAction('${d.id}','restart')">Restart</button>` : `<button class="button primary small" onclick="processAction('${d.id}','start')">Start</button>`}
+        <button class="button secondary small" onclick="openProcessLog('${d.id}','${escapeHtml(d.name)}')">Log</button><button class="button secondary small" onclick="editProcess('${d.id}')">Edit</button><button class="button danger small" onclick="deleteProcess('${d.id}')">Delete</button>
+      </div></article>`;
 }
 
-function renderJobs() {
-  const commands = jobs.filter(v => v.definition.type === "command");
-  const backups = jobs.filter(v => v.definition.type === "backup");
-  $("jobGrid").innerHTML = commands.map(renderJobRow).join("");
-  $("backupGrid").innerHTML = backups.map(renderBackupRow).join("");
-  $("jobEmpty").classList.toggle("hidden", commands.length > 0);
-  $("backupEmpty").classList.toggle("hidden", backups.length > 0);
+function renderTasks() {
+  const items = [
+    ...processes.map(v => ({kind:"continuous", name:v.definition.name, markup:renderContinuousTask(v)})),
+    ...jobs.filter(v => v.definition.type === "command").map(v => ({kind:"scheduled", name:v.definition.name, markup:renderJobRow(v)})),
+    ...jobs.filter(v => v.definition.type === "backup").map(v => ({kind:"backup", name:v.definition.name, markup:renderBackupRow(v)})),
+  ].filter(item => taskFilter === "all" || item.kind === taskFilter).sort((a,b) => a.name.localeCompare(b.name));
+  $("taskGrid").innerHTML = items.map(item => item.markup).join("");
+  $("taskEmpty").classList.toggle("hidden", items.length > 0);
 }
 
 function renderJobRow(v) {
   const d = v.definition, s = v.status;
   const state = s.running ? "running" : (s.lastSuccess === false ? "failure" : "idle");
   return `<article class="row">
-    <div class="row-head"><div><h3>${escapeHtml(d.name)}</h3><div class="meta">${escapeHtml(d.command?.path || "")}</div></div>${statusBadge(state)}</div>
+    <div class="row-head"><div><h3>${escapeHtml(d.name)}</h3><div class="meta">Scheduled · ${escapeHtml(scheduleText(d.schedule))}</div></div>${statusBadge(state)}</div>
     <div class="row-details">
       <div class="kv"><span>Schedule</span><span>${escapeHtml(scheduleText(d.schedule))}</span></div>
       <div class="kv"><span>Enabled</span><span>${d.enabled ? "Yes" : "No"}</span></div>
       <div class="kv"><span>Last run</span><span>${fmtDate(s.lastRunAt)}</span></div>
-      <div class="kv"><span>Last exit</span><span>${s.lastExitCode ?? "—"}</span></div>
+      <div class="kv"><span>Last result</span><span>${s.lastSuccess == null ? "—" : (s.lastSuccess ? "Success" : "Failed")}</span></div>
     </div>
     <div class="row-actions">
       <button class="button primary small" onclick="runJob('${d.id}')">Run now</button>
@@ -413,7 +397,7 @@ function renderBackupRow(v) {
   const target = provider === "restic" ? cfg.repository : cfg.destination;
   const state = s.running ? "running" : (s.lastSuccess === false ? "failure" : "idle");
   return `<article class="row">
-    <div class="row-head"><div><h3>${escapeHtml(d.name)}</h3><div class="meta">${escapeHtml(provider)} · ${escapeHtml(source || "")} → ${escapeHtml(target || "")}</div></div>${statusBadge(state)}</div>
+    <div class="row-head"><div><h3>${escapeHtml(d.name)}</h3><div class="meta">Backup · ${escapeHtml(provider)} · ${escapeHtml(scheduleText(d.schedule))}</div></div>${statusBadge(state)}</div>
     <div class="row-details">
       <div class="kv"><span>Provider</span><span>${escapeHtml(provider)}</span></div>
       <div class="kv"><span>Schedule</span><span>${escapeHtml(scheduleText(d.schedule))}</span></div>
@@ -427,18 +411,6 @@ function renderBackupRow(v) {
       <button class="button danger small" onclick="deleteJob('${d.id}')">Delete</button>
     </div>
   </article>`;
-}
-
-function renderHistory(runs) {
-  $("historyBody").innerHTML = runs.map(r => `<tr>
-    <td><strong>${escapeHtml(r.targetName)}</strong></td>
-    <td>${escapeHtml(r.kind)}</td>
-    <td>${fmtDate(r.startedAt)}</td>
-    <td>${r.success == null ? "—" : statusBadge(r.success ? "success" : "failure")}</td>
-    <td>${r.exitCode ?? "—"}</td>
-    <td><button class="button secondary small" onclick="openRunLog('${r.id}','${escapeHtml(r.targetName)}')">Log</button></td>
-  </tr>`).join("");
-  $("historyEmpty").classList.toggle("hidden", runs.length > 0);
 }
 
 async function downloadStorage(id,p){try{const t=await api(`api/v1/storage/${id}/download-ticket`,{method:"POST",body:JSON.stringify({path:p})});window.location.assign(t.url)}catch(e){toast(e.message)}}
@@ -456,19 +428,22 @@ function renderStorage() {
   $("storageBrowser").classList.toggle("hidden", !provider);
   if (provider) { select.value = storage.some(d => d.id === previous) ? previous : provider.id; if (!storageLocation) browseStorage(select.value, ""); }
 }
-function openStorageDialog(provider = null) { if (provider?.type === "docker-volume") { toast("Docker Volume Storage providers are configured from Docker > Volumes."); return; } const local=provider?.local||{}; $("storageId").value=provider?.id||""; $("storageDialogTitle").textContent=provider?"Storage provider szerkesztése":"Tároló hozzáadása"; $("storageName").value=provider?.name||""; $("storageType").value=provider?.type||"local"; $("storageScope").value=local.scope||"root"; $("storageRoot").value=local.root||""; $("storageRootWrap").classList.toggle("hidden",$("storageScope").value==="host"); $("storageDialog").showModal(); }
 function isEditableText(name) { return !/\.[^./\\]+$/.test(name) || /\.(txt|log|yaml|yml|json|ini|cfg|conf|toml|xml|csv|md|bat|cmd|ps1|go|js|html|css|ts|tsx|jsx|py|rb|java|c|h|cpp|cs|rs|sh|sql)$/i.test(name); }
 function button(label, title, action, disabled = false) { const b=document.createElement("button"); b.className="row-icon"+(title==="Letöltés"?" download-icon":""); b.type="button"; b.textContent=label; b.title=title; b.disabled=disabled; b.addEventListener("click", event=>{event.stopPropagation();action()}); return b; }
 function actionSlot(control = null) { if (control) return control; const slot=document.createElement("span");slot.className="row-icon-slot";slot.setAttribute("aria-hidden","true");return slot; }
 function entryIcon(entry) { if (entry.type === "directory" || entry.type === "filesystem-root") return "folder"; const ext=(entry.name.split(".").pop()||"").toLowerCase(); if (["txt","log","yaml","yml","json","ini","cfg","conf","toml","xml","csv","md","go","js","ts","py","sh","sql"].includes(ext)||!/\.[^./\\]+$/.test(entry.name)) return "text"; if(["jpg","jpeg","png","gif","webp","svg"].includes(ext)) return "image"; if(["mp3","wav","flac","ogg"].includes(ext)) return "audio"; if(["mp4","mkv","avi","mov","webm"].includes(ext)) return "video"; return "file"; }
 function renderBreadcrumbs(id, value) { const root=$("storageBreadcrumbs"); root.replaceChildren(); const home=document.createElement("button");home.className="breadcrumb-link";home.textContent="Ez a gép";home.addEventListener("click",()=>browseStorage(id,""));root.append(home); let built=""; for(const segment of value ? value.split("/") : []) { const sep=document.createElement("span");sep.textContent="/";root.append(sep);built=built?`${built}/${segment}`:segment;const link=document.createElement("button");link.className="breadcrumb-link";link.textContent=segment;const target=built;link.addEventListener("click",()=>browseStorage(id,target));root.append(link); } }
-async function browseStorage(id, p = "") {
+function setStorageEntryLoading(path, loading) { const row=[...document.querySelectorAll(".storage-entry")].find(item=>item.dataset.storagePath===path); if (!row) return; row.setAttribute("aria-busy",String(loading)); row.querySelector(".entry-icon")?.classList.toggle("loading",loading); }
+async function browseStorage(id, p = "", loadingEntry = "") {
+  if (id === "docker-volumes" && loadingEntry) setStorageEntryLoading(loadingEntry, true);
   try {
     const provider=storage.find(x=>x.id===id); if (!provider || !["ready","read-only"].includes(provider.state?.status)) { toast(provider?.state?.reason || "Storage provider is unavailable"); return; }
-    const stateNotice=$("storageStateNotice"), readOnly=provider.state?.status === "read-only";
-    stateNotice.classList.toggle("hidden",!readOnly); stateNotice.innerHTML=readOnly?`<strong>Storage is read-only</strong><span>${escapeHtml(provider.state?.reason || "This provider is currently read-only.")}</span>`:"";
+    const stateNotice=$("storageStateNotice");
     const listing=await api(`api/v1/storage/${id}/entries?`+new URLSearchParams({path:p,showHidden:storageShowHidden})); storageLocation=id; storagePath=listing.path;
-    const toolbarCaps=provider.capabilities||{}; $("storageUpload").parentElement.classList.toggle("hidden",!toolbarCaps.upload); $("storageCreate").classList.toggle("hidden",!toolbarCaps.createDirectory);
+    const pathState=listing.state||provider.state||{}, readOnly=pathState.status === "read-only";
+    stateNotice.classList.toggle("hidden",!readOnly); stateNotice.innerHTML=readOnly?`<strong>Storage is read-only</strong><span>${escapeHtml(pathState.reason || "This provider is currently read-only.")}</span>`:"";
+    storagePathCapabilities=listing.capabilities||provider.capabilities||{};
+    const toolbarCaps=storagePathCapabilities; $("storageUpload").parentElement.classList.toggle("hidden",!toolbarCaps.upload); $("storageNewFile").classList.toggle("hidden",!toolbarCaps.textEdit); $("storageCreate").classList.toggle("hidden",!toolbarCaps.createDirectory);
     $("storageProvider").value=id; renderBreadcrumbs(id,listing.path);
     const root=$("storageEntries");root.replaceChildren(); const header=document.createElement("div");header.className="storage-list-head";header.innerHTML="<span>Name</span><span>Size</span><span>Modified</span><span>Actions</span>";root.append(header);
     if (listing.parentPath != null) {
@@ -477,12 +452,12 @@ async function browseStorage(id, p = "") {
       const size=document.createElement("div");size.className="storage-cell";size.textContent="—";const modified=document.createElement("div");modified.className="storage-cell";modified.textContent="—";const actions=document.createElement("div");actions.className="row-actions";parent.append(head,size,modified,actions);parent.addEventListener("click",()=>browseStorage(id,listing.parentPath));root.append(parent);
     }
     listing.entries.forEach(entry=>{
-      const row=document.createElement("article");row.className="row storage-entry storage-row";
+      const row=document.createElement("article");row.className="row storage-entry storage-row";row.dataset.storagePath=entry.path;
       const head=document.createElement("div");head.className="storage-name";const icon=document.createElement("span");icon.className=`entry-icon ${entryIcon(entry)}`;icon.setAttribute("aria-hidden","true");const title=document.createElement("h3");title.textContent=entry.name;head.append(icon);
       head.append(title);const meta=document.createElement("div");meta.className="meta";meta.textContent=entry.type;head.append(meta);
       const details=document.createElement("div");details.className="row-details";details.innerHTML=`<div class="kv"><span>Méret</span><span>${fmtBytes(entry.size)}</span></div><div class="kv"><span>Módosítva</span><span>${fmtDate(entry.modifiedAt)}</span></div>`;
       const actions=document.createElement("div");actions.className="row-actions";
-      const caps=storage.find(x=>x.id===id)?.capabilities||{}, mutable=entry.type!=="filesystem-root", editable=entry.type==="file" && isEditableText(entry.name) && caps.textEdit;
+      const caps=storagePathCapabilities||storage.find(x=>x.id===id)?.capabilities||{}, mutable=entry.type!=="filesystem-root", editable=entry.type==="file" && isEditableText(entry.name) && caps.textEdit;
       actions.append(actionSlot(entry.type==="file" && caps.download ? button("↓","Letöltés",()=>downloadStorage(id,entry.path)) : null));
       actions.append(actionSlot(editable ? button("✎","Szerkesztés",()=>openTextEditor(id,entry.path,entry.name)) : null));
       actions.append(actionSlot(mutable && caps.rename ? button("↺","Átnevezés",()=>renameStorage(id,entry.path)) : null));
@@ -491,11 +466,12 @@ async function browseStorage(id, p = "") {
       actions.append(caps[storageClipboard?.operation] && storageClipboard?.providerId===id ? button("📌","Beillesztés",()=>pasteStorage(id)) : actionSlot());
       actions.append(actionSlot(mutable && caps.delete ? button("🗑","Törlés",()=>deleteStorageObject(id,entry.path,entry.type)) : null));
       const size=document.createElement("div");size.className="storage-cell";size.textContent=entry.type==="file"?fmtBytes(entry.size):"—";const modified=document.createElement("div");modified.className="storage-cell";modified.textContent=fmtDate(entry.modifiedAt);row.append(head,size,modified,actions);
-      if(entry.type!=="file") { row.classList.add("openable");row.addEventListener("click",()=>browseStorage(id,entry.path)); }
+      if(entry.type!=="file") { row.classList.add("openable");row.addEventListener("click",()=>browseStorage(id,entry.path,entry.path)); }
       else { row.classList.add("openable");row.addEventListener("click",()=>isEditableText(entry.name)?openTextEditor(id,entry.path,entry.name):downloadStorage(id,entry.path)); }
       root.append(row);
     });
   } catch(e) { toast(e.message); }
+  finally { if (id === "docker-volumes" && loadingEntry) setStorageEntryLoading(loadingEntry, false); }
 }
 function setStorageClipboard(operation, providerId, entry) { storageClipboard={providerId,operation,path:entry.path,name:entry.name}; toast(operation==="copy" ? `Másolásra kijelölve: ${entry.name}` : `Áthelyezésre kijelölve: ${entry.name}`); browseStorage(storageLocation,storagePath); }
 async function pasteStorage(id) { if(!storageClipboard||storageClipboard.providerId!==id)return; try { const endpoint=storageClipboard.operation==="copy"?"copy":"move"; await api(`api/v1/storage/${id}/${endpoint}`,{method:"POST",body:JSON.stringify({sourcePath:storageClipboard.path,destinationDirectory:storagePath})}); const message=storageClipboard.operation==="copy"?"Másolva":"Áthelyezve"; if(storageClipboard.operation==="move")storageClipboard=null;toast(message);browseStorage(id,storagePath); }catch(e){toast(e.message)} }
@@ -518,21 +494,22 @@ function highlightText(content, name) {
 }
 function updateTextHighlight() { const code=$("textHighlight").querySelector("code"); code.innerHTML=highlightText($("textEditorContent").value,editingTextPath?.path||""); }
 function updateDockerFileHighlight() { const code=$("dockerFileHighlight").querySelector("code"); code.innerHTML=highlightText($("dockerFileContent").value,dockerEditing?.kind==="env"?".env":"compose.yaml"); }
-async function openTextEditor(id,path,name) { try { const data=await api(`api/v1/storage/${id}/text?`+new URLSearchParams({path})); editingTextPath={id,path};$("textEditorTitle").textContent=`Szerkesztés: ${name}`;$("textEditorPath").textContent=path;$("textEditorContent").value=data.content;updateTextHighlight();$("textEditorDialog").showModal(); }catch(e){toast(e.message)} }
+async function openTextEditor(id,path,name) { try { const data=await api(`api/v1/storage/${id}/text?`+new URLSearchParams({path})); editingTextPath={id,path};const canEdit=!!(storagePathCapabilities||storage.find(x=>x.id===id)?.capabilities||{}).textEdit;$("textEditorTitle").textContent=`${canEdit ? "Edit" : "View"}: ${name}`;$("textEditorPath").textContent=path;$("textEditorContent").value=data.content;$("textEditorContent").readOnly=!canEdit;$("saveTextEditor").disabled=!canEdit;updateTextHighlight();$("textEditorDialog").showModal(); }catch(e){toast(e.message)} }
+function openNewTextFile() { if (!storageLocation || !(storagePathCapabilities||{}).textEdit) return; const name=prompt("File name:"); if (!name) return; if (name === "." || name === ".." || /[\\/]/.test(name)) { toast("File name must be a single name."); return; } const path=storagePath ? `${storagePath}/${name}` : name; editingTextPath={id:storageLocation,path};$("textEditorTitle").textContent=`New file: ${name}`;$("textEditorPath").textContent=path;$("textEditorContent").value="";$("textEditorContent").readOnly=false;$("saveTextEditor").disabled=false;updateTextHighlight();$("textEditorDialog").showModal(); }
 async function saveTextEditor() { if(!editingTextPath)return;try{await api(`api/v1/storage/${editingTextPath.id}/text`,{method:"PUT",body:JSON.stringify({path:editingTextPath.path,content:$("textEditorContent").value})});$("textEditorDialog").close();toast("Fájl mentve");browseStorage(storageLocation,storagePath)}catch(e){toast(e.message)} }
 
 async function processAction(id, action) {
-  try { await api(`api/v1/processes/${id}/${action}`, {method:"POST"}); toast(`Process ${action} requested`); setTimeout(refresh, 250); }
+  try { await api(`api/v1/processes/${id}/${action}`, {method:"POST"}); toast(`Continuous task ${action} requested`); setTimeout(refresh, 250); }
   catch (e) { toast(e.message); }
 }
 
 async function runJob(id) {
-  try { await api(`api/v1/jobs/${id}/run`, {method:"POST"}); toast("Job started"); setTimeout(refresh, 250); }
+  try { await api(`api/v1/jobs/${id}/run`, {method:"POST"}); toast("Task started"); setTimeout(refresh, 250); }
   catch (e) { toast(e.message); }
 }
 
 async function deleteProcess(id) {
-  if (!confirm("Delete this managed process?")) return;
+  if (!confirm("Delete this continuous task?")) return;
   try { await api(`api/v1/processes/${id}`, {method:"DELETE"}); await refresh(); }
   catch (e) { toast(e.message); }
 }
@@ -667,12 +644,15 @@ function dockerNetworkRow(network, ready) {
 }
 function dockerVolumeRow(volume, ready) {
   const busy = dockerBusy.has(`volume:${volume.name}`), usage = !volume.inUse ? "Unused" : volume.runningUse ? "In use by running container" : "Used by stopped container";
+  const canDelete = ready && !volume.inUse && !busy;
+  const deleteTitle = volume.inUse ? "Delete is unavailable while a container references this volume." : !ready ? "Docker is unavailable." : busy ? "Volume operation in progress." : "Delete volume";
   const detail = volume.composeProject ? `Compose: ${volume.composeProject}${volume.composeVolume ? ` / ${volume.composeVolume}` : ""}` : `${volume.driver || "unknown driver"} · ${volume.scope || "local"}`;
   const users = `<span class="docker-volume-users" title="${escapeHtml(usage)}${(volume.usedBy || []).length ? ` · ${escapeHtml(volume.usedBy.join(", "))}` : ""}"><span class="docker-dot ${volume.inUse ? (volume.runningUse ? "green" : "yellow") : "gray"}"></span>${escapeHtml(usage)}</span>`;
-  return `<article class="docker-volume-row" title="${escapeHtml(detail)}"><strong>${escapeHtml(volume.name)}</strong>${users}${volume.storageProviderId ? `<span class="docker-volume-storage" title="Exposed through RunPilot Storage">Storage</span>` : ""}<button class="button danger small" onclick="deleteDockerVolume('${escapeHtml(volume.name)}')" ${!ready || volume.inUse || !!volume.storageProviderId || busy ? "disabled" : ""}>Delete</button></article>`;
+  return `<article class="docker-volume-row" title="${escapeHtml(detail)}"><strong>${escapeHtml(volume.name)}</strong>${users}<span class="docker-volume-storage" title="Available automatically in Storage">Storage</span><button class="button danger small" title="${escapeHtml(deleteTitle)}" onclick="deleteDockerVolume('${escapeHtml(volume.name)}')" ${canDelete ? "" : "disabled"}>Delete</button></article>`;
 }
 function dockerProjectCard(project, ready) {
   const busy = dockerBusy.has(project.name), managed = !!project.managed, hasCompose = !!project.composeFileExists;
+  const error = dockerProjectErrors.get(project.name);
   const active = ["running","partial","degraded"].includes(project.state);
   const canUp = ready && hasCompose && !busy && ["down","stopped"].includes(project.state);
   const canStart = ready && hasCompose && !busy && project.state === "stopped";
@@ -683,7 +663,7 @@ function dockerProjectCard(project, ready) {
     <div class="docker-action-group docker-action-files"><button class="button secondary small" onclick="openDockerFile('${project.name}','compose')" ${busy ? "disabled" : ""}>compose.yaml</button><button class="button secondary small" onclick="openDockerFile('${project.name}','env')" ${busy ? "disabled" : ""}>.env</button></div><div class="docker-action-group docker-action-destructive"><button class="button danger small" onclick="deleteDockerProject('${project.name}')" ${!ready || project.state !== "down" || busy ? "disabled" : ""}>Delete</button></div>
   </div>${busy ? `<div class="docker-busy" role="status"><span class="spinner" aria-hidden="true"></span>Running Compose command…</div>` : ""}` : "";
   const containers = (project.containers || []).map(c => dockerContainerRow(c, ready && managed)).join("");
-  return `<article class="docker-card"><div class="docker-card-head"><h2>${escapeHtml(project.name)}</h2><span class="status ${escapeHtml(project.state === "running" ? "running" : project.state === "degraded" ? "failure" : project.state || "idle")}">${escapeHtml(project.state || "unknown")}</span></div>${actions}${containers}${project.configPath && !managed ? `<div class="docker-path">${escapeHtml(project.configPath)}</div>` : ""}</article>`;
+  return `<article class="docker-card"><div class="docker-card-head"><h2>${escapeHtml(project.name)}</h2><span class="status ${escapeHtml(project.state === "running" ? "running" : project.state === "degraded" ? "failure" : project.state || "idle")}">${escapeHtml(project.state || "unknown")}</span></div>${error ? `<div class="docker-project-error" role="alert"><strong>Compose operation failed</strong><span>${escapeHtml(error)}</span></div>` : ""}${actions}${containers}${project.configPath && !managed ? `<div class="docker-path">${escapeHtml(project.configPath)}</div>` : ""}</article>`;
 }
 function dockerContainerRow(container, ready) {
   const busy=dockerBusy.has(`container:${container.id}`), running=container.state === "running";
@@ -691,7 +671,15 @@ function dockerContainerRow(container, ready) {
   const controls=`<div class="docker-container-actions"><div class="docker-action-group docker-action-lifecycle"><button class="row-icon docker-container-icon" title="Start" aria-label="Start container" onclick="dockerContainerAction('${container.id}','start')" ${ready && !running && !busy ? "" : "disabled"}>▶</button><button class="row-icon docker-container-icon" title="Stop" aria-label="Stop container" onclick="dockerContainerAction('${container.id}','stop')" ${ready && running && !busy ? "" : "disabled"}>■</button></div><div class="docker-action-group docker-action-destructive"><button class="row-icon docker-container-icon" title="Delete stopped container" aria-label="Delete stopped container" onclick="dockerContainerAction('${container.id}','delete')" ${ready && !running && !busy ? "" : "disabled"}>🗑</button></div><div class="docker-action-group docker-action-support"><button class="row-icon docker-container-icon" title="Open terminal" aria-label="Open container terminal" onclick="dockerAttachContainer('${container.id}')" ${canAttach ? "" : "disabled"}>↪</button><button class="row-icon docker-container-icon" title="View logs" aria-label="View logs" onclick="openDockerContainerLog('${container.id}')" ${ready && !busy ? "" : "disabled"}>▤</button></div></div>`;
   return `<div class="docker-container"><span class="docker-dot ${escapeHtml(container.tone || "gray")}"></span><div class="docker-container-main"><strong>${escapeHtml(container.service || container.name)}</strong>${controls}</div><span>${escapeHtml(container.state || "unknown")}${container.health ? ` · ${escapeHtml(container.health)}` : ""}</span></div>`;
 }
-async function dockerAction(name, action) { dockerBusy.add(name); renderDocker(); try { await api(`api/v1/docker/projects/${encodeURIComponent(name)}/actions/${action}`, {method:"POST"}); toast(`${name}: ${action} completed`); } catch(e) { toast(e.message); } finally { dockerBusy.delete(name); await refresh(); } }
+async function dockerAction(name, action) {
+  dockerBusy.add(name); dockerProjectErrors.delete(name); renderDocker();
+  try {
+    await api(`api/v1/docker/projects/${encodeURIComponent(name)}/actions/${action}`, {method:"POST"});
+    toast(`${name}: ${action} completed`);
+  } catch(e) {
+    dockerProjectErrors.set(name, e.message); renderDocker(); toast(e.message);
+  } finally { dockerBusy.delete(name); await refresh(); }
+}
 async function dockerContainerAction(id, action) {
   const key=`container:${id}`;
   if(action==="delete"&&!confirm("Delete this stopped container?"))return;
@@ -730,7 +718,7 @@ async function dockerAttachContainer(id) {
   } catch (error) { term.writeln(`\r\n${error.message}`); toast(error.message); }
 }
 function disposeDockerAttachTerminal() { const session = dockerAttachTerminal; dockerAttachTerminal = null; session?.observer?.disconnect(); session?.socket?.close(); session?.term?.dispose(); }
-async function deleteDockerProject(name) { if (!confirm(`Delete the RunPilot project directory for ${name}? This removes compose files and .env only; it never removes Docker images or volumes.`)) return; dockerBusy.add(name); renderDocker(); try { await api(`api/v1/docker/projects/${encodeURIComponent(name)}`, {method:"DELETE"}); toast("Compose project deleted"); } catch(e) { toast(e.message); } finally { dockerBusy.delete(name); await refresh(); } }
+async function deleteDockerProject(name) { if (!confirm(`Delete the RunPilot project directory for ${name}? This removes compose files and .env only; it never removes Docker images or volumes.`)) return; dockerBusy.add(name); dockerProjectErrors.delete(name); renderDocker(); try { await api(`api/v1/docker/projects/${encodeURIComponent(name)}`, {method:"DELETE"}); dockerProjectErrors.delete(name); toast("Compose project deleted"); } catch(e) { dockerProjectErrors.set(name, e.message); renderDocker(); toast(e.message); } finally { dockerBusy.delete(name); await refresh(); } }
 async function deleteDockerVolume(name) { if (!confirm(`Permanently delete Docker volume ${name} and all of its data? This cannot be undone.`)) return; const key=`volume:${name}`; dockerBusy.add(key);renderDocker();try{await api(`api/v1/docker/volumes/${encodeURIComponent(name)}`,{method:"DELETE"});toast("Docker volume deleted");}catch(e){toast(e.message)}finally{dockerBusy.delete(key);await refresh();} }
 async function deleteDockerNetwork(name) { if (!confirm(`Delete Docker network ${name}? This cannot be undone.`)) return; const key=`network:${name}`;dockerBusy.add(key);renderDocker();try{await api(`api/v1/docker/networks/${encodeURIComponent(name)}`,{method:"DELETE"});toast("Docker network deleted");}catch(e){toast(e.message)}finally{dockerBusy.delete(key);await refresh();} }
 async function openDockerFile(name, kind) { try { const out = await api(`api/v1/docker/projects/${encodeURIComponent(name)}/files/${kind}`); dockerEditing = {name,kind}; $("dockerFileTitle").textContent = `${out.content ? "Edit" : "Create"} ${kind === "compose" ? "compose.yaml" : ".env"}`; $("dockerFilePath").textContent = `${name}/${kind === "compose" ? "compose.yaml" : ".env"}`; $("dockerFileContent").value = out.content || (kind === "compose" ? "services: {}\n" : ""); updateDockerFileHighlight(); $("dockerFileDialog").showModal(); } catch(e) { toast(e.message); } }
@@ -878,21 +866,17 @@ document.querySelectorAll("[data-dismiss]").forEach(button => button.addEventLis
   $(button.dataset.dismiss).close();
 }));
 $("primaryAction").addEventListener("click", () => {
-  if (currentPage === "processes") openProcess();
-  if (currentPage === "jobs") openJob();
-  if (currentPage === "backups") openBackup();
-  if (currentPage === "storage") openStorageDialog();
+	if (currentPage === "tasks") $("taskDialog").showModal();
 	if (currentPage === "docker") openDockerCreate();
 });
-$("storageEmptyAdd").addEventListener("click",()=>openStorageDialog());
-$("storageEdit").addEventListener("click",()=>{const provider=storage.find(x=>x.id===$("storageProvider").value);if(provider)openStorageDialog(provider)});
-$("storageRemove").addEventListener("click",async()=>{const provider=storage.find(x=>x.id===$("storageProvider").value);if(!provider||!confirm(`Remove ${provider.name}? This only removes it from RunPilot; files at the underlying location are never deleted.`))return;try{await api(`api/v1/storage/${provider.id}`,{method:"DELETE"});storageLocation=null;storagePath="";await refresh()}catch(e){toast(e.message)}});
+
+document.querySelectorAll("[data-task-filter]").forEach(button => button.addEventListener("click", () => { taskFilter = button.dataset.taskFilter; document.querySelectorAll("[data-task-filter]").forEach(item => item.classList.toggle("active", item === button)); renderTasks(); }));
+document.querySelectorAll("[data-task-kind]").forEach(button => button.addEventListener("click", () => { $("taskDialog").close(); if (button.dataset.taskKind === "continuous") openProcess(); else if (button.dataset.taskKind === "scheduled") openJob(); else openBackup(); }));
 $("storageCreate").addEventListener("click",async()=>{if(!storageLocation)return;const name=prompt("Folder name:");if(!name)return;try{await api(`api/v1/storage/${storageLocation}/directories`,{method:"POST",body:JSON.stringify({parentPath:storagePath,name})});browseStorage(storageLocation,storagePath)}catch(e){toast(e.message)}});
+$("storageNewFile").addEventListener("click",openNewTextFile);
 $("storageUpload").addEventListener("change",async e=>{if(!storageLocation||!e.target.files.length)return;const form=new FormData();form.append("path",storagePath);for(const f of e.target.files)form.append("files",f);try{await api(`api/v1/storage/${storageLocation}/upload`,{method:"POST",body:form});browseStorage(storageLocation,storagePath)}catch(err){toast(err.message)}finally{e.target.value=""}});
 $("storageProvider").addEventListener("change",e=>browseStorage(e.target.value,""));
 $("storageShowHidden").addEventListener("change",e=>{storageShowHidden=e.target.checked;browseStorage(storageLocation,storagePath)});
-$("storageScope").addEventListener("change",()=>$("storageRootWrap").classList.toggle("hidden",$("storageScope").value==="host"));
-$("storageForm").addEventListener("submit",async e=>{e.preventDefault();const scope=$("storageScope").value,id=$("storageId").value,body={name:$("storageName").value.trim(),type:$("storageType").value,local:{scope,root:scope==="root"?$("storageRoot").value.trim():""}};try{await api(id?`api/v1/storage/${id}`:"api/v1/storage",{method:id?"PUT":"POST",body:JSON.stringify(body)});$("storageDialog").close();storageLocation=id||null;await refresh()}catch(err){toast(err.message)}});
 $("saveTextEditor").addEventListener("click",saveTextEditor);$("closeTextEditor").addEventListener("click",()=>$("textEditorDialog").close());$("cancelTextEditor").addEventListener("click",()=>$("textEditorDialog").close());
 $("textEditorContent").addEventListener("input",updateTextHighlight);
 $("textEditorContent").addEventListener("scroll",e=>{ $("textHighlight").scrollTop=e.target.scrollTop; $("textHighlight").scrollLeft=e.target.scrollLeft; });
@@ -906,7 +890,7 @@ function openProcess(existing = null) {
   populateCommandEditor("process", existing?.command);
   $("processRestart").value = existing?.restart?.mode || "on-failure";
   $("processAutostart").checked = !!existing?.autostart;
-  $("processDialogTitle").textContent = existing ? "Edit process" : "Add process";
+  $("processDialogTitle").textContent = existing ? "Edit continuous task" : "Add continuous task";
   $("processDialog").showModal();
 }
 function editProcess(id) { openProcess(processes.find(v => v.definition.id === id)?.definition); }
@@ -964,7 +948,7 @@ function openJob(existing = null) {
   populateCommandEditor("job", existing?.command);
   $("jobEnabled").checked = existing ? !!existing.enabled : true;
   fillSchedule("job", existing?.schedule || {});
-  $("jobDialogTitle").textContent = existing ? "Edit scheduled job" : "Add scheduled job";
+  $("jobDialogTitle").textContent = existing ? "Edit scheduled task" : "Add scheduled task";
   $("jobDialog").showModal();
 }
 function editJob(id) { openJob(jobs.find(v => v.definition.id === id)?.definition); }
@@ -1003,7 +987,7 @@ function openBackup(existing = null) {
   fillSchedule("backup", existing?.schedule || {type:"daily", timeOfDay:"03:00"});
   updateMirrorWarning();
   updateBackupProvider();
-  $("backupDialogTitle").textContent = existing ? "Edit backup" : "Add backup";
+  $("backupDialogTitle").textContent = existing ? "Edit backup task" : "Add backup task";
   $("backupDialog").showModal();
 }
 function editBackup(id) { openBackup(jobs.find(v => v.definition.id === id)?.definition); }

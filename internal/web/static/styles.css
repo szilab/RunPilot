@@ -60,6 +60,10 @@ header p { margin: 0; color: #64748b; }
 .issue-row { border-left: 3px solid #ef4444; }
 .row-list { background: white; border: 1px solid #e3e7ee; border-radius: 10px; overflow: hidden; }
 .row { display: grid; grid-template-columns: minmax(220px, 1.3fr) minmax(300px, 1.7fr) auto; gap: 20px; align-items: center; padding: 15px 18px; border-bottom: 1px solid #eef1f5; }
+.task-choice { width: 100%; border: 0; background: white; color: #111827; text-align: left; }
+.task-choice strong { font-size: 15px; }
+.task-choice .meta { color: #64748b; }
+.task-choice:hover { background: #f8fafc; }
 .row:last-child { border-bottom: 0; }
 .row-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; min-width: 0; }
 .row h3 { margin: 0 0 4px; font-size: 16px; color: #111827; }
@@ -104,6 +108,8 @@ header p { margin: 0; color: #64748b; }
 .storage-cell { color: #475569; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .entry-icon { display: inline-grid; width: 23px; height: 23px; place-items: center; flex: 0 0 23px; font-size: 17px; }
 .entry-icon.folder::before { content: "📁"; }.entry-icon.text::before { content: "📄"; }.entry-icon.image::before { content: "🖼"; }.entry-icon.audio::before { content: "🎵"; }.entry-icon.video::before { content: "🎬"; }.entry-icon.file::before { content: "▤"; }
+.entry-icon.loading { width:15px; height:15px; margin:4px; border:2px solid #cbd5e1; border-top-color:#2563eb; border-radius:50%; animation:software-spin .8s linear infinite; }
+.entry-icon.loading::before { content:""; }
 .storage-entry .row-actions { min-width: 238px; flex-wrap: nowrap; }
 .row-icon, .row-icon-slot { display: inline-grid; width: 28px; height: 28px; place-items: center; flex: 0 0 28px; }
 .row-icon { border: 0; background: transparent; padding: 5px; font-size: 15px; line-height: 1; color: #475569; }
@@ -125,7 +131,7 @@ header p { margin: 0; color: #64748b; }
 .docker-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
 .docker-volume-list { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
 .docker-section { margin-top: 26px; }.docker-section:first-of-type { margin-top: 0; }
-.docker-card { display: grid; gap: 14px; padding: 18px; background: white; border: 1px solid #e3e7ee; border-radius: 12px; }
+.docker-card { display: grid; align-content: start; gap: 14px; padding: 18px; background: white; border: 1px solid #e3e7ee; border-radius: 12px; }
 .docker-card-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
 .docker-card h2 { margin: 0 0 4px; font-size: 17px; color: #111827; overflow-wrap: anywhere; }
 .docker-container { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 13px; }
@@ -133,13 +139,14 @@ header p { margin: 0; color: #64748b; }
 .docker-container span:last-child { color: #64748b; white-space: nowrap; }
 .docker-dot { width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; }.docker-dot.green { background:#22c55e; }.docker-dot.yellow { background:#f59e0b; }.docker-dot.red { background:#ef4444; }
 .docker-path { color: #64748b; font: 11px/1.4 "Cascadia Code", Consolas, monospace; overflow-wrap: anywhere; }
-.docker-readonly { color: #64748b; font-size: 12px; }.docker-actions { display:flex; gap:5px; flex-wrap:nowrap; min-width:0; }.docker-actions .button { padding:5px 7px; }
+.docker-readonly { color: #64748b; font-size: 12px; }.docker-actions { display:flex; align-items:flex-start; gap:5px; flex-wrap:nowrap; min-width:0; }.docker-actions .button { padding:5px 7px; }
 .docker-container-actions { display:flex; flex:0 0 auto; gap:3px; }.docker-container-actions .docker-action-group { min-width:0; }.docker-container-actions .docker-container-icon { width:24px; height:24px; padding:2px; font-size:13px; }
 .docker-action-group { display:flex; min-width:max-content; }.docker-action-group .button { border-radius:0; }.docker-action-group .button + .button { margin-left:-1px; }.docker-action-group .button:first-child { border-radius:7px 0 0 7px; }.docker-action-group .button:last-child { border-radius:0 7px 7px 0; }
 .docker-action-lifecycle .button { background:#1f437f; border-color:#1f437f; color:#fff; }.docker-action-lifecycle .button + .button { border-left-color:#416399; }.docker-action-files .button, .docker-action-support .button { background:#fff; border-color:#d7dee8; color:#334155; }
 .docker-actions .button:disabled, .docker-container-actions .button:disabled { background:#eef2f7; border-color:#d7dee8; color:#94a3b8; cursor:default; opacity:1; }
 .docker-container-actions .docker-action-lifecycle .row-icon { background:transparent; border-color:transparent; color:#1f437f; }.docker-container-actions .docker-action-destructive .row-icon { background:transparent; border-color:transparent; color:#b91c1c; }.docker-container-actions .docker-action-support .row-icon { background:transparent; border-color:transparent; color:#475569; }.docker-container-actions .docker-container-icon:hover:not(:disabled) { background:#e9eff8; border-radius:6px; }.docker-container-actions .docker-container-icon:disabled { background:transparent; border-color:transparent; color:#94a3b8; opacity:.45; }
 .docker-busy { display:flex; align-items:center; gap:8px; color:#64748b; font-size:12px; font-weight:600; }.docker-busy .spinner { width:14px; height:14px; border-width:2px; }
+.docker-project-error { display:grid; gap:4px; padding:10px 12px; border:1px solid #fecaca; border-radius:8px; background:#fef2f2; color:#991b1b; font-size:12px; overflow-wrap:anywhere; }
 .docker-volume-row { display:flex; align-items:center; gap:9px; min-width:0; padding:10px 12px; background:white; border:1px solid #e3e7ee; border-radius:9px; }
 .docker-volume-row strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#111827; }.docker-volume-users { display:flex; align-items:center; gap:6px; min-width:0; overflow:hidden; color:#64748b; font-size:12px; white-space:nowrap; }.docker-volume-row .button { margin-left:auto; }.docker-volume-storage { color:#64748b; font-size:11px; font-weight:600; }
 .docker-file-editor { width: 100%; min-height: 430px; resize: vertical; border: 1px solid #28374a; border-radius: 8px; padding: 12px; color: #d6e2f0; background: #0b1220; font: 13px/1.5 "Cascadia Code", Consolas, monospace; }
@@ -274,7 +281,11 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 :root[data-theme="dark"] .dialog,
 :root[data-theme="dark"] input,
 :root[data-theme="dark"] select { background: #172235; }
+:root[data-theme="dark"] .task-choice { background: #1d2a3e; color: #f8fafc; }
+:root[data-theme="dark"] .task-choice .meta { color: #aebdd0; }
+:root[data-theme="dark"] .task-choice:hover { background: #29374c; }
 :root[data-theme="dark"] .storage-entry.openable:hover { background: #1d2a3e; }
+:root[data-theme="dark"] .entry-icon.loading { border-color:#3a4b64; border-top-color:#60a5fa; }
 :root[data-theme="dark"] .storage-list-head { background: #1d2a3e; border-color: #29374c; color: #aebdd0; }
 :root[data-theme="dark"] .storage-cell { color: #cbd5e1; }
 :root[data-theme="dark"] .breadcrumb-link, :root[data-theme="dark"] .row-icon { color: #9ec5ff; }
@@ -299,6 +310,7 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 :root[data-theme="dark"] .docker-card h2, :root[data-theme="dark"] .docker-volume-row strong { color:#f8fafc; }
 :root[data-theme="dark"] .docker-container span:last-child, :root[data-theme="dark"] .docker-path, :root[data-theme="dark"] .docker-readonly, :root[data-theme="dark"] .docker-volume-users, :root[data-theme="dark"] .docker-volume-storage { color:#aebdd0; }
 :root[data-theme="dark"] .docker-busy { color:#aebdd0; }
+:root[data-theme="dark"] .docker-project-error { border-color:#7f1d1d; background:#3f171b; color:#fecaca; }
 :root[data-theme="dark"] .docker-action-lifecycle .button { background:#28538e; border-color:#3b6eae; color:#fff; }
 :root[data-theme="dark"] .docker-action-lifecycle .button + .button { border-left-color:#527ab4; }
 :root[data-theme="dark"] .docker-action-files .button, :root[data-theme="dark"] .docker-action-support .button { background:#172235; border-color:#3a4b64; color:#e5e7eb; }

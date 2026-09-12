@@ -152,7 +152,6 @@ type Config struct {
 	Server    ServerConfig        `json:"server" yaml:"server"`
 	Processes []ProcessDefinition `json:"processes" yaml:"processes"`
 	Jobs      []JobDefinition     `json:"jobs" yaml:"jobs"`
-	Storage   []StorageDefinition `json:"storage" yaml:"storage"`
 	Software  SoftwareConfig      `json:"software" yaml:"software"`
 }
 
@@ -248,6 +247,8 @@ type Overview struct {
 	RunningProcesses int           `json:"runningProcesses"`
 	JobCount         int           `json:"jobCount"`
 	RunningJobs      int           `json:"runningJobs"`
+	TaskCount        int           `json:"taskCount"`
+	RunningTasks     int           `json:"runningTasks"`
 	Issues           []HealthIssue `json:"issues"`
 }
 

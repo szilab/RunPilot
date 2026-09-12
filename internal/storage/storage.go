@@ -27,6 +27,63 @@ type State struct {
 	Status string `json:"status"`
 	Reason string `json:"reason,omitempty"`
 }
+
+// Descriptor is a runtime-discovered location. It is intentionally separate
+// from the former persisted StorageDefinition configuration model.
+type Descriptor struct {
+	ID           string       `json:"id"`
+	Name         string       `json:"name"`
+	Type         string       `json:"type"`
+	Capabilities Capabilities `json:"capabilities"`
+	State        State        `json:"state"`
+}
+
+type DockerVolumeDescriptor struct {
+	Name    string
+	Driver  string
+	Running bool
+}
+type DockerVolumeCatalog interface {
+	ListStorageVolumes(context.Context) ([]DockerVolumeDescriptor, error)
+	DockerStorageState(context.Context) State
+}
+type DockerVolumeFilesystem interface {
+	DockerVolumeCatalog
+	ListDockerVolume(ctx context.Context, volume, path string, options ListOptions) ([]Entry, error)
+	ReadDockerVolume(ctx context.Context, volume, path string) ([]byte, error)
+}
+
+// Registry discovers Storage locations on demand. The built-in local location
+// is always present; Docker locations are an optional runtime capability.
+type Registry struct {
+	docker DockerVolumeFilesystem
+}
+
+func NewRegistry(docker DockerVolumeFilesystem) *Registry {
+	return &Registry{docker: docker}
+}
+func LocalID() string         { return "local" }
+func DockerVolumesID() string { return "docker-volumes" }
+func (r *Registry) List(ctx context.Context) []Descriptor {
+	local, _ := NewLocal(model.LocalStorageSpec{Scope: model.LocalStorageScopeHost})
+	out := []Descriptor{{ID: LocalID(), Name: "Local filesystem", Type: "local", Capabilities: local.Capabilities(), State: local.State()}}
+	if r.docker == nil {
+		return out
+	}
+	provider := NewDockerVolumes(r.docker)
+	out = append(out, Descriptor{ID: DockerVolumesID(), Name: "Docker volumes", Type: "docker-volumes", Capabilities: provider.Capabilities(), State: provider.State()})
+	return out
+}
+func (r *Registry) Provider(_ context.Context, id string) (Provider, error) {
+	if id == LocalID() {
+		return NewLocal(model.LocalStorageSpec{Scope: model.LocalStorageScopeHost})
+	}
+	if id != DockerVolumesID() || r.docker == nil {
+		return nil, fmt.Errorf("unknown storage %q", id)
+	}
+	return NewDockerVolumes(r.docker), nil
+}
+
 type Entry struct {
 	Name       string     `json:"name"`
 	Path       string     `json:"path"`
@@ -35,9 +92,11 @@ type Entry struct {
 	ModifiedAt *time.Time `json:"modifiedAt,omitempty"`
 }
 type Listing struct {
-	Path       string  `json:"path"`
-	ParentPath *string `json:"parentPath"`
-	Entries    []Entry `json:"entries"`
+	Path         string        `json:"path"`
+	ParentPath   *string       `json:"parentPath"`
+	Entries      []Entry       `json:"entries"`
+	Capabilities *Capabilities `json:"capabilities,omitempty"`
+	State        *State        `json:"state,omitempty"`
 }
 type ListOptions struct {
 	ShowHidden bool
@@ -74,52 +133,12 @@ type TextEditor interface {
 }
 
 type StateProvider interface{ State() State }
+type PathCapabilitiesProvider interface{ CapabilitiesFor(string) Capabilities }
+type PathStateProvider interface{ StateFor(string) State }
 
 // BackupSource is an internal resolved filesystem location for a future
 // backup source reference. It is deliberately not serialized through the API.
 type BackupSource struct{ Path string }
 type BackupSourceProvider interface {
 	ResolveBackupSource(string) (BackupSource, error)
-}
-
-// DockerVolumeDetails and DockerVolumeResolver keep Docker resolution behind
-// the provider factory. Storage never constructs a Docker daemon mount path.
-type DockerVolumeDetails struct{ Driver, Mountpoint string }
-type DockerVolumeUsage struct{ Running bool }
-type DockerVolumeResolver interface {
-	VolumeDetails(context.Context, string) (DockerVolumeDetails, error)
-	VolumeUsage(context.Context, string) (DockerVolumeUsage, error)
-}
-
-// NormalizeDefinition keeps provider-specific configuration rules with the
-// provider factory, so callers do not need to inspect Local settings.
-func NormalizeDefinition(d *model.StorageDefinition) error {
-	switch d.Type {
-	case model.StorageLocal:
-		if d.Local == nil {
-			return fmt.Errorf("local storage configuration is required")
-		}
-		_, err := NewLocal(*d.Local)
-		return err
-	case model.StorageDockerVolume:
-		if d.DockerVolume == nil || d.DockerVolume.Volume == "" {
-			return fmt.Errorf("Docker volume storage requires a volume name")
-		}
-		return nil
-	default:
-		return fmt.Errorf("unsupported storage provider")
-	}
-}
-
-func ProviderFor(d model.StorageDefinition, resolvers ...DockerVolumeResolver) (Provider, error) {
-	if err := NormalizeDefinition(&d); err != nil {
-		return nil, err
-	}
-	if d.Type == model.StorageLocal {
-		return NewLocal(*d.Local)
-	}
-	if len(resolvers) == 0 || resolvers[0] == nil {
-		return nil, fmt.Errorf("Docker volume resolver is unavailable")
-	}
-	return NewDockerVolume(*d.DockerVolume, resolvers[0])
 }

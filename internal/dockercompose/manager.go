@@ -12,6 +12,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 
@@ -30,7 +31,6 @@ var (
 	ErrRuntimeUnavailable = errors.New("Docker runtime is unavailable")
 	ErrFileTooLarge       = errors.New("Compose file exceeds the 1 MiB limit")
 	ErrVolumeInUse        = errors.New("Docker volume is referenced by a container")
-	ErrVolumeStorage      = errors.New("remove this volume from RunPilot Storage before deleting it")
 	ErrNetworkInUse       = errors.New("Docker network is referenced by a container")
 	ErrProtectedNetwork   = errors.New("default Docker networks cannot be deleted")
 	ErrNetworkExists      = errors.New("Docker network already exists")
@@ -82,7 +82,6 @@ type Volume struct {
 	InUse             bool              `json:"inUse"`
 	RunningUse        bool              `json:"runningUse"`
 	UsedBy            []string          `json:"usedBy,omitempty"`
-	StorageProviderID string            `json:"storageProviderId,omitempty"`
 }
 
 type Network struct {
@@ -118,11 +117,13 @@ func (commandRunner) Run(ctx context.Context, name string, args ...string) Resul
 }
 
 type Manager struct {
-	root      string
-	runner    Runner
-	supported bool
-	mu        sync.Mutex
-	busy      map[string]bool
+	root        string
+	runner      Runner
+	supported   bool
+	mu          sync.Mutex
+	busy        map[string]bool
+	helperMu    sync.Mutex
+	helperReady bool
 }
 
 func NewManager(dataDir string) *Manager {
@@ -174,6 +175,17 @@ func bounded(v string) string {
 		return v[:max] + "\n(output truncated)"
 	}
 	return v
+}
+
+// tailBounded keeps the most recent log bytes. Container output is requested
+// with Docker's line-tail option, but individual lines or 800 short lines can
+// still exceed the HTTP/UI limit; the newest output is the useful diagnostic.
+func tailBounded(v string) string {
+	const max = 8192
+	if len(v) <= max {
+		return v
+	}
+	return "(earlier log output truncated)\n" + v[len(v)-max:]
 }
 
 func ValidName(name string) bool {
@@ -461,13 +473,6 @@ type volumeLS struct {
 	Scope  string `json:"Scope"`
 	Labels string `json:"Labels"`
 }
-type volumeInspect struct {
-	Name       string            `json:"Name"`
-	Driver     string            `json:"Driver"`
-	Scope      string            `json:"Scope"`
-	Mountpoint string            `json:"Mountpoint"`
-	Labels     map[string]string `json:"Labels"`
-}
 type inspectedContainer struct {
 	ID    string `json:"Id"`
 	Name  string `json:"Name"`
@@ -568,7 +573,7 @@ func (m *Manager) ContainerLogs(ctx context.Context, id string) (string, error) 
 	if r.Err != nil {
 		return "", commandError(r)
 	}
-	return bounded(r.Output), nil
+	return tailBounded(r.Output), nil
 }
 
 // TerminalContainer confirms that a running managed Compose container may
@@ -691,50 +696,15 @@ func (m *Manager) volumeUsageMap(ctx context.Context) (map[string]volumeUse, err
 	}
 	return out, nil
 }
-func (m *Manager) inspectVolume(ctx context.Context, name string) (volumeInspect, error) {
-	if !ValidVolumeName(name) {
-		return volumeInspect{}, ErrInvalidName
-	}
-	r := m.runner.Run(ctx, "docker", "volume", "inspect", name)
-	if r.Err != nil {
-		return volumeInspect{}, commandError(r)
-	}
-	var values []volumeInspect
-	if err := json.Unmarshal([]byte(r.Output), &values); err != nil || len(values) != 1 {
-		if err != nil {
-			return volumeInspect{}, fmt.Errorf("read Docker volume: %w", err)
-		}
-		return volumeInspect{}, fmt.Errorf("Docker volume inspect returned no volume")
-	}
-	return values[0], nil
-}
 
-// VolumeDetails implements storage.DockerVolumeResolver. Its mountpoint is
-// deliberately returned only to internal Storage code, never to web models.
-func (m *Manager) VolumeDetails(ctx context.Context, name string) (storage.DockerVolumeDetails, error) {
+// DockerStorageState lets Storage remain available independently while still
+// showing a meaningful unavailable Docker-volumes location when Docker fails.
+func (m *Manager) DockerStorageState(ctx context.Context) storage.State {
 	rt := m.Runtime(ctx)
-	if !rt.Supported {
-		return storage.DockerVolumeDetails{}, ErrUnsupported
+	if !rt.Supported || !rt.Available {
+		return storage.State{Status: "unavailable", Reason: rt.Message}
 	}
-	if !rt.Available {
-		return storage.DockerVolumeDetails{}, fmt.Errorf("%w: %s", ErrRuntimeUnavailable, rt.Message)
-	}
-	v, e := m.inspectVolume(ctx, name)
-	return storage.DockerVolumeDetails{Driver: v.Driver, Mountpoint: v.Mountpoint}, e
-}
-func (m *Manager) VolumeUsage(ctx context.Context, name string) (storage.DockerVolumeUsage, error) {
-	rt := m.Runtime(ctx)
-	if !rt.Supported {
-		return storage.DockerVolumeUsage{}, ErrUnsupported
-	}
-	if !rt.Available {
-		return storage.DockerVolumeUsage{}, fmt.Errorf("%w: %s", ErrRuntimeUnavailable, rt.Message)
-	}
-	u, e := m.volumeUsageMap(ctx)
-	if e != nil {
-		return storage.DockerVolumeUsage{}, e
-	}
-	return storage.DockerVolumeUsage{Running: u[name].Running}, nil
+	return storage.State{Status: "ready"}
 }
 func (m *Manager) CreateVolume(ctx context.Context, name string) (Volume, error) {
 	if !ValidVolumeName(name) {
@@ -753,12 +723,9 @@ func (m *Manager) CreateVolume(ctx context.Context, name string) (Volume, error)
 	}
 	return Volume{Name: name, Driver: "local", Scope: "local", Labels: map[string]string{"com.runpilot.managed": "true"}, ManagedByRunPilot: true}, nil
 }
-func (m *Manager) DeleteVolume(ctx context.Context, name string, exposed bool) error {
+func (m *Manager) DeleteVolume(ctx context.Context, name string) error {
 	if !ValidVolumeName(name) {
 		return ErrInvalidName
-	}
-	if exposed {
-		return ErrVolumeStorage
 	}
 	rt := m.Runtime(ctx)
 	if !rt.Supported {
@@ -779,6 +746,138 @@ func (m *Manager) DeleteVolume(ctx context.Context, name string, exposed bool) e
 		return commandError(r)
 	}
 	return nil
+}
+
+// ListStorageVolumes is the narrow discovery surface consumed by Storage.
+func (m *Manager) ListStorageVolumes(ctx context.Context) ([]storage.DockerVolumeDescriptor, error) {
+	rt, volumes, err := m.ListVolumes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !rt.Available {
+		return nil, fmt.Errorf("%w: %s", ErrRuntimeUnavailable, rt.Message)
+	}
+	out := make([]storage.DockerVolumeDescriptor, 0, len(volumes))
+	for _, volume := range volumes {
+		out = append(out, storage.DockerVolumeDescriptor{Name: volume.Name, Driver: volume.Driver, Running: volume.RunningUse})
+	}
+	return out, nil
+}
+
+const volumeHelperImage = "busybox:1.36.1"
+const volumeHelperMount = "/runpilot-volume"
+
+func (m *Manager) ensureVolumeHelper(ctx context.Context) error {
+	m.helperMu.Lock()
+	defer m.helperMu.Unlock()
+	if m.helperReady {
+		return nil
+	}
+	if r := m.runner.Run(ctx, "docker", "image", "inspect", volumeHelperImage); r.Err == nil {
+		m.helperReady = true
+		return nil
+	}
+	if r := m.runner.Run(ctx, "docker", "pull", volumeHelperImage); r.Err != nil {
+		return fmt.Errorf("obtain Docker volume helper image: %w", commandError(r))
+	}
+	m.helperReady = true
+	return nil
+}
+
+func helperRelativePath(value string) (string, error) {
+	if value == "" {
+		return volumeHelperMount, nil
+	}
+	if strings.HasPrefix(value, "/") || strings.Contains(value, "\\") {
+		return "", fmt.Errorf("invalid Docker volume path")
+	}
+	parts := strings.Split(value, "/")
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("invalid Docker volume path")
+		}
+	}
+	return volumeHelperMount + "/" + strings.Join(parts, "/"), nil
+}
+
+func (m *Manager) volumeHelper(ctx context.Context, volume string, args ...string) Result {
+	mount := "type=volume,src=" + volume + ",dst=" + volumeHelperMount + ",readonly"
+	command := []string{"run", "--rm", "--mount", mount, volumeHelperImage}
+	command = append(command, args...)
+	return m.runner.Run(ctx, "docker", command...)
+}
+
+// The script is fixed protocol code. The provider path is passed only as $1,
+// never interpolated into shell source, so file names cannot become syntax.
+const volumeHelperListScript = `for entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+  [ -e "$entry" ] || [ -L "$entry" ] || continue
+  name=${entry##*/}
+  if [ -d "$entry" ]; then kind=d; else kind=f; fi
+  printf '%s\000%s\000' "$name" "$kind"
+done`
+
+// ListDockerVolume uses Docker to mount the named volume into an operation-
+// scoped helper. Paths are validated and supplied as individual arguments.
+func (m *Manager) ListDockerVolume(ctx context.Context, volume, path string, _ storage.ListOptions) ([]storage.Entry, error) {
+	if !ValidVolumeName(volume) {
+		return nil, ErrInvalidName
+	}
+	if err := m.ensureVolumeHelper(ctx); err != nil {
+		return nil, err
+	}
+	target, err := helperRelativePath(path)
+	if err != nil {
+		return nil, err
+	}
+	r := m.volumeHelper(ctx, volume, "sh", "-c", volumeHelperListScript, "runpilot-volume-list", target)
+	if r.Err != nil {
+		return nil, commandError(r)
+	}
+	parts := strings.Split(r.Output, "\x00")
+	entries := make([]storage.Entry, 0, len(parts)/2)
+	for i := 0; i+1 < len(parts); i += 2 {
+		name, kind := parts[i], parts[i+1]
+		if name == "" && kind == "" {
+			continue
+		}
+		if name == "" || strings.Contains(name, "/") || (kind != "d" && kind != "f") {
+			return nil, fmt.Errorf("Docker volume helper returned an invalid entry")
+		}
+		entryType := "file"
+		if kind == "d" {
+			entryType = "directory"
+		}
+		rel := name
+		if path != "" {
+			rel = path + "/" + name
+		}
+		entries = append(entries, storage.Entry{Name: name, Path: rel, Type: entryType})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Type != entries[j].Type {
+			return entries[i].Type == "directory"
+		}
+		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+	})
+	return entries, nil
+}
+
+func (m *Manager) ReadDockerVolume(ctx context.Context, volume, path string) ([]byte, error) {
+	if !ValidVolumeName(volume) {
+		return nil, ErrInvalidName
+	}
+	if err := m.ensureVolumeHelper(ctx); err != nil {
+		return nil, err
+	}
+	target, err := helperRelativePath(path)
+	if err != nil {
+		return nil, err
+	}
+	r := m.volumeHelper(ctx, volume, "cat", target)
+	if r.Err != nil {
+		return nil, commandError(r)
+	}
+	return []byte(r.Output), nil
 }
 
 type networkLS struct {

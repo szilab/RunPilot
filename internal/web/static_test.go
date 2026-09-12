@@ -40,7 +40,12 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		`id="resticFields"`,
 		`id="rdiffFields"`,
 		`for="storageProvider"`,
-		`class="storage-provider-label">Provider</label>`,
+		`class="storage-provider-label">Location</label>`,
+		`id="storageNewFile"`,
+		`data-page="tasks"`,
+		`id="tasksPage"`,
+		`data-task-kind="continuous"`,
+		`class="row task-choice"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("index.html does not contain %q", want)
@@ -51,6 +56,11 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	}
 	if strings.Contains(page, `id="storageUp"`) {
 		t.Fatal("index.html still exposes top-level storage parent navigation")
+	}
+	for _, removed := range []string{`data-page="processes"`, `data-page="jobs"`, `data-page="backups"`, `data-page="history"`} {
+		if strings.Contains(page, removed) {
+			t.Fatalf("index.html still contains obsolete navigation %s", removed)
+		}
 	}
 	if _, err := staticFS.ReadFile("static/runpilot-logo.png"); err != nil {
 		t.Fatalf("embedded application logo is missing: %v", err)
@@ -66,7 +76,7 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(app)
-	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "api/v1/software/providers", "/buckets", "api/v1/overview", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "Scoop root on Windows", `class="row"`} {
+	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "api/v1/software/providers", "/buckets", "api/v1/overview", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "Scoop root on Windows", "dockerProjectErrors", "Compose operation failed", "const canDelete = ready && !volume.inUse && !busy", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function openNewTextFile", `$("textEditorContent").readOnly=!canEdit`, `class="row"`} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js does not contain %q", want)
 		}
@@ -84,6 +94,13 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	}
 	if strings.Contains(page+script, "cdn.jsdelivr") || strings.Contains(page+script, "unpkg.com") {
 		t.Fatal("terminal assets must not load from a CDN")
+	}
+	styles, err := staticFS.ReadFile("static/styles.css")
+	if err != nil || !strings.Contains(string(styles), ".docker-card { display: grid; align-content: start;") {
+		t.Fatal("Docker project cards do not keep empty-project controls top aligned")
+	}
+	if !strings.Contains(string(styles), `:root[data-theme="dark"] .task-choice { background: #1d2a3e; color: #f8fafc; }`) {
+		t.Fatal("task selector does not have a dark-theme color treatment")
 	}
 	if strings.Contains(script, "Helyi fájlrendszer kezelése.") {
 		t.Fatal("app.js still exposes the obsolete storage subtitle")

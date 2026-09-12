@@ -62,12 +62,20 @@ func Open(dataDir string) (*Store, error) {
 	if err := yaml.Unmarshal(b, &s.cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", s.path, err)
 	}
+	// Storage used to be persisted configuration. Decode it only so opening an
+	// older file can rewrite it without the obsolete section; locations are now
+	// discovered at runtime by the Storage registry.
+	var raw map[string]any
+	if err := yaml.Unmarshal(b, &raw); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", s.path, err)
+	}
+	_, hadLegacyStorage := raw["storage"]
 	before := clone(s.cfg)
 	normalize(&s.cfg)
 	if before.Server.Token == "" {
 		s.tokenCreated = true
 	}
-	if !reflect.DeepEqual(before, s.cfg) {
+	if hadLegacyStorage || !reflect.DeepEqual(before, s.cfg) {
 		if err := s.saveLocked(); err != nil {
 			return nil, err
 		}
@@ -127,13 +135,6 @@ func defaultConfig() model.Config {
 		},
 		Processes: []model.ProcessDefinition{},
 		Jobs:      []model.JobDefinition{},
-		// The local provider exposes every filesystem root accessible to the
-		// RunPilot service identity. Users may replace it with a root-scoped
-		// provider or remove it entirely.
-		Storage: []model.StorageDefinition{{
-			ID: "storage-local", Name: "Local filesystem", Type: model.StorageLocal,
-			Local: &model.LocalStorageSpec{Scope: model.LocalStorageScopeHost},
-		}},
 	}
 	if runtime.GOOS == "windows" {
 		config.Software.Providers = []model.SoftwareProviderDefinition{{
@@ -156,15 +157,6 @@ func normalize(c *model.Config) {
 	}
 	if c.Server.Token == "" {
 		c.Server.Token = randomToken()
-	}
-	// Add the default host-scoped provider to legacy configurations that did
-	// not have a storage setting. An explicit empty list remains respected, so
-	// removing every provider is persistent.
-	if c.Storage == nil {
-		c.Storage = []model.StorageDefinition{{
-			ID: "storage-local", Name: "Local filesystem", Type: model.StorageLocal,
-			Local: &model.LocalStorageSpec{Scope: model.LocalStorageScopeHost},
-		}}
 	}
 	if runtime.GOOS == "windows" {
 		hasScoop := false

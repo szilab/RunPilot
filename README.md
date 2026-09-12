@@ -37,13 +37,11 @@ RunPilot separates user-facing capabilities from external tool integrations.
 
 Planned/possible capabilities include:
 
-- **Applications** — lifecycle, status and logs for long-running workloads.
-- **Jobs** — manually or automatically scheduled one-shot operations.
-- **Backups** — GUI and scheduling around specialist backup tools.
-- **Storage** — writable Local Filesystem browsing (a restricted folder or all drives accessible to the service identity), plus future versioned providers.
+- **Tasks** — one user-facing view for continuous commands, scheduled commands and typed scheduled backups.
+- **Storage** — the always-available Local filesystem plus Docker volumes discovered at runtime.
 - **Software** — install, upgrade and remove portable applications through the RunPilot-owned Scoop provider; WinGet may be a future provider for conventional Windows software.
 - **Terminal** — short-lived interactive local shells in the web UI, using native PTY/ConPTY support rather than command execution pipes.
-- **History and health** — shared execution history, logs and host/workload status.
+- **Health** — shared execution history, logs and host/workload status; logs remain available from their task.
 
 An external integration may serve more than one capability. Restic currently provides backup execution, native retention and repository checking; repository browsing, historical versions and restore remain separate follow-up work.
 
@@ -134,7 +132,9 @@ The default data directory is `%ProgramData%\RunPilot`.
 
 ## Configuration model
 
-Processes are continuous workloads. Scheduled jobs are one-shot executions. Backups are a typed job subtype, so they use the same scheduler, history and manual-run machinery without becoming arbitrary shell-script templates.
+Tasks are presented as one user-facing capability while continuous process supervision and scheduled execution retain separate internal lifecycle engines. Processes are continuous workloads; scheduled jobs are one-shot executions; backups are a typed job subtype sharing scheduler, history and manual-run machinery without becoming arbitrary shell-script templates.
+
+Storage locations are runtime capabilities, not user-managed configuration records. `local` always exposes filesystem roots available to the RunPilot service identity. `docker-volumes` is one Docker-backed location whose root lists current volumes as directories. Volume contents are accessed through short-lived Docker helper containers, never through a Docker host mountpoint; running volumes are read-only.
 
 Processes and command jobs can set per-command environment variables. These values
 are stored in the normal RunPilot YAML configuration and are not encrypted secret
@@ -230,7 +230,7 @@ RunPilot has a deliberately narrow, Linux-only Docker Compose v2 feature. Manage
 
 The Docker page has projects, volumes, and networks. It discovers other Compose projects through Docker too, but leaves them read-only. RunPilot never adopts or edits them. Managed projects expose only `up -d`, `start`, `stop`, and `down`; commands always include the project name, project directory, and Compose file. `down` does not remove volumes or images. A managed directory can be deleted only after Docker confirms there are no containers with its Compose project label. Containers in managed projects can be started, stopped, and deleted only when stopped; their logs can be viewed and a running container can open a PTY-backed `docker exec -it <id> /bin/sh` terminal. These actions validate the container ID, Compose project label, and managed-project directory before using fixed Docker arguments; they are not a general container-control or command API.
 
-Volumes are discovered with Docker metadata and show Compose ownership only when Compose labels exist. RunPilot can create named local-driver volumes, and may delete a volume only when no running or stopped container references it and it is not exposed through RunPilot Storage. Deletion never uses force. A selected local volume can be added as a typed `docker-volume` Storage provider; removal of that provider only stops exposing the data and never deletes the Docker volume. Non-local drivers remain visible but unavailable for browsing. Running-volume Storage is read-only.
+Volumes are discovered with Docker metadata and show Compose ownership only when Compose labels exist. Every discoverable volume is automatically a Storage location. RunPilot can create named local-driver volumes and may delete an unreferenced volume; deletion never uses force. Non-local drivers remain visible but unavailable for browsing. Running-volume Storage is read-only.
 
 Docker volume mountpoints are resolved only through `docker volume inspect` internally and are never sent through the Storage API. This prepares a future provider-neutral Backup source flow; no Docker volume backup job exists yet. A filesystem backup of a volume used by a running application, especially a database, is not automatically application-consistent. Future backup support must explicitly require downtime or provide a separate quiescing strategy.
 

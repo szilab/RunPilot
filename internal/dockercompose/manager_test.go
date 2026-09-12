@@ -5,7 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/szilab/RunPilot/internal/storage"
 )
 
 type call struct {
@@ -258,6 +261,25 @@ func TestComposeContainerLogsAreBoundedAndScoped(t *testing.T) {
 	}
 }
 
+func TestComposeContainerLogsKeepNewestOutputWhenBounded(t *testing.T) {
+	const id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	logs := strings.Repeat("old log line\n", 1000) + "latest diagnostic\n"
+	inspect := `[{"Id":"` + id + `","State":{"Running":true},"Config":{"Labels":{"com.docker.compose.project":"app"}}}]`
+	f := &fakeRunner{found: true, results: map[string]Result{
+		join([]string{"compose", "version"}): {}, join([]string{"info"}): {},
+		join([]string{"inspect", id}):               {Output: inspect},
+		join([]string{"logs", "--tail", "800", id}): {Output: logs},
+	}}
+	m := NewManagerForTest(t.TempDir(), f, true)
+	if _, err := m.Create("app"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.ContainerLogs(context.Background(), id)
+	if err != nil || !strings.Contains(got, "latest diagnostic\n") || !strings.HasPrefix(got, "(earlier log output truncated)\n") {
+		t.Fatalf("logs do not retain newest output: %q, %v", got, err)
+	}
+}
+
 func TestVolumeDiscoveryUsageAndLifecycle(t *testing.T) {
 	volumeList := `{"Name":"app_db","Driver":"local","Scope":"local","Labels":"com.docker.compose.project=app,com.docker.compose.volume=db"}` + "\n" + `{"Name":"remote","Driver":"nfs","Scope":"global","Labels":""}`
 	inspectContainers := `[{"Name":"/postgres","State":{"Running":true},"Config":{"Labels":{"com.docker.compose.service":"db"}},"Mounts":[{"Type":"volume","Name":"app_db"}]},{"Name":"/old","State":{"Running":false},"Mounts":[{"Type":"volume","Name":"app_db"}]}]`
@@ -284,14 +306,11 @@ func TestVolumeDiscoveryUsageAndLifecycle(t *testing.T) {
 	if got := f.calls[len(f.calls)-1].args; join(got) != join([]string{"volume", "create", "--driver", "local", "--label", "com.runpilot.managed=true", "new_data"}) {
 		t.Fatalf("create args %q", got)
 	}
-	if err := m.DeleteVolume(context.Background(), "app_db", false); !errors.Is(err, ErrVolumeInUse) {
+	if err := m.DeleteVolume(context.Background(), "app_db"); !errors.Is(err, ErrVolumeInUse) {
 		t.Fatalf("used delete %v", err)
 	}
 	results[join([]string{"ps", "-aq"})] = Result{} // new_data is unused
-	if err := m.DeleteVolume(context.Background(), "new_data", true); !errors.Is(err, ErrVolumeStorage) {
-		t.Fatalf("storage delete %v", err)
-	}
-	if err := m.DeleteVolume(context.Background(), "new_data", false); err != nil {
+	if err := m.DeleteVolume(context.Background(), "new_data"); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.calls[len(f.calls)-1].args; join(got) != join([]string{"volume", "rm", "new_data"}) {
@@ -299,15 +318,55 @@ func TestVolumeDiscoveryUsageAndLifecycle(t *testing.T) {
 	}
 }
 
-func TestVolumeDetailsStayInternal(t *testing.T) {
-	results := map[string]Result{join([]string{"compose", "version"}): {}, join([]string{"info"}): {}, join([]string{"volume", "inspect", "app_db"}): {Output: `[{"Name":"app_db","Driver":"local","Mountpoint":"/var/lib/docker/volumes/app_db/_data"}]`}}
-	m := NewManagerForTest(t.TempDir(), &fakeRunner{found: true, results: results}, true)
-	d, err := m.VolumeDetails(context.Background(), "app_db")
-	if err != nil || d.Driver != "local" || d.Mountpoint == "" {
-		t.Fatalf("details %#v %v", d, err)
-	}
+func TestVolumeHelperPathsStayStructured(t *testing.T) {
 	if ValidVolumeName("../escape") || ValidVolumeName("bad name") || !ValidVolumeName("my.data_1") {
 		t.Fatal("volume name validation")
+	}
+	for _, value := range []string{"../escape", "/absolute", "one//two", "one\\two"} {
+		if _, err := helperRelativePath(value); err == nil {
+			t.Fatalf("accepted helper path %q", value)
+		}
+	}
+}
+
+func TestDockerVolumeHelperUsesDockerMountAndKeepsLatestEntries(t *testing.T) {
+	results := map[string]Result{
+		join([]string{"image", "inspect", volumeHelperImage}): {},
+		join([]string{"run", "--rm", "--mount", "type=volume,src=postgres_data,dst=/runpilot-volume,readonly", volumeHelperImage, "sh", "-c", volumeHelperListScript, "runpilot-volume-list", "/runpilot-volume"}): {Output: "data\x00d\x00config.yml\x00f\x00"},
+		join([]string{"run", "--rm", "--mount", "type=volume,src=postgres_data,dst=/runpilot-volume,readonly", volumeHelperImage, "cat", "/runpilot-volume/config.yml"}):                                           {Output: "enabled: true\n"},
+	}
+	f := &fakeRunner{found: true, results: results}
+	m := NewManagerForTest(t.TempDir(), f, true)
+	entries, err := m.ListDockerVolume(context.Background(), "postgres_data", "", storage.ListOptions{})
+	if err != nil || len(entries) != 2 || entries[0].Name != "data" || entries[1].Name != "config.yml" {
+		t.Fatalf("entries %#v, %v", entries, err)
+	}
+	data, err := m.ReadDockerVolume(context.Background(), "postgres_data", "config.yml")
+	if err != nil || string(data) != "enabled: true\n" {
+		t.Fatalf("read %q, %v", data, err)
+	}
+	imageInspects := 0
+	for _, call := range f.calls {
+		if join(call.args) == join([]string{"image", "inspect", volumeHelperImage}) {
+			imageInspects++
+		}
+		if join(call.args) == join([]string{"volume", "inspect", "postgres_data"}) || strings.Contains(join(call.args), "/var/lib/docker") {
+			t.Fatalf("helper used host volume access: %#v", call)
+		}
+	}
+	if imageInspects != 1 {
+		t.Fatalf("helper image was checked %d times, want cached once", imageInspects)
+	}
+}
+
+func TestDockerVolumeHelperReportsExplicitPullFailure(t *testing.T) {
+	f := &fakeRunner{found: true, results: map[string]Result{
+		join([]string{"image", "inspect", volumeHelperImage}): {Err: errors.New("missing")},
+		join([]string{"pull", volumeHelperImage}):             {Output: "pull denied", Err: errors.New("exit")},
+	}}
+	m := NewManagerForTest(t.TempDir(), f, true)
+	if _, err := m.ReadDockerVolume(context.Background(), "postgres_data", "config.yml"); err == nil || !strings.Contains(err.Error(), "obtain Docker volume helper image") {
+		t.Fatalf("helper pull error = %v", err)
 	}
 }
 

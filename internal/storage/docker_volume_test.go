@@ -1,79 +1,88 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
-
-	"github.com/szilab/RunPilot/internal/model"
 )
 
-type fakeVolumeResolver struct {
-	details DockerVolumeDetails
-	usage   DockerVolumeUsage
+type fakeDockerVolumes struct {
+	state   State
+	volumes []DockerVolumeDescriptor
+	entries map[string][]Entry
+	reads   map[string][]byte
 	err     error
 }
 
-func (f *fakeVolumeResolver) VolumeDetails(context.Context, string) (DockerVolumeDetails, error) {
-	return f.details, f.err
+func (f *fakeDockerVolumes) DockerStorageState(context.Context) State { return f.state }
+func (f *fakeDockerVolumes) ListStorageVolumes(context.Context) ([]DockerVolumeDescriptor, error) {
+	return f.volumes, f.err
 }
-func (f *fakeVolumeResolver) VolumeUsage(context.Context, string) (DockerVolumeUsage, error) {
-	return f.usage, f.err
+func (f *fakeDockerVolumes) ListDockerVolume(_ context.Context, volume, path string, _ ListOptions) ([]Entry, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.entries[volume+":"+path], nil
+}
+func (f *fakeDockerVolumes) ReadDockerVolume(_ context.Context, volume, path string) ([]byte, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.reads[volume+":"+path], nil
 }
 
-func TestDockerVolumeDelegatesAndBecomesReadOnly(t *testing.T) {
-	root := t.TempDir()
-	f := &fakeVolumeResolver{details: DockerVolumeDetails{Driver: "local", Mountpoint: root}}
-	p, err := NewDockerVolume(model.DockerVolumeStorageSpec{Volume: "app_db"}, f)
+func TestDockerVolumesIsOneVirtualStorageLocation(t *testing.T) {
+	fake := &fakeDockerVolumes{state: State{Status: "ready"}, volumes: []DockerVolumeDescriptor{{Name: "postgres_data"}, {Name: "jellyfin_config"}}}
+	registry := NewRegistry(fake)
+	locations := registry.List(context.Background())
+	if len(locations) != 2 || locations[0].ID != "local" || locations[1].ID != "docker-volumes" || locations[1].Name != "Docker volumes" {
+		t.Fatalf("locations = %#v", locations)
+	}
+	p, err := registry.Provider(context.Background(), "docker-volumes")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.State().Status != "ready" || !p.Capabilities().Upload {
-		t.Fatalf("state %#v caps %#v", p.State(), p.Capabilities())
+	root, err := p.List("")
+	if err != nil || len(root.Entries) != 2 || root.Entries[0].Path != "jellyfin_config" || root.Entries[0].Type != "directory" {
+		t.Fatalf("root = %#v, %v", root, err)
 	}
-	if err := p.Upload("", "note.txt", bytes.NewBufferString("ok")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "note.txt")); err != nil {
-		t.Fatal(err)
-	}
-	f.usage.Running = true
-	if p.State().Status != "read-only" || p.Capabilities().Upload || !p.Capabilities().Browse {
-		t.Fatalf("readonly state %#v caps %#v", p.State(), p.Capabilities())
-	}
-	if err := p.WriteText("note.txt", "no"); err == nil {
-		t.Fatal("running volume mutation accepted")
-	}
-	if _, err := p.ResolveBackupSource(""); err == nil {
-		t.Fatal("running volume backup source accepted")
-	}
-	f.usage.Running = false
-	source, err := p.ResolveBackupSource("")
-	if err != nil || source.Path == "" {
-		t.Fatalf("source %#v %v", source, err)
+	if root.Capabilities == nil || !root.Capabilities.Browse || root.Capabilities.Download {
+		t.Fatalf("root capabilities = %#v", root.Capabilities)
 	}
 }
 
-func TestDockerVolumeUnavailableAndDefinitionValidation(t *testing.T) {
-	if err := NormalizeDefinition(&model.StorageDefinition{Type: model.StorageDockerVolume}); err == nil {
-		t.Fatal("missing volume config accepted")
+func TestDockerVolumesPathsAndReadOnlyCapabilities(t *testing.T) {
+	fake := &fakeDockerVolumes{state: State{Status: "ready"}, volumes: []DockerVolumeDescriptor{{Name: "app", Running: true}}, entries: map[string][]Entry{"app:config": {{Name: "settings.yml", Path: "config/settings.yml", Type: "file"}}}, reads: map[string][]byte{"app:config/settings.yml": []byte("ok")}}
+	p := NewDockerVolumes(fake)
+	for _, value := range []string{"../x", "/app/x", "app//x", "app/../x", "app\\x"} {
+		if _, _, err := splitDockerVolumePath(value); err == nil {
+			t.Fatalf("accepted unsafe path %q", value)
+		}
 	}
-	f := &fakeVolumeResolver{details: DockerVolumeDetails{Driver: "nfs", Mountpoint: "/unused"}}
-	p, err := NewDockerVolume(model.DockerVolumeStorageSpec{Volume: "remote"}, f)
+	listing, err := p.List("app/config")
+	if err != nil || listing.ParentPath == nil || *listing.ParentPath != "app" || listing.State == nil || listing.State.Status != "read-only" {
+		t.Fatalf("listing = %#v, %v", listing, err)
+	}
+	if caps := p.CapabilitiesFor("app/config"); !caps.Browse || !caps.Download || caps.Upload {
+		t.Fatalf("caps = %#v", caps)
+	}
+	object, err := p.Open("app/config/settings.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state := p.State(); state.Status != "unavailable" {
-		t.Fatalf("state %#v", state)
+	object.Reader.Close()
+}
+
+func TestDockerVolumesNeverUsesHostMountpoint(t *testing.T) {
+	// This fake has no mountpoint or Local adapter. Reads only reach the
+	// Docker-mediated accessor, even when the host could not access a volume.
+	fake := &fakeDockerVolumes{state: State{Status: "ready"}, reads: map[string][]byte{"private:secret": []byte("through Docker")}}
+	p := NewDockerVolumes(fake)
+	if _, err := p.Open("private/secret"); err != nil {
+		t.Fatal(err)
 	}
-	f.err = errors.New("Docker daemon unavailable")
-	if state := p.State(); state.Status != "unavailable" {
-		t.Fatalf("state %#v", state)
-	}
-	if _, err := ProviderFor(model.StorageDefinition{Type: model.StorageDockerVolume, DockerVolume: &model.DockerVolumeStorageSpec{Volume: "remote"}}, f); err != nil {
-		t.Fatalf("factory: %v", err)
+	fake.err = errors.New("helper mount failed")
+	if _, err := p.Open("private/secret"); err == nil {
+		t.Fatal("Docker helper failure was hidden")
 	}
 }
