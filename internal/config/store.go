@@ -127,6 +127,14 @@ func defaultConfig() model.Config {
 		},
 		Processes: []model.ProcessDefinition{},
 		Jobs:      []model.JobDefinition{},
+		Storage: []model.StorageDefinition{{
+			ID: "storage-local", Name: "Helyi fájlrendszer", Type: model.StorageLocal,
+			Local: &model.LocalStorageSpec{Scope: model.LocalStorageScopeHost},
+		}},
+		Software: model.SoftwareConfig{Providers: []model.SoftwareProviderDefinition{{
+			ID: "scoop", Name: "RunPilot Scoop", Type: model.SoftwareProviderScoop,
+			Scoop: &model.ScoopProviderSpec{},
+		}}},
 	}
 }
 
@@ -142,6 +150,29 @@ func normalize(c *model.Config) {
 	}
 	if c.Server.Token == "" {
 		c.Server.Token = randomToken()
+	}
+	hasLocalFilesystem := false
+	for _, storage := range c.Storage {
+		if storage.ID == "storage-local" {
+			hasLocalFilesystem = true
+			break
+		}
+	}
+	if !hasLocalFilesystem {
+		c.Storage = append(c.Storage, model.StorageDefinition{ID: "storage-local", Name: "Helyi fájlrendszer", Type: model.StorageLocal, Local: &model.LocalStorageSpec{Scope: model.LocalStorageScopeHost}})
+	}
+	hasScoop := false
+	for _, provider := range c.Software.Providers {
+		if provider.ID == "scoop" {
+			hasScoop = true
+			break
+		}
+	}
+	if !hasScoop {
+		c.Software.Providers = append(c.Software.Providers, model.SoftwareProviderDefinition{
+			ID: "scoop", Name: "RunPilot Scoop", Type: model.SoftwareProviderScoop,
+			Scoop: &model.ScoopProviderSpec{},
+		})
 	}
 	for i := range c.Processes {
 		model.NormalizeProcess(&c.Processes[i])

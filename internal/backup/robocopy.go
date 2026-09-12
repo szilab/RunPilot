@@ -9,59 +9,42 @@ import (
 	"github.com/szilab/RunPilot/internal/model"
 )
 
-func Build(spec model.BackupSpec) (model.CommandSpec, error) {
-	if strings.TrimSpace(spec.Source) == "" || strings.TrimSpace(spec.Destination) == "" {
-		return model.CommandSpec{}, fmt.Errorf("backup source and destination are required")
-	}
-	engine := strings.ToLower(strings.TrimSpace(spec.Engine))
-	if engine == "" {
-		engine = "robocopy"
-	}
-	switch engine {
-	case "robocopy":
-		if runtime.GOOS != "windows" {
-			return model.CommandSpec{}, fmt.Errorf("robocopy backup engine is only available on Windows")
-		}
-		return buildRobocopy(spec)
-	case "restic":
-		if spec.Mode == model.BackupMirror {
-			return model.CommandSpec{}, fmt.Errorf("restic does not support mirror mode")
-		}
-		args := []string{"-r", spec.Destination, "backup", spec.Source}
-		for _, excluded := range append(spec.ExcludeDirs, spec.ExcludeFiles...) {
-			args = append(args, "--exclude", excluded)
-		}
-		return model.CommandSpec{Path: "restic", Args: append(args, spec.AdditionalArgs...), Interpreter: "direct"}, nil
-	case "rdiff-backup":
-		args := []string{}
-		for _, excluded := range append(spec.ExcludeDirs, spec.ExcludeFiles...) {
-			args = append(args, "--exclude", excluded)
-		}
-		args = append(args, spec.Source, spec.Destination)
-		return model.CommandSpec{Path: "rdiff-backup", Args: append(args, spec.AdditionalArgs...), Interpreter: "direct"}, nil
-	default:
-		return model.CommandSpec{}, fmt.Errorf("unsupported backup engine %q", spec.Engine)
-	}
-}
+type robocopyProvider struct{}
 
-func buildRobocopy(spec model.BackupSpec) (model.CommandSpec, error) {
-	args := []string{spec.Source, spec.Destination}
-	switch spec.Mode {
+func (robocopyProvider) Name() string               { return "robocopy" }
+func (robocopyProvider) Capabilities() Capabilities { return Capabilities{DirectMirror: true} }
+func (robocopyProvider) Validate(spec model.BackupSpec) error {
+	if runtime.GOOS != "windows" {
+		return fmt.Errorf("robocopy backup engine is only available on Windows")
+	}
+	r := spec.Robocopy
+	if r == nil {
+		return fmt.Errorf("robocopy configuration is required")
+	}
+	if strings.TrimSpace(r.Source) == "" || strings.TrimSpace(r.Destination) == "" {
+		return fmt.Errorf("robocopy source and destination are required")
+	}
+	if r.Mode != "" && r.Mode != model.BackupCopy && r.Mode != model.BackupMirror {
+		return fmt.Errorf("unsupported robocopy mode %q", r.Mode)
+	}
+	if r.Retries < 0 || r.RetryWaitSeconds < 0 {
+		return fmt.Errorf("robocopy retries and retry wait cannot be negative")
+	}
+	return nil
+}
+func (robocopyProvider) Plan(spec model.BackupSpec) (Plan, error) {
+	r := spec.Robocopy
+	args := []string{r.Source, r.Destination}
+	switch r.Mode {
 	case model.BackupMirror:
 		args = append(args, "/MIR")
 	case model.BackupCopy, "":
 		args = append(args, "/E")
 	default:
-		return model.CommandSpec{}, fmt.Errorf("unsupported backup mode %q", spec.Mode)
+		return Plan{}, fmt.Errorf("unsupported backup mode %q", r.Mode)
 	}
-	retries := spec.Retries
-	if retries < 0 {
-		retries = 0
-	}
-	wait := spec.RetryWaitSeconds
-	if wait <= 0 {
-		wait = 5
-	}
+	retries := r.Retries
+	wait := r.RetryWaitSeconds
 	args = append(args,
 		"/COPY:DAT",
 		"/DCOPY:DAT",
@@ -70,20 +53,16 @@ func buildRobocopy(spec model.BackupSpec) (model.CommandSpec, error) {
 		"/W:"+strconv.Itoa(wait),
 		"/NP",
 	)
-	if len(spec.ExcludeDirs) > 0 {
+	if len(r.ExcludeDirs) > 0 {
 		args = append(args, "/XD")
-		args = append(args, spec.ExcludeDirs...)
+		args = append(args, r.ExcludeDirs...)
 	}
-	if len(spec.ExcludeFiles) > 0 {
+	if len(r.ExcludeFiles) > 0 {
 		args = append(args, "/XF")
-		args = append(args, spec.ExcludeFiles...)
+		args = append(args, r.ExcludeFiles...)
 	}
-	args = append(args, spec.AdditionalArgs...)
-	return model.CommandSpec{
-		Path:        "robocopy.exe",
-		Args:        args,
-		Interpreter: "direct",
-	}, nil
+	args = append(args, r.AdditionalArgs...)
+	return Plan{Provider: "Robocopy", Steps: []Step{{Name: "backup", Command: model.CommandSpec{Path: "robocopy.exe", Args: args, Interpreter: "direct"}, Success: ExitCodeSuccess}}}, nil
 }
 
 func ExitCodeSuccess(code int) bool {

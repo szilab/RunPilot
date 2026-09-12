@@ -4,20 +4,23 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RunPilot</title>
+  <link rel="icon" type="image/png" href="runpilot-logo.png">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">RP</div>
-        <div><strong>RunPilot</strong><span>Process management</span></div>
+        <img class="brand-mark" src="runpilot-logo.png" alt="RunPilot logo">
+        <div><strong>RunPilot</strong><span>Windows automation</span></div>
       </div>
       <nav>
         <button class="nav active" data-page="overview">Overview</button>
         <button class="nav" data-page="processes">Processes</button>
-        <button class="nav" data-page="jobs">Scheduled jobs</button>
+        <button class="nav" data-page="jobs">Scheduler</button>
         <button class="nav" data-page="backups">Backups</button>
+        <button class="nav" data-page="storage">Storage</button>
+        <button class="nav" data-page="software">Software</button>
         <button class="nav" data-page="history">History</button>
       </nav>
       <div class="side-foot">
@@ -33,6 +36,7 @@
           <p id="pageSubtitle">RunPilot service and resource health at a glance.</p>
         </div>
         <div class="header-actions">
+          <button id="themeToggle" class="button secondary theme-toggle" type="button" aria-pressed="false" title="Switch to dark theme">☾ <span>Dark theme</span></button>
           <button id="primaryAction" class="button primary">Add process</button>
         </div>
       </header>
@@ -53,7 +57,7 @@
         <div id="processGrid" class="row-list"></div>
         <div id="processEmpty" class="empty hidden">
           <h2>No managed processes</h2>
-          <p>Add an executable or supported script.</p>
+          <p>Add an executable, PowerShell script, batch file or Python program.</p>
         </div>
       </section>
 
@@ -67,13 +71,13 @@
 
       <section id="backupsPage" class="page">
         <div class="notice">
-          <strong>Typed backup engines</strong>
-          <span>Use Robocopy on Windows, or Restic and rdiff-backup where installed.</span>
+          <strong>Backup providers: Robocopy, Restic and rdiff-backup</strong>
+          <span>Copy and mirror jobs use the built-in <code>robocopy.exe</code>. Exit codes 0–7 are treated as successful/non-fatal.</span>
         </div>
         <div id="backupGrid" class="row-list"></div>
         <div id="backupEmpty" class="empty hidden">
           <h2>No backup jobs</h2>
-          <p>Schedule a typed filesystem backup.</p>
+          <p>Create scheduled copy, repository snapshot, or increment-based backups.</p>
         </div>
       </section>
 
@@ -88,6 +92,29 @@
           <h2>No runs yet</h2>
           <p>Process exits and scheduled/manual job executions will appear here.</p>
         </div>
+      </section>
+
+      <section id="storagePage" class="page">
+        <div id="storageBrowser">
+          <div class="section-head storage-toolbar"><div><h2 id="storageBrowserTitle">Helyi fájlrendszer</h2><select id="storageProvider" aria-label="Tároló kiválasztása"></select></div><div class="row-actions"><label class="check compact-check"><input id="storageShowHidden" type="checkbox"> Rejtett elemek</label><button id="storageUp" class="button secondary small">..</button><label class="button secondary small">Upload<input id="storageUpload" type="file" multiple hidden></label><button id="storageCreate" class="button secondary small">New folder</button></div></div>
+          <div id="storageBreadcrumbs" class="meta"></div><div id="storageEntries" class="row-list"></div>
+        </div>
+        <div id="storageEmpty" class="empty hidden"><h2>Local filesystem unavailable</h2><p>No accessible filesystem roots were found.</p></div>
+      </section>
+
+      <section id="softwarePage" class="page">
+        <div class="software-controller"><label for="softwareProviderSelect">Provider</label><select id="softwareProviderSelect" aria-label="Software provider"></select></div>
+        <div id="softwareProviderCard" class="row-list software-card"></div>
+        <div id="softwareTabs" class="software-tabs hidden">
+          <button class="button secondary small active" data-software-tab="installed">Installed</button>
+          <button class="button secondary small" data-software-tab="search">Search</button>
+          <button class="button secondary small" data-software-tab="updates">Updates</button>
+          <button class="button secondary small" data-software-tab="buckets">Buckets</button>
+          <button id="softwareUpgradeAll" class="button primary small">Upgrade all</button>
+        </div>
+        <div id="softwareSearchBar" class="software-search hidden"><input id="softwareSearchInput" placeholder="Search the managed Scoop main bucket"><button id="softwareSearchButton" class="button primary small">Search</button></div>
+        <div id="softwareBucketBar" class="software-bucket-bar hidden"><input id="softwareBucketName" placeholder="Bucket name"><input id="softwareBucketSource" placeholder="Optional HTTPS bucket URL"><button id="softwareAddBucket" class="button primary small">Add bucket</button></div>
+        <div id="softwarePackages" class="row-list"></div>
       </section>
     </main>
   </div>
@@ -121,13 +148,20 @@
             <option value="powershell">PowerShell</option>
             <option value="cmd">CMD / batch</option>
             <option value="python">Python</option>
-            <option value="sh">sh</option>
-            <option value="bash">bash</option>
           </select>
         </label>
         <label class="span-2">Executable or script path<input id="processPath" placeholder="C:\Tools\myapp.exe" required></label>
         <label class="span-2">Arguments<input id="processArgs" placeholder='--port 8080 --mode service'></label>
         <label class="span-2">Working directory<input id="processCwd" placeholder="Optional"></label>
+        <div class="environment-editor span-2" data-command-prefix="process">
+          <div class="environment-head">
+            <div><strong>Environment variables</strong><span>Optional values passed only to this process.</span></div>
+            <button class="button secondary small env-add" type="button">+ Add variable</button>
+          </div>
+          <div id="processEnvRows" class="environment-rows"></div>
+          <p id="processEnvEmpty" class="environment-empty">No custom variables configured.</p>
+          <p id="processCommandError" class="form-error hidden" role="alert"></p>
+        </div>
         <label>Restart policy
           <select id="processRestart">
             <option value="on-failure">On failure</option>
@@ -160,12 +194,20 @@
             <option value="powershell">PowerShell</option>
             <option value="cmd">CMD / batch</option>
             <option value="python">Python</option>
-            <option value="sh">sh</option>
-            <option value="bash">bash</option>
           </select>
         </label>
         <label class="span-2">Executable or script path<input id="jobPath" required></label>
         <label class="span-2">Arguments<input id="jobArgs"></label>
+        <label class="span-2">Working directory<input id="jobCwd" placeholder="Optional"></label>
+        <div class="environment-editor span-2" data-command-prefix="job">
+          <div class="environment-head">
+            <div><strong>Environment variables</strong><span>Optional values passed only to this job.</span></div>
+            <button class="button secondary small env-add" type="button">+ Add variable</button>
+          </div>
+          <div id="jobEnvRows" class="environment-rows"></div>
+          <p id="jobEnvEmpty" class="environment-empty">No custom variables configured.</p>
+          <p id="jobCommandError" class="form-error hidden" role="alert"></p>
+        </div>
         <label>Schedule
           <select id="jobScheduleType">
             <option value="interval">Interval</option>
@@ -188,27 +230,21 @@
   <dialog id="backupDialog" class="dialog">
     <form method="dialog" id="backupForm">
       <div class="dialog-head">
-        <div><h2 id="backupDialogTitle">Add backup</h2><p>Schedule a typed backup engine.</p></div>
+        <div><h2 id="backupDialogTitle">Add backup</h2><p>Schedule a backup using the selected provider.</p></div>
         <button class="icon-btn" type="button" data-dismiss="backupDialog" aria-label="Close">×</button>
       </div>
       <input type="hidden" id="backupId">
       <div class="form-grid">
         <label>Name<input id="backupName" required></label>
-        <label>Engine
-          <select id="backupEngine">
-            <option value="robocopy">Robocopy (Windows)</option>
-            <option value="restic">Restic</option>
-            <option value="rdiff-backup">rdiff-backup</option>
-          </select>
-        </label>
+        <label>Provider<select id="backupProvider"><option value="robocopy">Robocopy</option><option value="restic">Restic</option><option value="rdiff-backup">rdiff-backup</option></select></label>
         <label>Mode
           <select id="backupMode">
             <option value="copy">Copy / update</option>
             <option value="mirror">Mirror (deletes destination extras)</option>
           </select>
         </label>
-        <label class="span-2">Source folder<input id="backupSource" placeholder="D:\Data" required></label>
-        <label class="span-2">Destination folder<input id="backupDestination" placeholder="F:\Backup\Data" required></label>
+        <label class="span-2">Source folder<input id="backupSource" placeholder="D:\Data"></label>
+        <label class="span-2">Destination folder<input id="backupDestination" placeholder="F:\Backup\Data"></label>
         <label>Schedule
           <select id="backupScheduleType">
             <option value="daily">Daily</option>
@@ -221,6 +257,23 @@
         <label id="backupCronWrap" class="hidden">Cron<input id="backupCron" placeholder="0 0 3 * * *"></label>
         <label>Retries<input id="backupRetries" type="number" min="0" value="2"></label>
         <label class="check"><input id="backupEnabled" type="checkbox" checked> Schedule enabled</label>
+        <div id="resticFields" class="span-2 provider-fields hidden">
+          <label>Repository<input id="resticRepository" placeholder="F:\Restic"></label>
+          <label>Source paths (one per line)<textarea id="resticSources" rows="3" placeholder="D:\Documents"></textarea></label>
+          <label>Excludes (one per line)<textarea id="resticExcludes" rows="2"></textarea></label>
+          <label>Tags (one per line)<textarea id="resticTags" rows="2"></textarea></label>
+          <label class="check"><input id="resticVss" type="checkbox"> Use Windows filesystem snapshot (VSS)</label>
+          <label class="check"><input id="resticCheck" type="checkbox"> Check repository after backup</label>
+          <label class="span-2">Password file path (optional)<input id="resticPasswordFile" placeholder="C:\Secure\restic-password.txt"></label>
+          <label class="check span-2"><input id="resticRetentionEnabled" type="checkbox"> Run Restic forget after backup</label>
+          <div id="resticRetentionFields" class="retention-fields span-2 hidden"><label>Keep last<input id="resticKeepLast" type="number" min="0"></label><label>Keep daily<input id="resticKeepDaily" type="number" min="0"></label><label>Keep weekly<input id="resticKeepWeekly" type="number" min="0"></label><label>Keep monthly<input id="resticKeepMonthly" type="number" min="0"></label><label>Keep yearly<input id="resticKeepYearly" type="number" min="0"></label><label>Keep within<input id="resticKeepWithin" placeholder="1y"></label><label class="check span-2"><input id="resticPrune" type="checkbox"> Prune repository</label></div>
+          <label class="span-2">Advanced: executable path (optional)<input id="resticExecutable" placeholder="restic.exe"></label>
+        </div>
+        <div id="rdiffFields" class="span-2 provider-fields hidden">
+          <label>Source folder<input id="rdiffSource" placeholder="D:\Photos"></label><label>Destination folder<input id="rdiffDestination" placeholder="F:\Backups\Photos"></label>
+          <p class="muted span-2">Destination remains a directly browsable current mirror. Do not edit <code>rdiff-backup-data</code>.</p>
+          <label class="span-2">Excludes (one per line)<textarea id="rdiffExcludes" rows="2"></textarea></label><label class="check"><input id="rdiffRetentionEnabled" type="checkbox"> Remove old increments after backup</label><label id="rdiffRetentionWrap" class="hidden">Older than<input id="rdiffOlderThan" placeholder="3M"></label><label class="check"><input id="rdiffVerify" type="checkbox"> Verify after backup</label><label class="span-2">Advanced: executable path (optional)<input id="rdiffExecutable" placeholder="rdiff-backup.exe"></label>
+        </div>
       </div>
       <div id="mirrorWarning" class="warning hidden">Mirror mode uses <code>/MIR</code>. Files that exist only in the destination can be deleted.</div>
       <div class="dialog-actions">
@@ -229,6 +282,10 @@
       </div>
     </form>
   </dialog>
+
+  <dialog id="storageDialog" class="dialog small"><form method="dialog" id="storageForm"><div class="dialog-head"><div><h2>Tároló hozzáadása</h2><p>A Helyi fájlrendszer már alapból elérhető.</p></div><button class="icon-btn" type="button" data-dismiss="storageDialog">×</button></div><label>Név<input id="storageName" required></label><label>Típus<select id="storageType"><option value="local">Helyi fájlrendszer</option></select></label><label>Hozzáférés<select id="storageScope"><option value="root">Korlátozás mappára</option><option value="host">Ez a számítógép</option></select></label><label id="storageRootWrap">Gyökérmappa<input id="storageRoot" placeholder="D:\Data"></label><div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="storageDialog">Mégse</button><button class="button primary">Hozzáadás</button></div></form></dialog>
+  <dialog id="textEditorDialog" class="dialog log-dialog"><div class="dialog-head"><div><h2 id="textEditorTitle">Fájl szerkesztése</h2><p id="textEditorPath"></p></div><button class="icon-btn" id="closeTextEditor" type="button">×</button></div><div class="editor-shell"><pre id="textHighlight" aria-hidden="true"><code></code></pre><textarea id="textEditorContent" class="text-editor" spellcheck="false"></textarea></div><div class="dialog-actions"><button class="button secondary" id="cancelTextEditor" type="button">Mégse</button><button class="button primary" id="saveTextEditor" type="button">Mentés</button></div></dialog>
+
 
   <dialog id="logDialog" class="dialog log-dialog">
     <div class="dialog-head">

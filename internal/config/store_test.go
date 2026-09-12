@@ -53,3 +53,25 @@ func TestDefaultDataDirHonorsEnvironmentAndLinuxDefault(t *testing.T) {
 		t.Fatalf("Linux default = %q", DefaultDataDir())
 	}
 }
+
+func TestSoftwareProviderRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Snapshot().Software.Providers) != 1 || s.Snapshot().Software.Providers[0].ID != "scoop" {
+		t.Fatalf("default software = %#v", s.Snapshot().Software)
+	}
+	custom := filepath.Join(dir, "runpilot-software")
+	if err := s.Update(func(c *model.Config) error { c.Software.Providers[0].Scoop.Root = custom; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Snapshot().Software.Providers[0].Scoop.Root; got != custom {
+		t.Fatalf("root = %q", got)
+	}
+}

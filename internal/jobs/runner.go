@@ -61,7 +61,7 @@ func (r *Runner) execute(def model.JobDefinition, runID string) {
 		return
 	}
 
-	spec, err := commandFor(def)
+	plan, err := planFor(def)
 	if err != nil {
 		_, _ = fmt.Fprintln(logFile, err)
 		_ = logFile.Close()
@@ -69,78 +69,93 @@ func (r *Runner) execute(def model.JobDefinition, runID string) {
 		return
 	}
 
-	cmd, err := launcher.Build(spec)
+	if def.Type == model.JobBackup {
+		_, _ = fmt.Fprintf(logFile, "=== Backup: %s ===\n", plan.Provider)
+	}
+	deadline := time.Time{}
+	if def.TimeoutSeconds > 0 {
+		deadline = started.Add(time.Duration(def.TimeoutSeconds) * time.Second)
+	}
+	code, success, message := -1, true, ""
+	for i, step := range plan.Steps {
+		_, _ = fmt.Fprintf(logFile, "\n=== Step %d/%d: %s ===\n", i+1, len(plan.Steps), step.Name)
+		code, success, message = runStep(logFile, step, deadline, def.TimeoutSeconds)
+		if !success {
+			break
+		}
+	}
+	_ = logFile.Close()
+	r.finish(def, runID, started, code, success, logPath, message)
+}
+
+func runStep(logFile *os.File, step backup.Step, deadline time.Time, timeoutSeconds int) (int, bool, string) {
+	cmd, err := launcher.Build(step.Command)
 	if err != nil {
 		_, _ = fmt.Fprintln(logFile, err)
-		_ = logFile.Close()
-		r.finish(def, runID, started, -1, false, logPath, err.Error())
-		return
+		return -1, false, err.Error()
 	}
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-
-	if err := cmd.Start(); err != nil {
+	cmd.Stdout, cmd.Stderr = logFile, logFile
+	if err = cmd.Start(); err != nil {
 		_, _ = fmt.Fprintln(logFile, "start error:", err)
-		_ = logFile.Close()
-		r.finish(def, runID, started, -1, false, logPath, err.Error())
-		return
+		return -1, false, err.Error()
 	}
-
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-
 	var waitErr error
 	timedOut := false
-	if def.TimeoutSeconds > 0 {
-		timer := time.NewTimer(time.Duration(def.TimeoutSeconds) * time.Second)
-		select {
-		case waitErr = <-done:
-			if !timer.Stop() {
-				<-timer.C
-			}
-		case <-timer.C:
+	if !deadline.IsZero() {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
 			timedOut = true
 			_ = platform.KillProcessTree(cmd.Process.Pid)
 			waitErr = <-done
+		} else {
+			timer := time.NewTimer(remaining)
+			select {
+			case waitErr = <-done:
+				if !timer.Stop() {
+					<-timer.C
+				}
+			case <-timer.C:
+				timedOut = true
+				_ = platform.KillProcessTree(cmd.Process.Pid)
+				waitErr = <-done
+			}
 		}
 	} else {
 		waitErr = <-done
 	}
-	_ = logFile.Close()
-
 	code := -1
 	if cmd.ProcessState != nil {
 		code = cmd.ProcessState.ExitCode()
 	}
-	success := waitErr == nil && code == 0
-	if def.Type == model.JobBackup && def.Backup != nil &&
-		(def.Backup.Engine == "" || def.Backup.Engine == "robocopy") {
-		success = backup.ExitCodeSuccess(code)
-	}
-	message := ""
+	ok := waitErr == nil && step.Success(code)
 	if timedOut {
-		success = false
-		message = fmt.Sprintf("timed out after %d seconds", def.TimeoutSeconds)
-	} else if waitErr != nil && !success {
-		message = waitErr.Error()
+		return code, false, fmt.Sprintf("timed out after %d seconds", timeoutSeconds)
 	}
-	r.finish(def, runID, started, code, success, logPath, message)
+	if !ok && waitErr != nil {
+		return code, false, waitErr.Error()
+	}
+	if !ok {
+		return code, false, fmt.Sprintf("step %s failed with exit code %d", step.Name, code)
+	}
+	return code, true, ""
 }
 
-func commandFor(def model.JobDefinition) (model.CommandSpec, error) {
+func planFor(def model.JobDefinition) (backup.Plan, error) {
 	switch def.Type {
 	case model.JobCommand:
 		if def.Command == nil {
-			return model.CommandSpec{}, fmt.Errorf("command job has no command")
+			return backup.Plan{}, fmt.Errorf("command job has no command")
 		}
-		return *def.Command, nil
+		return backup.Plan{Provider: "command", Steps: []backup.Step{{Name: "command", Command: *def.Command, Success: func(code int) bool { return code == 0 }}}}, nil
 	case model.JobBackup:
 		if def.Backup == nil {
-			return model.CommandSpec{}, fmt.Errorf("backup job has no backup specification")
+			return backup.Plan{}, fmt.Errorf("backup job has no backup specification")
 		}
-		return backup.Build(*def.Backup)
+		return backup.BuildPlan(*def.Backup)
 	default:
-		return model.CommandSpec{}, fmt.Errorf("unsupported job type %q", def.Type)
+		return backup.Plan{}, fmt.Errorf("unsupported job type %q", def.Type)
 	}
 }
 
