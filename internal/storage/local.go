@@ -24,6 +24,9 @@ func NewLocal(spec model.LocalStorageSpec) (*Local, error) {
 	if spec.Scope != model.LocalStorageScopeRoot && spec.Scope != model.LocalStorageScopeHost {
 		return nil, fmt.Errorf("local storage scope must be root or host")
 	}
+	if spec.Scope == model.LocalStorageScopeHost && strings.TrimSpace(spec.Root) != "" {
+		return nil, fmt.Errorf("host-scoped local storage must not specify a root")
+	}
 	l := &Local{spec: spec}
 	if spec.Scope == model.LocalStorageScopeRoot {
 		if strings.TrimSpace(spec.Root) == "" || !filepath.IsAbs(spec.Root) {
@@ -38,7 +41,26 @@ func NewLocal(spec model.LocalStorageSpec) (*Local, error) {
 	return l, nil
 }
 func (l *Local) Capabilities() Capabilities {
-	return Capabilities{Browse: true, Download: true, Upload: true, CreateDirectory: true, Rename: true, Move: true, Copy: true, Delete: true}
+	return Capabilities{Browse: true, Download: true, Upload: true, CreateDirectory: true, Rename: true, Move: true, Copy: true, Delete: true, TextEdit: true}
+}
+func (l *Local) State() State {
+	if l.spec.Scope == model.LocalStorageScopeHost {
+		return State{Status: "ready"}
+	}
+	info, err := os.Stat(l.spec.Root)
+	if errors.Is(err, os.ErrNotExist) {
+		return State{Status: "unavailable", Reason: "Root directory does not exist"}
+	}
+	if errors.Is(err, os.ErrPermission) {
+		return State{Status: "unavailable", Reason: "Permission denied"}
+	}
+	if err != nil {
+		return State{Status: "unavailable", Reason: "Root directory is unavailable"}
+	}
+	if !info.IsDir() {
+		return State{Status: "unavailable", Reason: "Root path is not a directory"}
+	}
+	return State{Status: "ready"}
 }
 
 func validNamespace(p string) ([]string, error) {

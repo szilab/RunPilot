@@ -75,3 +75,33 @@ func TestSoftwareProviderRoundTrip(t *testing.T) {
 		t.Fatalf("root = %q", got)
 	}
 }
+
+func TestStorageDefinitionsRemainOptionalAfterNormalization(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(s.Snapshot().Storage); got != 0 {
+		t.Fatalf("default storage providers = %d, want 0", got)
+	}
+	if err := s.Update(func(c *model.Config) error {
+		c.Storage = []model.StorageDefinition{{ID: "one", Name: "One", Type: model.StorageLocal, Local: &model.LocalStorageSpec{Scope: model.LocalStorageScopeHost}}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(func(c *model.Config) error {
+		c.Storage = []model.StorageDefinition{}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(reopened.Snapshot().Storage); got != 0 {
+		t.Fatalf("removed storage definition was recreated: %#v", reopened.Snapshot().Storage)
+	}
+}

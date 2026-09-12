@@ -82,13 +82,7 @@ func (c *Controller) UpsertStorage(d model.StorageDefinition) (model.StorageDefi
 	if strings.TrimSpace(d.Name) == "" {
 		return d, fmt.Errorf("storage name is required")
 	}
-	if d.Type != model.StorageLocal || d.Local == nil {
-		return d, fmt.Errorf("storage type local is required")
-	}
-	if d.Local.Scope == model.LocalStorageScopeHost {
-		d.Local.Root = ""
-	}
-	if _, err := storage.ProviderFor(d); err != nil {
+	if err := storage.NormalizeDefinition(&d); err != nil {
 		return d, err
 	}
 	if d.ID == "" {

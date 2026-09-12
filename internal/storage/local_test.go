@@ -100,3 +100,12 @@ func TestLocalRootOperationsAndBoundary(t *testing.T) {
 		t.Fatal("upload overwrote existing file")
 	}
 }
+
+func TestLocalScopeValidation(t *testing.T) {
+	if _, err := NewLocal(model.LocalStorageSpec{Scope: model.LocalStorageScopeRoot}); err == nil {
+		t.Fatal("root scope accepted an empty root")
+	}
+	if _, err := NewLocal(model.LocalStorageSpec{Scope: model.LocalStorageScopeHost, Root: t.TempDir()}); err == nil {
+		t.Fatal("host scope accepted a root path")
+	}
+}

@@ -18,8 +18,13 @@ type Capabilities struct {
 	Move            bool `json:"move"`
 	Copy            bool `json:"copy"`
 	Delete          bool `json:"delete"`
+	TextEdit        bool `json:"textEdit"`
 	Versions        bool `json:"versions"`
 	Restore         bool `json:"restore"`
+}
+type State struct {
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
 }
 type Entry struct {
 	Name       string     `json:"name"`
@@ -67,9 +72,21 @@ type TextEditor interface {
 	WriteText(string, string) error
 }
 
-func ProviderFor(d model.StorageDefinition) (Provider, error) {
+type StateProvider interface{ State() State }
+
+// NormalizeDefinition keeps provider-specific configuration rules with the
+// provider factory, so callers do not need to inspect Local settings.
+func NormalizeDefinition(d *model.StorageDefinition) error {
 	if d.Type != model.StorageLocal || d.Local == nil {
-		return nil, fmt.Errorf("unsupported storage provider")
+		return fmt.Errorf("unsupported storage provider")
+	}
+	_, err := NewLocal(*d.Local)
+	return err
+}
+
+func ProviderFor(d model.StorageDefinition) (Provider, error) {
+	if err := NormalizeDefinition(&d); err != nil {
+		return nil, err
 	}
 	return NewLocal(*d.Local)
 }

@@ -127,10 +127,9 @@ func defaultConfig() model.Config {
 		},
 		Processes: []model.ProcessDefinition{},
 		Jobs:      []model.JobDefinition{},
-		Storage: []model.StorageDefinition{{
-			ID: "storage-local", Name: "Helyi fájlrendszer", Type: model.StorageLocal,
-			Local: &model.LocalStorageSpec{Scope: model.LocalStorageScopeHost},
-		}},
+		// Storage has no global switch and no implicit local provider. Users add
+		// the locations RunPilot may expose from the Storage page.
+		Storage: []model.StorageDefinition{},
 		Software: model.SoftwareConfig{Providers: []model.SoftwareProviderDefinition{{
 			ID: "scoop", Name: "RunPilot Scoop", Type: model.SoftwareProviderScoop,
 			Scoop: &model.ScoopProviderSpec{},
@@ -151,15 +150,10 @@ func normalize(c *model.Config) {
 	if c.Server.Token == "" {
 		c.Server.Token = randomToken()
 	}
-	hasLocalFilesystem := false
-	for _, storage := range c.Storage {
-		if storage.ID == "storage-local" {
-			hasLocalFilesystem = true
-			break
-		}
-	}
-	if !hasLocalFilesystem {
-		c.Storage = append(c.Storage, model.StorageDefinition{ID: "storage-local", Name: "Helyi fájlrendszer", Type: model.StorageLocal, Local: &model.LocalStorageSpec{Scope: model.LocalStorageScopeHost}})
+	// Provider definitions are optional. In particular, do not recreate a
+	// removed Local provider during configuration normalization.
+	if c.Storage == nil {
+		c.Storage = []model.StorageDefinition{}
 	}
 	hasScoop := false
 	for _, provider := range c.Software.Providers {

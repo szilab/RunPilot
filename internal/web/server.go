@@ -324,18 +324,18 @@ func (s *Server) handleRunLog(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListStorage(w http.ResponseWriter, r *http.Request) {
 	type view struct {
 		model.StorageDefinition
-		Capabilities any  `json:"capabilities"`
-		Available    bool `json:"available"`
+		Capabilities any           `json:"capabilities"`
+		State        storage.State `json:"state"`
 	}
 	out := make([]view, 0)
 	for _, d := range s.ctrl.StorageDefinitions() {
 		p, e := s.ctrl.StorageProvider(d.ID)
-		v := view{StorageDefinition: d, Available: e == nil}
+		v := view{StorageDefinition: d, State: storage.State{Status: "unavailable", Reason: "Provider configuration is invalid"}}
 		if e == nil {
 			v.Capabilities = p.Capabilities()
-			if d.Local.Scope == model.LocalStorageScopeRoot {
-				_, e = p.List("")
-				v.Available = e == nil
+			v.State = storage.State{Status: "ready"}
+			if stateful, ok := p.(storage.StateProvider); ok {
+				v.State = stateful.State()
 			}
 		}
 		out = append(out, v)
@@ -379,6 +379,10 @@ func (s *Server) handleStorageEntries(w http.ResponseWriter, r *http.Request) {
 	p, e := s.ctrl.StorageProvider(r.PathValue("id"))
 	if e != nil {
 		writeError(w, http.StatusNotFound, e)
+		return
+	}
+	if !p.Capabilities().Browse {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("browse is not supported"))
 		return
 	}
 	storagePath := r.URL.Query().Get("path")
@@ -474,7 +478,7 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = io.Copy(w, o.Reader)
 }
-func (s *Server) mutable(w http.ResponseWriter, id string) (interface {
+func (s *Server) mutable(w http.ResponseWriter, id, action string) (interface {
 	CreateDirectory(string, string) error
 	Rename(string, string) error
 	Move(string, string) error
@@ -485,13 +489,18 @@ func (s *Server) mutable(w http.ResponseWriter, id string) (interface {
 		writeError(w, 404, e)
 		return nil, false
 	}
+	caps := p.Capabilities()
+	if !map[string]bool{"mkdir": caps.CreateDirectory, "rename": caps.Rename, "move": caps.Move, "delete": caps.Delete}[action] {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("%s is not supported", action))
+		return nil, false
+	}
 	m, ok := p.(interface {
 		CreateDirectory(string, string) error
 		Rename(string, string) error
 		Move(string, string) error
 		Delete(string) error
 	})
-	if !ok {
+	if !ok || !p.Capabilities().TextEdit {
 		writeError(w, 405, fmt.Errorf("operation is not supported"))
 		return nil, false
 	}
@@ -536,7 +545,7 @@ func (s *Server) handleCreateDirectory(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &v) {
 		return
 	}
-	m, ok := s.mutable(w, r.PathValue("id"))
+	m, ok := s.mutable(w, r.PathValue("id"), "mkdir")
 	if !ok {
 		return
 	}
@@ -554,7 +563,7 @@ func (s *Server) handleRename(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &v) {
 		return
 	}
-	m, ok := s.mutable(w, r.PathValue("id"))
+	m, ok := s.mutable(w, r.PathValue("id"), "rename")
 	if !ok {
 		return
 	}
@@ -572,7 +581,7 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &v) {
 		return
 	}
-	m, ok := s.mutable(w, r.PathValue("id"))
+	m, ok := s.mutable(w, r.PathValue("id"), "move")
 	if !ok {
 		return
 	}
@@ -662,7 +671,7 @@ func (s *Server) handleStorageDelete(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &v) {
 		return
 	}
-	m, ok := s.mutable(w, r.PathValue("id"))
+	m, ok := s.mutable(w, r.PathValue("id"), "delete")
 	if !ok {
 		return
 	}
