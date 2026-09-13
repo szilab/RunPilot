@@ -121,6 +121,46 @@ func TestLegacyStorageConfigurationIsRemoved(t *testing.T) {
 	}
 }
 
+func TestLegacyRemoteForwardDBusMigratesToHostSessionMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runpilot.yaml")
+	yaml := `version: 1
+server: { bind: 127.0.0.1:9070, token: existing-token }
+remoteTargets:
+  - id: legacy
+    name: Legacy application
+    provider: xpra
+    type: application
+    enabled: true
+    forwardDbus: true
+    command: { path: xterm }
+  - id: default
+    name: Default application
+    provider: xpra
+    type: application
+    enabled: true
+    command: { path: xterm }
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := s.Snapshot().RemoteTargets
+	if targets[0].DBusMode != model.RemoteDBusHost || targets[1].DBusMode != model.RemoteDBusIsolated {
+		t.Fatalf("migrated targets = %#v", targets)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "forwardDbus") {
+		t.Fatalf("legacy D-Bus field was retained: %s", b)
+	}
+}
+
 func containsStorageSection(value string) bool {
 	for _, line := range strings.Split(value, "\n") {
 		if line == "storage:" {

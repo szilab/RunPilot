@@ -179,6 +179,18 @@ func normalize(c *model.Config) {
 	for i := range c.Jobs {
 		model.NormalizeJob(&c.Jobs[i])
 	}
+	for i := range c.RemoteTargets {
+		target := &c.RemoteTargets[i]
+		if target.DBusMode != model.RemoteDBusIsolated && target.DBusMode != model.RemoteDBusHost {
+			if target.ForwardDBus {
+				target.DBusMode = model.RemoteDBusHost
+			} else {
+				target.DBusMode = model.RemoteDBusIsolated
+			}
+		}
+		// Remove the compatibility field on the next normal configuration save.
+		target.ForwardDBus = false
+	}
 }
 
 func clone(in model.Config) model.Config {

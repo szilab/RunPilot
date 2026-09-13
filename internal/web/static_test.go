@@ -13,6 +13,9 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	page := string(index)
 	for _, want := range []string{
 		`data-page="overview"`,
+		`id="sidebarToggle"`,
+		`class="nav-icon"`,
+		`class="nav-label"`,
 		`id="overviewPage"`,
 		`runpilot-logo.png`,
 		`id="themeToggle"`,
@@ -76,7 +79,7 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(app)
-	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "api/v1/software/providers", "/buckets", "api/v1/overview", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "Scoop root on Windows", "dockerProjectErrors", "Compose operation failed", "const canDelete = ready && !volume.inUse && !busy", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function openNewTextFile", `$("textEditorContent").readOnly=!canEdit`, `class="row"`} {
+	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "api/v1/software/providers", "/buckets", "api/v1/overview", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "Scoop root on Windows", "dockerProjectErrors", "Compose operation failed", "const canDelete = ready && !volume.inUse && !busy", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function openNewTextFile", `$("textEditorContent").readOnly=!canEdit`, "function initializeSidebar", "sidebarStorageKey", `class="row"`} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js does not contain %q", want)
 		}
@@ -101,6 +104,9 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	}
 	if !strings.Contains(string(styles), `:root[data-theme="dark"] .task-choice { background: #1d2a3e; color: #f8fafc; }`) {
 		t.Fatal("task selector does not have a dark-theme color treatment")
+	}
+	if !strings.Contains(string(styles), ".shell.sidebar-collapsed") || !strings.Contains(string(styles), "main { padding: 17px 21px 24px;") {
+		t.Fatal("sidebar collapse or reduced main padding styles are missing")
 	}
 	if strings.Contains(script, "Helyi fájlrendszer kezelése.") {
 		t.Fatal("app.js still exposes the obsolete storage subtitle")

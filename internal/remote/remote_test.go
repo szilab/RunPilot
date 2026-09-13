@@ -83,3 +83,40 @@ func TestStartFailureIsRecorded(t *testing.T) {
 		t.Fatalf("view=%#v", view)
 	}
 }
+
+func TestSessionProbeReportsNoVisibleWindows(t *testing.T) {
+	done := make(chan error)
+	provider := &probeProvider{done: done}
+	service := New(t.TempDir(), provider)
+	view, err := service.Start(context.Background(), target())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		current, _ := service.Get(view.ID)
+		if current.WindowCount != nil {
+			if *current.WindowCount != 0 || current.Message == "" {
+				t.Fatalf("probe view=%#v", current)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("session probe was not recorded")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(done)
+}
+
+type probeProvider struct{ done chan error }
+
+func (p *probeProvider) ID() string { return "fake" }
+func (p *probeProvider) Status(context.Context) model.RemoteProviderStatus {
+	return model.RemoteProviderStatus{ID: "fake", State: "available"}
+}
+func (p *probeProvider) Start(context.Context, StartRequest) (Runtime, error) {
+	return Runtime{Endpoint: "127.0.0.1:1", Done: p.done, Probe: func(context.Context) (SessionProbe, error) {
+		return SessionProbe{WindowCount: 0, Message: "no windows"}, nil
+	}}, nil
+}

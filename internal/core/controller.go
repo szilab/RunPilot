@@ -115,6 +115,17 @@ func (c *Controller) UpsertRemoteTarget(target model.RemoteTarget) (model.Remote
 		return target, fmt.Errorf("remote targets require a direct executable command")
 	}
 	target.Command.Interpreter = "direct"
+	if target.DBusMode == "" {
+		if target.ForwardDBus {
+			target.DBusMode = model.RemoteDBusHost
+		} else {
+			target.DBusMode = model.RemoteDBusIsolated
+		}
+	}
+	if target.DBusMode != model.RemoteDBusIsolated && target.DBusMode != model.RemoteDBusHost {
+		return target, fmt.Errorf("remote target D-Bus mode must be isolated or host-session")
+	}
+	target.ForwardDBus = false
 	if err := model.ValidateCommand(target.Command); err != nil {
 		return target, err
 	}

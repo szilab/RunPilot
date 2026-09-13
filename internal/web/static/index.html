@@ -10,23 +10,28 @@
 </head>
 <body>
   <div class="shell">
-    <aside class="sidebar">
-      <div class="brand">
-        <img class="brand-mark" src="runpilot-logo.png" alt="RunPilot logo">
-        <div><strong>RunPilot</strong><span>Server automation</span></div>
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-head">
+        <div class="brand">
+          <img class="brand-mark" src="runpilot-logo.png" alt="RunPilot logo">
+          <div class="brand-text"><strong>RunPilot</strong><span>Server automation</span></div>
+        </div>
+        <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-controls="sidebar" aria-expanded="true" title="Collapse sidebar">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m14 7-5 5 5 5M20 5v14"/></svg><span>Collapse sidebar</span>
+        </button>
       </div>
       <nav>
-        <button class="nav active" data-page="overview">Overview</button>
-        <button id="dockerNav" class="nav hidden" data-page="docker">Docker</button>
-        <button class="nav" data-page="storage">Storage</button>
-        <button class="nav" data-page="tasks">Tasks</button>
-        <button class="nav" data-page="software">Software</button>
-        <button class="nav" data-page="remote">Remote</button>
-        <button id="terminalNav" class="nav hidden" data-page="terminal">Terminal</button>
+        <button class="nav active" type="button" data-page="overview" title="Overview"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><rect x="14" y="14" width="6" height="6"/></svg><span class="nav-label">Overview</span></button>
+        <button id="dockerNav" class="nav hidden" type="button" data-page="docker" title="Docker"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9h7v7H4zM13 9h7v7h-7zM8.5 3v4M16.5 3v4M12 17h4v4h-4z"/></svg><span class="nav-label">Docker</span></button>
+        <button class="nav" type="button" data-page="storage" title="Storage"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3zM3 7V5h7l2 2"/></svg><span class="nav-label">Storage</span></button>
+        <button class="nav" type="button" data-page="tasks" title="Tasks"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="m8.5 12 2.3 2.3 4.7-5"/></svg><span class="nav-label">Tasks</span></button>
+        <button class="nav" type="button" data-page="software" title="Software"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 5h14v14H5zM8 9h8M8 13h5"/></svg><span class="nav-label">Software</span></button>
+        <button class="nav" type="button" data-page="remote" title="Remote"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="1"/><path d="M8 21h8M12 17v4"/></svg><span class="nav-label">Remote</span></button>
+        <button id="terminalNav" class="nav hidden" type="button" data-page="terminal" title="Terminal"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg><span class="nav-label">Terminal</span></button>
       </nav>
       <div class="side-foot">
         <span id="connectionDot" class="dot"></span>
-        <span id="connectionText">Not authenticated</span>
+        <span id="connectionText" class="side-foot-label">Not authenticated</span>
       </div>
     </aside>
 
@@ -101,7 +106,7 @@
           <section class="overview-section"><div class="section-head"><h2>Configured targets</h2></div><div id="remoteTargets" class="row-list"></div><div id="remoteTargetsEmpty" class="empty hidden"><h2>No remote targets yet</h2><p>Add an application or desktop target to launch through an available provider.</p></div></section>
           <section class="overview-section"><div class="section-head"><h2>Active sessions</h2></div><div id="remoteSessions" class="row-list"></div><div id="remoteSessionsEmpty" class="empty hidden"><h2>No active sessions</h2><p>Open a configured target to create an isolated remote session.</p></div></section>
         </div>
-        <div id="remoteSessionView" class="remote-session-view hidden"><div class="remote-session-toolbar"><div><strong id="remoteSessionName">Remote session</strong><span id="remoteSessionMeta" class="meta"></span></div><div class="row-actions"><button id="remoteFullscreen" class="button secondary small">Fullscreen</button><button id="remoteStop" class="button danger small">Stop</button><button id="remoteBack" class="button secondary small">Back</button></div></div><div id="remoteSessionError" class="form-error hidden"></div><div id="remoteFrameShell" class="remote-frame-shell"><div id="remoteLoading" class="remote-loading"><span class="spinner"></span><strong>Connecting to remote session…</strong><span>Preparing the Xpra client.</span></div><iframe id="remoteFrame" class="remote-frame" title="Remote Xpra session" allow="clipboard-read; clipboard-write; fullscreen"></iframe></div></div>
+        <div id="remoteSessionView" class="remote-session-view hidden"><div class="remote-session-toolbar"><div><strong id="remoteSessionName">Remote session</strong><span id="remoteSessionMeta" class="meta"></span></div><div class="row-actions"><button id="remoteFullscreen" class="button secondary small">Fullscreen</button><button id="remoteStop" class="button danger small">Stop</button><button id="remoteBack" class="button secondary small">Back</button></div></div><div id="remoteSessionError" class="form-error hidden"></div><div id="remoteSessionNotice" class="notice hidden"></div><div id="remoteFrameShell" class="remote-frame-shell"><div id="remoteLoading" class="remote-loading"><span class="spinner"></span><strong>Connecting to remote session…</strong><span>Preparing the Xpra client.</span></div><iframe id="remoteFrame" class="remote-frame" title="Remote Xpra session" allow="clipboard-read; clipboard-write; fullscreen"></iframe></div></div>
       </section>
 
       <section id="dockerPage" class="page">
@@ -187,8 +192,8 @@
         <label class="span-2">Arguments<input id="remoteArgs" placeholder="--private-window"></label>
         <label class="span-2">Working directory<input id="remoteCwd" placeholder="Optional"></label>
         <div class="environment-editor span-2" data-command-prefix="remote"><div class="environment-head"><div><strong>Environment variables</strong><span>Optional values passed only to this remote target.</span></div><button class="button secondary small env-add" type="button">+ Add variable</button></div><div id="remoteEnvRows" class="environment-rows"></div><p id="remoteEnvEmpty" class="environment-empty">No custom variables configured.</p><p id="remoteCommandError" class="form-error hidden" role="alert"></p></div>
-        <label class="check span-2"><input id="remoteForwardDbus" type="checkbox"> Forward RunPilot's D-Bus session to this application</label>
-        <p class="muted span-2">Allows the application to contact services in RunPilot's desktop session. Leave disabled for isolated sessions.</p>
+        <label class="span-2">D-Bus session<select id="remoteDBusMode"><option value="isolated">Isolated (recommended)</option><option value="host-session">Host session — advanced compatibility</option></select></label>
+        <p class="muted span-2">Isolated creates a private session bus for the remote application. Host session lets it contact desktop services, but single-instance applications can open on the physical desktop instead.</p>
         <label class="check span-2"><input id="remoteTargetEnabled" type="checkbox" checked> Target enabled</label>
       </div>
       <div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="remoteTargetDialog">Cancel</button><button class="button primary" value="default">Save target</button></div>

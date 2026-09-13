@@ -166,14 +166,28 @@ const (
 	RemoteTargetDesktop     RemoteTargetType = "desktop"
 )
 
+type RemoteDBusMode string
+
+const (
+	// RemoteDBusIsolated creates a private session bus for the Xpra session when
+	// dbus-launch is available. It is the safe default for remote applications.
+	RemoteDBusIsolated RemoteDBusMode = "isolated"
+	// RemoteDBusHost intentionally passes the RunPilot process's host session
+	// bus to the target for compatibility with desktop-session applications.
+	RemoteDBusHost RemoteDBusMode = "host-session"
+)
+
 type RemoteTarget struct {
-	ID          string           `json:"id" yaml:"id"`
-	Name        string           `json:"name" yaml:"name"`
-	Provider    string           `json:"provider" yaml:"provider"`
-	Type        RemoteTargetType `json:"type" yaml:"type"`
-	Command     CommandSpec      `json:"command" yaml:"command"`
-	ForwardDBus bool             `json:"forwardDbus,omitempty" yaml:"forwardDbus,omitempty"`
-	Enabled     bool             `json:"enabled" yaml:"enabled"`
+	ID       string           `json:"id" yaml:"id"`
+	Name     string           `json:"name" yaml:"name"`
+	Provider string           `json:"provider" yaml:"provider"`
+	Type     RemoteTargetType `json:"type" yaml:"type"`
+	Command  CommandSpec      `json:"command" yaml:"command"`
+	DBusMode RemoteDBusMode   `json:"dbusMode,omitempty" yaml:"dbusMode,omitempty"`
+	// ForwardDBus is accepted only when loading legacy configurations. Normalize
+	// converts true to DBusMode host-session and never writes it back.
+	ForwardDBus bool `json:"forwardDbus,omitempty" yaml:"forwardDbus,omitempty"`
+	Enabled     bool `json:"enabled" yaml:"enabled"`
 }
 
 type RemoteProviderCapabilities struct {
@@ -185,13 +199,16 @@ type RemoteProviderCapabilities struct {
 }
 
 type RemoteProviderStatus struct {
-	ID           string                     `json:"id"`
-	Name         string                     `json:"name"`
-	State        string                     `json:"state"`
-	Message      string                     `json:"message,omitempty"`
-	Version      string                     `json:"version,omitempty"`
-	Platform     string                     `json:"platform"`
-	Capabilities RemoteProviderCapabilities `json:"capabilities"`
+	ID                  string                     `json:"id"`
+	Name                string                     `json:"name"`
+	State               string                     `json:"state"`
+	Message             string                     `json:"message,omitempty"`
+	Version             string                     `json:"version,omitempty"`
+	Platform            string                     `json:"platform"`
+	Capabilities        RemoteProviderCapabilities `json:"capabilities"`
+	HTML5Available      bool                       `json:"html5Available"`
+	DBusLaunchAvailable bool                       `json:"dbusLaunchAvailable"`
+	Warnings            []string                   `json:"warnings,omitempty"`
 }
 
 type RemoteSessionState string
@@ -207,16 +224,18 @@ const (
 // RemoteSession is deliberately runtime-only. Internal endpoints, display
 // identifiers, and provider process details never leave the remote package.
 type RemoteSession struct {
-	ID         string             `json:"id"`
-	Provider   string             `json:"provider"`
-	TargetID   string             `json:"targetId"`
-	TargetName string             `json:"targetName"`
-	Type       RemoteTargetType   `json:"type"`
-	State      RemoteSessionState `json:"state"`
-	CreatedAt  time.Time          `json:"createdAt"`
-	StartedAt  *time.Time         `json:"startedAt,omitempty"`
-	StoppedAt  *time.Time         `json:"stoppedAt,omitempty"`
-	Failure    string             `json:"failure,omitempty"`
+	ID          string             `json:"id"`
+	Provider    string             `json:"provider"`
+	TargetID    string             `json:"targetId"`
+	TargetName  string             `json:"targetName"`
+	Type        RemoteTargetType   `json:"type"`
+	State       RemoteSessionState `json:"state"`
+	CreatedAt   time.Time          `json:"createdAt"`
+	StartedAt   *time.Time         `json:"startedAt,omitempty"`
+	StoppedAt   *time.Time         `json:"stoppedAt,omitempty"`
+	Failure     string             `json:"failure,omitempty"`
+	Message     string             `json:"message,omitempty"`
+	WindowCount *int               `json:"windowCount,omitempty"`
 }
 
 // SoftwareConfig contains the external providers RunPilot manages for its

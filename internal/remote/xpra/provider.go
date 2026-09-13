@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,10 +25,11 @@ const providerID = "xpra"
 type Provider struct {
 	lookPath func(string) (string, error)
 	run      func(context.Context, string, ...string) ([]byte, error)
+	environ  func() []string
 }
 
 func New() *Provider {
-	return &Provider{lookPath: exec.LookPath, run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return &Provider{lookPath: exec.LookPath, environ: os.Environ, run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return exec.CommandContext(ctx, name, args...).CombinedOutput()
 	}}
 }
@@ -46,9 +49,9 @@ func (p *Provider) Status(ctx context.Context) model.RemoteProviderStatus {
 		status.Message = "The xpra executable was not found in PATH"
 		return status
 	}
-	probe, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	out, err := p.run(probe, path, "--version")
+	versionProbe, cancelVersion := context.WithTimeout(ctx, 2*time.Second)
+	out, err := p.run(versionProbe, path, "--version")
+	cancelVersion()
 	if err != nil {
 		status.State = "unavailable"
 		status.Message = "Xpra could not be queried"
@@ -56,6 +59,19 @@ func (p *Provider) Status(ctx context.Context) model.RemoteProviderStatus {
 	}
 	status.State = "available"
 	status.Version = strings.TrimSpace(string(out))
+	if _, err := p.lookPath("dbus-launch"); err == nil {
+		status.DBusLaunchAvailable = true
+	} else {
+		status.Warnings = append(status.Warnings, "dbus-launch was not found; isolated sessions can run, but some modern GUI applications may need a session D-Bus launcher (often supplied by dbus-x11).")
+	}
+	configProbe, cancelConfig := context.WithTimeout(ctx, 2*time.Second)
+	configOut, configErr := p.run(configProbe, path, "showsetting", "html")
+	cancelConfig()
+	status.HTML5Available = configErr == nil && strings.Contains(strings.ToLower(string(configOut)), "html")
+	if !status.HTML5Available {
+		status.Warnings = append(status.Warnings, "HTML5 support could not be confirmed; a session launch will report any missing Xpra HTML5 assets.")
+	}
+	status.Message = strings.Join(status.Warnings, " ")
 	return status
 }
 
@@ -67,10 +83,21 @@ func (p *Provider) Start(ctx context.Context, request remote.StartRequest) (remo
 	if err != nil {
 		return remote.Runtime{}, fmt.Errorf("xpra executable was not found")
 	}
-	environment, err := childEnvironment(request.Target)
+	dbusMode := request.Target.DBusMode
+	if dbusMode == "" {
+		dbusMode = model.RemoteDBusIsolated
+	}
+	hostBus := environmentValue(p.environ(), "DBUS_SESSION_BUS_ADDRESS")
+	serverEnvironment, err := sanitizedServerEnvironment(p.environ(), dbusMode, hostBus)
 	if err != nil {
 		return remote.Runtime{}, err
 	}
+	request.Target.DBusMode = dbusMode
+	environment, err := childEnvironment(request.Target, hostBus)
+	if err != nil {
+		return remote.Runtime{}, err
+	}
+	dbusLaunch, dbusErr := p.lookPath("dbus-launch")
 	port, err := reservePort()
 	if err != nil {
 		return remote.Runtime{}, err
@@ -89,15 +116,13 @@ func (p *Provider) Start(ctx context.Context, request remote.StartRequest) (remo
 		_ = writeFD.Close()
 		return remote.Runtime{}, fmt.Errorf("remote target command is required")
 	}
-	mode := "start"
-	if request.Target.Type == model.RemoteTargetDesktop {
-		mode = "start-desktop"
-	}
-	args := []string{mode, "--daemon=no", "--mdns=no", "--html=on", "--bind-ws=127.0.0.1:" + port, "--socket-dir=" + runtimeDir, "--displayfd=3", "--resize-display=yes", "--start-child=" + command, "--exit-with-children=yes", "--start-new-commands=no"}
-	for key, value := range environment {
+	args := sessionArgs(request.Target.Type, dbusMode, command, port, runtimeDir, dbusLaunch, dbusErr == nil)
+	for _, key := range sortedKeys(environment) {
+		value := environment[key]
 		args = append(args, "--env="+key+"="+value)
 	}
 	cmd := exec.Command(xpra, args...)
+	cmd.Env = serverEnvironment
 	cmd.ExtraFiles = []*os.File{writeFD}
 	cmd.Dir = request.Target.Command.WorkingDirectory
 	var output boundedBuffer
@@ -154,7 +179,41 @@ func (p *Provider) Start(ctx context.Context, request remote.StartRequest) (remo
 		})
 		return stopErr
 	}
-	return remote.Runtime{Endpoint: endpoint, Stop: stop, Done: done}, nil
+	probe := func(probeCtx context.Context) (remote.SessionProbe, error) {
+		// info accepts the exact private display/socket and exposes state.windows.
+		// list-windows only lists every session in a socket directory on Xpra 6.
+		out, err := exec.CommandContext(probeCtx, xpra, "info", "--socket-dir="+runtimeDir, display).CombinedOutput()
+		if err != nil {
+			return remote.SessionProbe{}, fmt.Errorf("query Xpra windows: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		count, found := windowCount(string(out))
+		if !found {
+			return remote.SessionProbe{}, fmt.Errorf("could not read Xpra window count")
+		}
+		if count == 0 {
+			return remote.SessionProbe{WindowCount: 0, Message: "Xpra is ready, but no application windows are currently visible."}, nil
+		}
+		return remote.SessionProbe{WindowCount: count}, nil
+	}
+	return remote.Runtime{Endpoint: endpoint, Stop: stop, Done: done, Probe: probe, Log: output.String}, nil
+}
+
+func sessionArgs(kind model.RemoteTargetType, dbusMode model.RemoteDBusMode, command, port, runtimeDir, dbusLaunch string, hasDBusLaunch bool) []string {
+	args := []string{"start", "--daemon=no", "--mdns=no", "--html=on", "--bind-ws=127.0.0.1:" + port, "--socket-dir=" + runtimeDir, "--displayfd=3", "--resize-display=yes", "--start-new-commands=no"}
+	if kind == model.RemoteTargetDesktop {
+		args[0] = "start-desktop"
+		args = append(args, "--start-child="+command, "--exit-with-children=yes")
+	} else {
+		// Application launchers often fork or D-Bus-activate another process;
+		// RunPilot owns this Xpra server and stops it explicitly instead.
+		args = append(args, "--start="+command)
+	}
+	if dbusMode == model.RemoteDBusIsolated && hasDBusLaunch {
+		args = append(args, "--dbus-launch="+dbusLaunch)
+	} else {
+		args = append(args, "--dbus-launch=no")
+	}
+	return args
 }
 
 func reservePort() (string, error) {
@@ -229,26 +288,88 @@ func shellCommand(spec model.CommandSpec) string {
 }
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
 
-// childEnvironment returns only explicitly configured application variables.
-// Forwarding a D-Bus session is opt-in because it allows the target to contact
-// services in the RunPilot process's desktop session.
-func childEnvironment(target model.RemoteTarget) (map[string]string, error) {
-	environment := make(map[string]string, len(target.Command.Environment)+1)
+// sanitizedServerEnvironment retains normal user/process settings but removes
+// bindings to the physical graphical desktop before Xpra itself is launched.
+func sanitizedServerEnvironment(source []string, mode model.RemoteDBusMode, hostBus string) ([]string, error) {
+	blocked := map[string]bool{
+		"DISPLAY": true, "WAYLAND_DISPLAY": true, "DBUS_SESSION_BUS_ADDRESS": true,
+		"DBUS_SESSION_BUS_PID": true, "DBUS_STARTER_ADDRESS": true, "DBUS_STARTER_BUS_TYPE": true,
+		"XAUTHORITY": true, "DESKTOP_STARTUP_ID": true, "XDG_ACTIVATION_TOKEN": true,
+		"XDG_SESSION_TYPE": true, "XDG_CURRENT_DESKTOP": true, "XDG_SESSION_DESKTOP": true,
+		"GDK_BACKEND": true, "QT_QPA_PLATFORM": true, "MOZ_ENABLE_WAYLAND": true,
+	}
+	environment := make([]string, 0, len(source)+1)
+	for _, item := range source {
+		key, _, found := strings.Cut(item, "=")
+		if found && blocked[key] {
+			continue
+		}
+		environment = append(environment, item)
+	}
+	if mode == model.RemoteDBusHost {
+		if strings.TrimSpace(hostBus) == "" {
+			return nil, fmt.Errorf("host-session D-Bus mode is enabled, but RunPilot has no DBUS_SESSION_BUS_ADDRESS")
+		}
+		environment = append(environment, "DBUS_SESSION_BUS_ADDRESS="+hostBus)
+	}
+	return environment, nil
+}
+
+// childEnvironment is passed with Xpra's supported --env option. It makes the
+// target an X11 child of the virtual Xpra display while target configuration can
+// still deliberately override any of these values.
+func childEnvironment(target model.RemoteTarget, hostBus string) (map[string]string, error) {
+	environment := map[string]string{
+		"XDG_SESSION_TYPE": "x11",
+		"GDK_BACKEND":      "x11",
+		"QT_QPA_PLATFORM":  "xcb",
+		"WAYLAND_DISPLAY":  "",
+	}
 	for key, value := range target.Command.Environment {
 		environment[key] = value
 	}
-	if !target.ForwardDBus {
+	if target.DBusMode != model.RemoteDBusHost {
 		return environment, nil
 	}
 	if _, explicit := environment["DBUS_SESSION_BUS_ADDRESS"]; explicit {
 		return environment, nil
 	}
-	address := strings.TrimSpace(os.Getenv("DBUS_SESSION_BUS_ADDRESS"))
-	if address == "" {
-		return nil, fmt.Errorf("D-Bus forwarding is enabled, but RunPilot has no DBUS_SESSION_BUS_ADDRESS; configure it in the target environment or run RunPilot in the desktop session")
+	if strings.TrimSpace(hostBus) == "" {
+		return nil, fmt.Errorf("host-session D-Bus mode is enabled, but RunPilot has no DBUS_SESSION_BUS_ADDRESS; configure it in the target environment")
 	}
-	environment["DBUS_SESSION_BUS_ADDRESS"] = address
+	environment["DBUS_SESSION_BUS_ADDRESS"] = hostBus
 	return environment, nil
+}
+
+func environmentValue(source []string, key string) string {
+	for _, item := range source {
+		name, value, found := strings.Cut(item, "=")
+		if found && name == key {
+			return value
+		}
+	}
+	return ""
+}
+
+func sortedKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+var windowsPattern = regexp.MustCompile(`(?m)^state\.windows=(\d+)$`)
+
+func windowCount(output string) (int, bool) {
+	matches := windowsPattern.FindStringSubmatch(output)
+	if len(matches) != 2 {
+		return 0, false
+	}
+	var count int
+	_, err := fmt.Sscanf(matches[1], "%d", &count)
+	return count, err == nil
 }
 
 type boundedBuffer struct {

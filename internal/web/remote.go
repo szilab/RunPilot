@@ -60,6 +60,14 @@ func (s *Server) handleDeleteRemoteTarget(w http.ResponseWriter, r *http.Request
 func (s *Server) handleRemoteSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.ctrl.Remote().Sessions())
 }
+func (s *Server) handleRemoteSessionDiagnostics(w http.ResponseWriter, r *http.Request) {
+	session, log, err := s.ctrl.Remote().Diagnostics(r.PathValue("id"))
+	if err != nil {
+		remoteError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session": session, "log": log})
+}
 func (s *Server) handleStartRemoteSession(w http.ResponseWriter, r *http.Request) {
 	target, err := s.ctrl.RemoteTarget(r.PathValue("id"))
 	if err != nil {

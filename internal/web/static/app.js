@@ -10,13 +10,14 @@ let storageClipboard = null, editingTextPath = null, storageShowHidden = false, 
 let overview = null;
 let systemInfo = null, terminalInfo = null, terminalTabs = [], activeTerminalID = "";
 let dockerRuntime = null, dockerProjects = [], dockerVolumes = [], dockerNetworks = [], dockerBusy = new Set(), dockerPendingContainerStates = new Map(), dockerProjectErrors = new Map(), dockerEditing = null, dockerAttachTerminal = null;
-let remoteProviders = [], remoteTargets = [], remoteSessions = [], remoteSessionID = "";
+let remoteProviders = [], remoteTargets = [], remoteSessions = [], remoteSessionID = "", remoteStartingTargets = new Set();
 let logTimer = null;
 let logSource = null;
 let refreshTimer = null;
 let refreshing = false;
 let connectionTimer = null, connectionOnline = false, connectionChecked = false, connectionWasLost = false, reloadingAfterReconnect = false;
 const themeStorageKey = "runpilot.theme";
+const sidebarStorageKey = "runpilot.sidebar-collapsed";
 
 const pageMeta = {
   overview: ["Overview", "RunPilot service and resource health at a glance.", null],
@@ -77,6 +78,18 @@ function initializeTheme() {
   $("themeToggle").addEventListener("click", () => {
     applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
   });
+}
+
+function setSidebarCollapsed(collapsed) {
+  document.querySelector(".shell").classList.toggle("sidebar-collapsed", collapsed);
+  $("sidebarToggle").setAttribute("aria-expanded", String(!collapsed));
+  $("sidebarToggle").title = collapsed ? "Expand sidebar" : "Collapse sidebar";
+  localStorage.setItem(sidebarStorageKey, String(collapsed));
+}
+
+function initializeSidebar() {
+  setSidebarCollapsed(localStorage.getItem(sidebarStorageKey) === "true");
+  $("sidebarToggle").addEventListener("click", () => setSidebarCollapsed(!document.querySelector(".shell").classList.contains("sidebar-collapsed")));
 }
 
 function toast(message) {
@@ -292,10 +305,10 @@ function remoteStatus(state) { return state === "available" ? "running" : state 
 function renderRemote() {
   if (!$("remoteProviders")) return;
   $("remoteProviders").innerHTML = remoteProviders.map(provider => `<article class="row"><div class="row-head"><div><h3>${escapeHtml(provider.name)}</h3><div class="meta">${escapeHtml(provider.platform)}${provider.version ? ` · ${escapeHtml(provider.version)}` : ""}</div></div><span class="status ${remoteStatus(provider.state)}">${escapeHtml(provider.state)}</span></div>${provider.message ? `<div class="row-details"><div class="kv"><span>Status</span><span>${escapeHtml(provider.message)}</span></div></div>` : ""}</article>`).join("") || `<div class="empty compact"><h2>No providers registered</h2></div>`;
-  $("remoteTargets").innerHTML = remoteTargets.map(target => `<article class="row"><div class="row-head"><div><h3>${escapeHtml(target.name)}</h3><div class="meta">${escapeHtml(target.type)} · ${escapeHtml(target.provider)} · ${escapeHtml(target.command?.path || "")}</div></div><span class="status ${target.enabled ? "running" : "stopped"}">${target.enabled ? "enabled" : "disabled"}</span></div><div class="row-actions"><button class="button primary small" ${target.enabled ? "" : "disabled"} onclick="startRemoteSession('${target.id}')">Open</button><button class="button secondary small" onclick="editRemoteTarget('${target.id}')">Edit</button><button class="button danger small" onclick="deleteRemoteTarget('${target.id}')">Delete</button></div></article>`).join("");
+  $("remoteTargets").innerHTML = remoteTargets.map(target => { const starting=remoteStartingTargets.has(target.id); return `<article class="row"><div class="row-head"><div><h3>${escapeHtml(target.name)}</h3><div class="meta">${escapeHtml(target.type)} · ${escapeHtml(target.provider)} · ${escapeHtml(target.command?.path || "")}</div></div><span class="status ${target.enabled ? "running" : "stopped"}">${target.enabled ? "enabled" : "disabled"}</span></div><div class="row-actions"><button class="button primary small remote-open-button" ${target.enabled && !starting ? "" : "disabled"} aria-busy="${starting}" onclick="startRemoteSession('${target.id}')">${starting ? '<span class="spinner remote-button-spinner" aria-hidden="true"></span>Starting…' : "Open"}</button><button class="button secondary small" onclick="editRemoteTarget('${target.id}')">Edit</button><button class="button danger small" onclick="deleteRemoteTarget('${target.id}')">Delete</button></div></article>`; }).join("");
   $("remoteTargetsEmpty").classList.toggle("hidden", remoteTargets.length > 0);
   const active = remoteSessions.filter(session => ["starting", "running", "stopping"].includes(session.state));
-  $("remoteSessions").innerHTML = active.map(session => `<article class="row"><div class="row-head"><div><h3>${escapeHtml(session.targetName)}</h3><div class="meta">${escapeHtml(session.type)} · ${fmtDate(session.startedAt || session.createdAt)}</div></div>${statusBadge(session.state)}</div>${session.failure ? `<div class="form-error">${escapeHtml(session.failure)}</div>` : ""}<div class="row-actions"><button class="button primary small" ${session.state === "running" ? "" : "disabled"} onclick="openRemoteSession('${session.id}')">Open</button><button class="button danger small" onclick="stopRemoteSession('${session.id}')">Stop</button></div></article>`).join("");
+  $("remoteSessions").innerHTML = active.map(session => `<article class="row"><div class="row-head"><div><h3>${escapeHtml(session.targetName)}</h3><div class="meta">${escapeHtml(session.type)} · ${fmtDate(session.startedAt || session.createdAt)}</div></div>${statusBadge(session.state)}</div>${session.message ? `<div class="notice remote-session-notice"><strong>${escapeHtml(session.message)}</strong>${session.windowCount !== undefined ? `<span>${session.windowCount} visible application window${session.windowCount === 1 ? "" : "s"}.</span>` : ""}</div>` : ""}${session.failure ? `<div class="form-error">${escapeHtml(session.failure)}</div>` : ""}<div class="row-actions"><button class="button primary small" ${session.state === "running" ? "" : "disabled"} onclick="openRemoteSession('${session.id}')">Open</button><button class="button secondary small" onclick="openRemoteDiagnostics('${session.id}')">Diagnostics</button><button class="button danger small" onclick="stopRemoteSession('${session.id}')">Stop</button></div></article>`).join("");
   $("remoteSessionsEmpty").classList.toggle("hidden", active.length > 0);
   if (remoteSessionID && !remoteSessions.some(session => session.id === remoteSessionID)) {
     closeRemoteSession();
@@ -304,14 +317,15 @@ function renderRemote() {
   }
   if (remoteSessionID) renderRemoteSession();
 }
-function openRemoteTarget(existing = null) { $("remoteTargetForm").reset(); $("remoteTargetId").value=existing?.id||""; $("remoteTargetName").value=existing?.name||""; $("remoteTargetType").value=existing?.type||"application"; $("remoteTargetProvider").value=existing?.provider||"xpra"; $("remoteForwardDbus").checked=!!existing?.forwardDbus; $("remoteTargetEnabled").checked=existing ? !!existing.enabled : true; populateCommandEditor("remote",existing?.command||{interpreter:"direct"}); $("remoteTargetDialogTitle").textContent=existing?"Edit remote target":"Add remote target"; $("remoteTargetDialog").showModal(); }
+function openRemoteTarget(existing = null) { $("remoteTargetForm").reset(); $("remoteTargetId").value=existing?.id||""; $("remoteTargetName").value=existing?.name||""; $("remoteTargetType").value=existing?.type||"application"; $("remoteTargetProvider").value=existing?.provider||"xpra"; $("remoteDBusMode").value=existing?.dbusMode || (existing?.forwardDbus ? "host-session" : "isolated"); $("remoteTargetEnabled").checked=existing ? !!existing.enabled : true; populateCommandEditor("remote",existing?.command||{interpreter:"direct"}); $("remoteTargetDialogTitle").textContent=existing?"Edit remote target":"Add remote target"; $("remoteTargetDialog").showModal(); }
 function editRemoteTarget(id) { openRemoteTarget(remoteTargets.find(target => target.id === id)); }
 async function deleteRemoteTarget(id) { if (!confirm("Delete this remote target?")) return; try { await api(`api/v1/remote/targets/${id}`,{method:"DELETE"}); await refresh(); } catch (e) { toast(e.message); } }
-async function startRemoteSession(id) { try { const session=await api(`api/v1/remote/targets/${id}/sessions`,{method:"POST"}); await refresh(); openRemoteSession(session.id); } catch (e) { toast(e.message); await refresh(); } }
+async function startRemoteSession(id) { if (remoteStartingTargets.has(id)) return; remoteStartingTargets.add(id); renderRemote(); try { const session=await api(`api/v1/remote/targets/${id}/sessions`,{method:"POST"}); await refresh(); await openRemoteSession(session.id); } catch (e) { toast(e.message); await refresh(); } finally { remoteStartingTargets.delete(id); if (currentPage === "remote") renderRemote(); } }
 async function stopRemoteSession(id) { try { await api(`api/v1/remote/sessions/${id}`,{method:"DELETE"}); if (remoteSessionID===id) closeRemoteSession(); await refresh(); } catch (e) { toast(e.message); } }
+async function openRemoteDiagnostics(id) { const session=remoteSessions.find(item=>item.id===id); openLog(`${session?.targetName || "Remote session"} diagnostics`, async () => { const details=await api(`api/v1/remote/sessions/${id}/diagnostics`); return details.log || details.session.message || "No Xpra diagnostics were captured."; }); }
 async function openRemoteSession(id) { remoteSessionID=id; setPage("remote",false); $("remoteSessionError").classList.add("hidden"); $("remoteLoading").classList.remove("hidden"); renderRemoteSession(); try { const ticket=await api(`api/v1/remote/sessions/${id}/client-ticket`,{method:"POST"}); const frame=$("remoteFrame"); frame.src=`api/v1/remote/sessions/${encodeURIComponent(id)}/client/?ticket=${encodeURIComponent(ticket.ticket)}`; history.replaceState(null,"",`?remoteSession=${encodeURIComponent(id)}`); } catch(e) { closeRemoteSession(); toast(`Remote session unavailable: ${e.message}`); } }
-function renderRemoteSession() { const session=remoteSessions.find(item=>item.id===remoteSessionID); document.querySelector("main").classList.add("remote-active"); $("remoteOverview").classList.add("hidden"); $("remoteSessionView").classList.remove("hidden"); $("remoteSessionName").textContent=session?.targetName||"Remote session"; $("remoteSessionMeta").textContent=session ? `${session.state} · ${fmtDate(session.startedAt || session.createdAt)}` : "Loading session…"; $("remoteStop").disabled=!session || !["starting","running","stopping"].includes(session.state); }
-function closeRemoteSession() { remoteSessionID=""; document.querySelector("main").classList.remove("remote-active"); $("remoteFrame").src="about:blank"; $("remoteLoading").classList.add("hidden"); $("remoteOverview").classList.remove("hidden"); $("remoteSessionView").classList.add("hidden"); history.replaceState(null,"",location.pathname); }
+function renderRemoteSession() { const session=remoteSessions.find(item=>item.id===remoteSessionID); document.querySelector("main").classList.add("remote-active"); $("remoteOverview").classList.add("hidden"); $("remoteSessionView").classList.remove("hidden"); $("remoteSessionName").textContent=session?.targetName||"Remote session"; $("remoteSessionMeta").textContent=session ? `${session.state} · ${fmtDate(session.startedAt || session.createdAt)}` : "Loading session…"; $("remoteStop").disabled=!session || !["starting","running","stopping"].includes(session.state); $("remoteSessionNotice").textContent=session?.message || ""; $("remoteSessionNotice").classList.toggle("hidden", !session?.message); }
+function closeRemoteSession() { remoteSessionID=""; document.querySelector("main").classList.remove("remote-active"); $("remoteFrame").src="about:blank"; $("remoteLoading").classList.add("hidden"); $("remoteSessionNotice").classList.add("hidden"); $("remoteOverview").classList.remove("hidden"); $("remoteSessionView").classList.add("hidden"); history.replaceState(null,"",location.pathname); }
 
 function renderOverview() {
   if (!overview) return;
@@ -908,7 +922,7 @@ $("remoteFullscreen").addEventListener("click", () => $("remoteFrame").requestFu
 $("remoteFrame").addEventListener("load", () => { if (remoteSessionID) $("remoteLoading").classList.add("hidden"); });
 $("remoteTargetForm").addEventListener("submit", async event => {
   event.preventDefault(); const id=$("remoteTargetId").value; const command=commandFromEditor("remote"); if (!command) return;
-  const body={name:$("remoteTargetName").value.trim(),provider:$("remoteTargetProvider").value,type:$("remoteTargetType").value,forwardDbus:$("remoteForwardDbus").checked,enabled:$("remoteTargetEnabled").checked,command};
+  const body={name:$("remoteTargetName").value.trim(),provider:$("remoteTargetProvider").value,type:$("remoteTargetType").value,dbusMode:$("remoteDBusMode").value,enabled:$("remoteTargetEnabled").checked,command};
   try { await api(id ? `api/v1/remote/targets/${id}` : "api/v1/remote/targets",{method:id?"PUT":"POST",body:JSON.stringify(body)}); $("remoteTargetDialog").close(); await refresh(); } catch(error) { setCommandError("remote",error.message); }
 });
 
@@ -1113,6 +1127,7 @@ $("loginForm").addEventListener("submit", async e => {
 });
 
 (async function init() {
+  initializeSidebar();
   initializeTheme();
   if (!token) {
     $("loginDialog").showModal();

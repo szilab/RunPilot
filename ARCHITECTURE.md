@@ -142,7 +142,13 @@ or chooses the internal endpoint. An authenticated API request creates the
 embedded-client ticket, which becomes a bounded-lifetime, HttpOnly, path-scoped
 cookie. This keeps the ordinary API bearer-token boundary and avoids exposing a
 separate Xpra listener. Xpra itself is launched with mDNS disabled, HTML enabled,
-new command execution disabled, and output bounded for diagnostics.
+new command execution disabled, and output bounded for diagnostics. Its server
+environment is a sanitized copy of RunPilot's process environment: physical
+desktop bindings such as `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, and session
+D-Bus variables are removed. Isolated D-Bus is the default; Xpra uses a private
+`dbus-launch` context when available. A target may opt into host-session D-Bus
+as an advanced compatibility mode, which explicitly reintroduces only the host
+session-bus address and may allow activation on the physical desktop.
 
 Remote sessions are owned by the current RunPilot process. On controlled
 shutdown it requests the child process stop and falls back to termination after

@@ -132,12 +132,21 @@ xpra` on Debian/Ubuntu or `dnf install xpra` on Fedora where those packages are
 available). The selected application and any desktop environment/window manager
 must already be installed; RunPilot does not install or configure them.
 
-Each target may opt in to **Forward RunPilot's D-Bus session**. This passes the
-RunPilot process's `DBUS_SESSION_BUS_ADDRESS` to that target only, allowing it
-to interact with desktop-session services. It is disabled by default because it
-reduces target isolation; if the daemon has no D-Bus session address, RunPilot
-reports a clear launch error and the address may instead be configured in the
-target's Environment fields.
+Each target selects a D-Bus mode. **Isolated** (the default) sanitizes the
+RunPilot graphical-session environment and starts a private Xpra session bus
+when `dbus-launch` is installed (on Debian-family systems this is commonly in
+`dbus-x11`). **Host session** is an advanced compatibility mode that explicitly
+passes `DBUS_SESSION_BUS_ADDRESS` to the target. It can cause single-instance
+or D-Bus-activated applications to open on the physical desktop, so it should
+only be used deliberately.
+
+RunPilot's environment is not a remote graphical session. The Xpra server does
+not inherit the host `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, or session
+D-Bus bindings by default. Remote children are configured for X11 through
+Xpra's supported environment options. For Firefox, Chromium, Electron, and
+other single-instance applications, configure target-specific arguments and an
+isolated profile/data directory—for example Firefox `--new-instance --profile
+<dedicated-profile>`—rather than relying on the user's normal desktop profile.
 
 Xpra listens only on a per-session `127.0.0.1` WebSocket/HTTP port. The browser
 loads Xpra's upstream HTML5 client through a same-origin, ticketed RunPilot

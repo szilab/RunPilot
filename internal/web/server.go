@@ -103,6 +103,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("PUT /api/v1/remote/targets/{id}", s.handleUpdateRemoteTarget)
 	api.HandleFunc("DELETE /api/v1/remote/targets/{id}", s.handleDeleteRemoteTarget)
 	api.HandleFunc("GET /api/v1/remote/sessions", s.handleRemoteSessions)
+	api.HandleFunc("GET /api/v1/remote/sessions/{id}/diagnostics", s.handleRemoteSessionDiagnostics)
 	api.HandleFunc("POST /api/v1/remote/targets/{id}/sessions", s.handleStartRemoteSession)
 	api.HandleFunc("DELETE /api/v1/remote/sessions/{id}", s.handleStopRemoteSession)
 	api.HandleFunc("POST /api/v1/remote/sessions/{id}/client-ticket", s.handleRemoteClientTicket)

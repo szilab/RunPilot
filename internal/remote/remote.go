@@ -30,6 +30,15 @@ type Runtime struct {
 	Endpoint string
 	Stop     func(context.Context) error
 	Done     <-chan error
+	Probe    func(context.Context) (SessionProbe, error)
+	Log      func() string
+}
+
+// SessionProbe contains provider-neutral runtime observations. It deliberately
+// reports visibility rather than attempting to interpret an application's UI.
+type SessionProbe struct {
+	WindowCount int
+	Message     string
 }
 
 type Provider interface {
@@ -76,6 +85,21 @@ func (s *Service) Sessions() []model.RemoteSession {
 	return out
 }
 
+func (s *Service) Diagnostics(id string) (model.RemoteSession, string, error) {
+	s.mu.RLock()
+	item := s.sessions[id]
+	if item == nil {
+		s.mu.RUnlock()
+		return model.RemoteSession{}, "", ErrUnknownSession
+	}
+	view, log := item.view, item.runtime.Log
+	s.mu.RUnlock()
+	if log == nil {
+		return view, "", nil
+	}
+	return view, log(), nil
+}
+
 func (s *Service) Start(ctx context.Context, target model.RemoteTarget) (model.RemoteSession, error) {
 	provider := s.providers[target.Provider]
 	if provider == nil {
@@ -105,7 +129,44 @@ func (s *Service) Start(ctx context.Context, target model.RemoteTarget) (model.R
 	view := item.view
 	s.mu.Unlock()
 	go s.watch(id, runtime.Done)
+	go s.monitor(id, runtime.Probe)
 	return view, nil
+}
+
+func (s *Service) monitor(id string, probe func(context.Context) (SessionProbe, error)) {
+	if probe == nil {
+		return
+	}
+	check := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		result, err := probe(ctx)
+		if err != nil {
+			return
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		item := s.sessions[id]
+		if item == nil || item.view.State != model.RemoteSessionRunning {
+			return
+		}
+		count := result.WindowCount
+		item.view.WindowCount = &count
+		item.view.Message = result.Message
+	}
+	check()
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.mu.RLock()
+		item := s.sessions[id]
+		running := item != nil && item.view.State == model.RemoteSessionRunning
+		s.mu.RUnlock()
+		if !running {
+			return
+		}
+		check()
+	}
 }
 
 func suffix(value string) string {
