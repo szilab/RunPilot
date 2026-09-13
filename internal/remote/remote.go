@@ -28,10 +28,13 @@ type StartRequest struct {
 // the HTTP bridge; the public API receives only the session metadata.
 type Runtime struct {
 	Endpoint string
-	Stop     func(context.Context) error
-	Done     <-chan error
-	Probe    func(context.Context) (SessionProbe, error)
-	Log      func() string
+	// ClientParams are provider-generated, non-sensitive HTML client settings.
+	// The web bridge applies them only during the initial authorized redirect.
+	ClientParams map[string]string
+	Stop         func(context.Context) error
+	Done         <-chan error
+	Probe        func(context.Context) (SessionProbe, error)
+	Log          func() string
 }
 
 // SessionProbe contains provider-neutral runtime observations. It deliberately
@@ -100,6 +103,20 @@ func (s *Service) Diagnostics(id string) (model.RemoteSession, string, error) {
 	return view, log(), nil
 }
 
+func (s *Service) ClientParams(id string) (map[string]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item := s.sessions[id]
+	if item == nil {
+		return nil, ErrUnknownSession
+	}
+	params := make(map[string]string, len(item.runtime.ClientParams))
+	for key, value := range item.runtime.ClientParams {
+		params[key] = value
+	}
+	return params, nil
+}
+
 func (s *Service) Start(ctx context.Context, target model.RemoteTarget) (model.RemoteSession, error) {
 	provider := s.providers[target.Provider]
 	if provider == nil {
@@ -109,9 +126,16 @@ func (s *Service) Start(ctx context.Context, target model.RemoteTarget) (model.R
 	if status.State != "available" {
 		return model.RemoteSession{}, fmt.Errorf("provider %s is %s%s", status.Name, status.State, suffix(status.Message))
 	}
+	if target.Provider == "xpra" {
+		options, err := model.NormalizeXpraRemoteOptions(target.Xpra)
+		if err != nil {
+			return model.RemoteSession{}, err
+		}
+		target.Xpra = &options
+	}
 	id := config.NewID("remote")
 	now := time.Now().UTC()
-	item := &session{view: model.RemoteSession{ID: id, Provider: target.Provider, TargetID: target.ID, TargetName: target.Name, Type: target.Type, State: model.RemoteSessionStarting, CreatedAt: now}}
+	item := &session{view: model.RemoteSession{ID: id, Provider: target.Provider, TargetID: target.ID, TargetName: target.Name, Type: target.Type, State: model.RemoteSessionStarting, CreatedAt: now, Xpra: target.Xpra}}
 	s.mu.Lock()
 	s.sessions[id] = item
 	s.mu.Unlock()

@@ -53,8 +53,9 @@ type downloadTicket struct {
 	Expires         time.Time
 }
 type remoteClientTicket struct {
-	SessionID string
-	Expires   time.Time
+	SessionID    string
+	ClientParams map[string]string
+	Expires      time.Time
 }
 
 func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {

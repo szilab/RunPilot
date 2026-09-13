@@ -148,6 +148,20 @@ other single-instance applications, configure target-specific arguments and an
 isolated profile/data directory—for example Firefox `--new-instance --profile
 <dedicated-profile>`—rather than relying on the user's normal desktop profile.
 
+Xpra targets also have a browser-administration display profile. The default
+**Recommended** profile uses WebP with video codecs disabled, automatic DPI,
+clipboard and dynamic resize enabled, starts the target after the first browser
+client connects, and keeps the Xpra floating menu auto-hidden. Sound, printing,
+and Xpra file transfer are explicitly disabled. **Automatic** uses Xpra's
+automatic encoding with video enabled; **Compatibility / Lossless** uses RGB
+with video disabled to help diagnose partial-repaint corruption; **Custom**
+exposes the encoding and video choices. Xpra 6.5 supports the server options
+`--start-after-connect` / `--start-child-after-connect`, `--dpi`,
+`--resize-display`, clipboard, printing, file-transfer, speaker, and microphone
+controls. The bundled xpra-html5 v19 client receives only its supported client
+parameters: `encoding`, `video`, `clipboard`, `sound`, `printing`,
+`file_transfer`, `floating_menu`, `autohide`, and `toolbar_position`.
+
 Xpra listens only on a per-session `127.0.0.1` WebSocket/HTTP port. The browser
 loads Xpra's upstream HTML5 client through a same-origin, ticketed RunPilot
 reverse proxy, so no Xpra port is exposed publicly. The ticket is exchanged for

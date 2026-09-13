@@ -49,6 +49,10 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		`id="tasksPage"`,
 		`data-task-kind="continuous"`,
 		`class="row task-choice"`,
+		`id="remoteXpraSettings"`,
+		`id="remoteXpraProfile"`,
+		`id="remoteXpraDPIMode"`,
+		`id="remoteXpraLaunchAfterConnect"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("index.html does not contain %q", want)
@@ -79,7 +83,7 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(app)
-	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "api/v1/software/providers", "/buckets", "api/v1/overview", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "Scoop root on Windows", "dockerProjectErrors", "Compose operation failed", "const canDelete = ready && !volume.inUse && !busy", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function openNewTextFile", `$("textEditorContent").readOnly=!canEdit`, "function initializeSidebar", "sidebarStorageKey", `class="row"`} {
+	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "api/v1/software/providers", "/buckets", "api/v1/overview", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "Scoop root on Windows", "dockerProjectErrors", "Compose operation failed", "const canDelete = ready && !volume.inUse && !busy", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function openNewTextFile", `$("textEditorContent").readOnly=!canEdit`, "function initializeSidebar", "sidebarStorageKey", "function remoteXpraDefaults", "function focusRemoteFrame", `class="row"`} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js does not contain %q", want)
 		}

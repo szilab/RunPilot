@@ -66,7 +66,29 @@ func (s *Server) handleRemoteSessionDiagnostics(w http.ResponseWriter, r *http.R
 		remoteError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"session": session, "log": log})
+	writeJSON(w, http.StatusOK, map[string]any{"session": session, "log": formatRemoteDiagnostics(session, log)})
+}
+
+func formatRemoteDiagnostics(session model.RemoteSession, log string) string {
+	if session.Provider != "xpra" || session.Xpra == nil {
+		return log
+	}
+	options := session.Xpra
+	yesNo := func(value *bool) string {
+		if value != nil && *value {
+			return "enabled"
+		}
+		return "disabled"
+	}
+	dpi := "automatic"
+	if options.DPIMode != model.XpraDPIAuto {
+		dpi = fmt.Sprintf("%d (%s)", options.DPI, options.DPIMode)
+	}
+	header := fmt.Sprintf("Provider: Xpra\n\nRendering:\n  profile: %s\n  encoding: %s\n  video: %s\n\nDisplay:\n  DPI: %s\n  dynamic resize: %s\n\nInput:\n  clipboard: %s\n\nLaunch:\n  after client connect: %s\n\nXpra menu:\n  mode: %s\n  toolbar position: %s", options.Profile, options.Encoding, yesNo(options.Video), dpi, yesNo(options.DynamicResize), yesNo(options.Clipboard), yesNo(options.LaunchAfterConnect), options.Menu, options.ToolbarPosition)
+	if strings.TrimSpace(log) == "" {
+		return header
+	}
+	return header + "\n\nXpra server output:\n" + log
 }
 func (s *Server) handleStartRemoteSession(w http.ResponseWriter, r *http.Request) {
 	target, err := s.ctrl.RemoteTarget(r.PathValue("id"))
@@ -110,13 +132,18 @@ func (s *Server) handleRemoteClientTicket(w http.ResponseWriter, r *http.Request
 		remoteError(w, err)
 		return
 	}
+	params, err := s.ctrl.Remote().ClientParams(id)
+	if err != nil {
+		remoteError(w, err)
+		return
+	}
 	ticket, err := secureTicket()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	s.remoteTicketMu.Lock()
-	s.remoteTickets[ticket] = remoteClientTicket{SessionID: id, Expires: time.Now().Add(4 * time.Hour)}
+	s.remoteTickets[ticket] = remoteClientTicket{SessionID: id, ClientParams: params, Expires: time.Now().Add(4 * time.Hour)}
 	s.remoteTicketMu.Unlock()
 	writeJSON(w, http.StatusCreated, map[string]string{"ticket": ticket})
 }
@@ -128,7 +155,8 @@ func (s *Server) handleRemoteClient(w http.ResponseWriter, r *http.Request) {
 			ticket = cookie.Value
 		}
 	}
-	if !s.validRemoteTicket(ticket, id) {
+	clientTicket, ok := s.remoteTicket(ticket, id)
+	if !ok {
 		http.Error(w, "remote client authorization required", http.StatusUnauthorized)
 		return
 	}
@@ -149,7 +177,11 @@ func (s *Server) handleRemoteClient(w http.ResponseWriter, r *http.Request) {
 		// Keep the browser inside the per-session proxy. Redirecting only to
 		// clean ("/") would load the RunPilot SPA inside the iframe instead.
 		clientPath := "/api/v1/remote/sessions/" + id + "/client"
-		http.Redirect(w, r, prefix+clientPath+clean, http.StatusFound)
+		redirect := prefix + clientPath + clean
+		if len(clientTicket.ClientParams) > 0 {
+			redirect += "?" + encodeClientParams(clientTicket.ClientParams)
+		}
+		http.Redirect(w, r, redirect, http.StatusFound)
 		return
 	}
 	endpoint, err := s.ctrl.Remote().Endpoint(id)
@@ -164,6 +196,11 @@ func (s *Server) handleRemoteClient(w http.ResponseWriter, r *http.Request) {
 		original(request)
 		request.URL.Path = "/" + r.PathValue("path")
 		request.URL.RawPath = ""
+		if r.PathValue("path") == "" {
+			// The root HTML page is the only place html5 reads these settings.
+			// Do not let a later user-edited iframe URL replace the session snapshot.
+			request.URL.RawQuery = encodeClientParams(clientTicket.ClientParams)
+		}
 		request.Header.Del("Authorization")
 		request.Header.Del("Cookie")
 	}
@@ -172,18 +209,26 @@ func (s *Server) handleRemoteClient(w http.ResponseWriter, r *http.Request) {
 	}
 	proxy.ServeHTTP(w, r)
 }
-func (s *Server) validRemoteTicket(ticket, id string) bool {
+
+func encodeClientParams(params map[string]string) string {
+	query := url.Values{}
+	for key, value := range params {
+		query.Set(key, value)
+	}
+	return query.Encode()
+}
+func (s *Server) remoteTicket(ticket, id string) (remoteClientTicket, bool) {
 	if ticket == "" {
-		return false
+		return remoteClientTicket{}, false
 	}
 	s.remoteTicketMu.Lock()
 	defer s.remoteTicketMu.Unlock()
 	item, ok := s.remoteTickets[ticket]
 	if !ok || item.SessionID != id || time.Now().After(item.Expires) {
 		delete(s.remoteTickets, ticket)
-		return false
+		return remoteClientTicket{}, false
 	}
-	return true
+	return item, true
 }
 func (s *Server) handleRemoteSessionPage(w http.ResponseWriter, r *http.Request) {
 	base := s.basePath

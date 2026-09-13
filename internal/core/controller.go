@@ -87,7 +87,22 @@ func (c *Controller) Close() {
 
 func (c *Controller) Remote() *remote.Service { return c.remote }
 
-func (c *Controller) RemoteTargets() []model.RemoteTarget { return c.config.Snapshot().RemoteTargets }
+func (c *Controller) RemoteTargets() []model.RemoteTarget {
+	targets := c.config.Snapshot().RemoteTargets
+	for i := range targets {
+		if targets[i].Provider != "xpra" {
+			continue
+		}
+		options, err := model.NormalizeXpraRemoteOptions(targets[i].Xpra)
+		if err != nil {
+			// A manually edited invalid legacy YAML value must not make all Remote
+			// pages unusable. API writes still reject invalid values below.
+			options = model.DefaultXpraRemoteOptions()
+		}
+		targets[i].Xpra = &options
+	}
+	return targets
+}
 
 func (c *Controller) RemoteTarget(id string) (model.RemoteTarget, error) {
 	for _, target := range c.RemoteTargets() {
@@ -126,6 +141,13 @@ func (c *Controller) UpsertRemoteTarget(target model.RemoteTarget) (model.Remote
 		return target, fmt.Errorf("remote target D-Bus mode must be isolated or host-session")
 	}
 	target.ForwardDBus = false
+	if target.Provider == "xpra" {
+		options, err := model.NormalizeXpraRemoteOptions(target.Xpra)
+		if err != nil {
+			return target, err
+		}
+		target.Xpra = &options
+	}
 	if err := model.ValidateCommand(target.Command); err != nil {
 		return target, err
 	}

@@ -2,12 +2,15 @@ package web
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/szilab/RunPilot/internal/core"
+	"github.com/szilab/RunPilot/internal/model"
 )
 
 func TestRemoteTargetCRUDAndClientIsNotPublic(t *testing.T) {
@@ -29,6 +32,21 @@ func TestRemoteTargetCRUDAndClientIsNotPublic(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("create=%d %s", response.Code, response.Body.String())
+	}
+	var created model.RemoteTarget
+	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Xpra == nil || created.Xpra.Encoding != "webp" || created.Xpra.Video == nil || *created.Xpra.Video || created.Xpra.LaunchAfterConnect == nil || !*created.Xpra.LaunchAfterConnect {
+		t.Fatalf("legacy/default target was not normalized: %#v", created.Xpra)
+	}
+	invalid := []byte(`{"name":"Broken","provider":"xpra","type":"application","enabled":true,"command":{"path":"xterm"},"xpra":{"encoding":"h264"}}`)
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/remote/targets", bytes.NewReader(invalid))
+	request.Header.Set("Authorization", "Bearer "+token)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte("picture encoding")) {
+		t.Fatalf("invalid display config=%d %s", response.Code, response.Body.String())
 	}
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/remote/targets", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
@@ -63,5 +81,27 @@ func TestRemoteClientTicketStaysOnProxyPath(t *testing.T) {
 	want := "/runpilot/api/v1/remote/sessions/session/client/"
 	if got := response.Header().Get("Location"); got != want {
 		t.Fatalf("redirect = %q, want %q", got, want)
+	}
+}
+
+func TestRemoteClientRedirectAddsOnlyTicketSnapshotParameters(t *testing.T) {
+	ctrl, err := core.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	server, err := New(ctrl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.remoteTickets["ticket"] = remoteClientTicket{SessionID: "session", ClientParams: map[string]string{"encoding": "webp", "video": "no", "toolbar_position": "top-left"}, Expires: time.Now().Add(time.Minute)}
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/remote/sessions/session/client/?ticket=ticket&encoding=rgb", nil))
+	if response.Code != http.StatusFound {
+		t.Fatalf("status = %d", response.Code)
+	}
+	location := response.Header().Get("Location")
+	if !strings.Contains(location, "encoding=webp") || strings.Contains(location, "encoding=rgb") || !strings.Contains(location, "toolbar_position=top-left") {
+		t.Fatalf("redirect did not use the session snapshot: %q", location)
 	}
 }

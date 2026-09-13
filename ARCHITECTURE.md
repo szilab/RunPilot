@@ -150,6 +150,15 @@ D-Bus variables are removed. Isolated D-Bus is the default; Xpra uses a private
 as an advanced compatibility mode, which explicitly reintroduces only the host
 session-bus address and may allow activation on the physical desktop.
 
+Xpra display configuration is a typed provider extension of a Remote target,
+not generic Xpra command flags. A centralized model normalizes legacy/missing
+settings to the Recommended browser-administration profile (WebP, video off,
+automatic DPI, clipboard/dynamic resize on, deferred application start, and an
+auto-hidden floating menu). Server-side controls are passed only as Xpra server
+arguments; xpra-html5 v19 settings are generated as a non-sensitive query
+snapshot during the ticketed initial proxy redirect. The snapshot belongs to
+the runtime session so later target edits cannot alter a connected session.
+
 Remote sessions are owned by the current RunPilot process. On controlled
 shutdown it requests the child process stop and falls back to termination after
 a timeout; it does not reconcile or adopt unrelated/orphaned Xpra sessions on

@@ -38,6 +38,8 @@ func (p *Provider) ID() string { return providerID }
 
 func (p *Provider) Status(ctx context.Context) model.RemoteProviderStatus {
 	status := model.RemoteProviderStatus{ID: providerID, Name: "Xpra", Platform: runtime.GOOS, Capabilities: model.RemoteProviderCapabilities{ApplicationSessions: true, DesktopSessions: true, Clipboard: true, DynamicResize: true, Fullscreen: true}}
+	defaults := model.DefaultXpraRemoteOptions()
+	status.XpraDefaults = &defaults
 	if runtime.GOOS != "linux" {
 		status.State = "unsupported"
 		status.Message = "Xpra remote-session server support is currently Linux-only"
@@ -116,7 +118,12 @@ func (p *Provider) Start(ctx context.Context, request remote.StartRequest) (remo
 		_ = writeFD.Close()
 		return remote.Runtime{}, fmt.Errorf("remote target command is required")
 	}
-	args := sessionArgs(request.Target.Type, dbusMode, command, port, runtimeDir, dbusLaunch, dbusErr == nil)
+	options, err := model.NormalizeXpraRemoteOptions(request.Target.Xpra)
+	if err != nil {
+		_ = writeFD.Close()
+		return remote.Runtime{}, err
+	}
+	args := sessionArgs(request.Target.Type, dbusMode, command, port, runtimeDir, dbusLaunch, dbusErr == nil, options)
 	for _, key := range sortedKeys(environment) {
 		value := environment[key]
 		args = append(args, "--env="+key+"="+value)
@@ -195,18 +202,36 @@ func (p *Provider) Start(ctx context.Context, request remote.StartRequest) (remo
 		}
 		return remote.SessionProbe{WindowCount: count}, nil
 	}
-	return remote.Runtime{Endpoint: endpoint, Stop: stop, Done: done, Probe: probe, Log: output.String}, nil
+	return remote.Runtime{Endpoint: endpoint, ClientParams: clientParams(options), Stop: stop, Done: done, Probe: probe, Log: output.String}, nil
 }
 
-func sessionArgs(kind model.RemoteTargetType, dbusMode model.RemoteDBusMode, command, port, runtimeDir, dbusLaunch string, hasDBusLaunch bool) []string {
-	args := []string{"start", "--daemon=no", "--mdns=no", "--html=on", "--bind-ws=127.0.0.1:" + port, "--socket-dir=" + runtimeDir, "--displayfd=3", "--resize-display=yes", "--start-new-commands=no"}
+func sessionArgs(kind model.RemoteTargetType, dbusMode model.RemoteDBusMode, command, port, runtimeDir, dbusLaunch string, hasDBusLaunch bool, options model.XpraRemoteOptions) []string {
+	resize, clipboard := "no", "no"
+	if *options.DynamicResize {
+		resize = "yes"
+	}
+	if *options.Clipboard {
+		clipboard = "yes"
+	}
+	args := []string{"start", "--daemon=no", "--mdns=no", "--html=on", "--bind-ws=127.0.0.1:" + port, "--socket-dir=" + runtimeDir, "--displayfd=3", "--resize-display=" + resize, "--start-new-commands=no", "--clipboard=" + clipboard, "--file-transfer=no", "--printing=no", "--speaker=off", "--microphone=off"}
+	if options.DPIMode != model.XpraDPIAuto {
+		args = append(args, fmt.Sprintf("--dpi=%d", options.DPI))
+	}
 	if kind == model.RemoteTargetDesktop {
 		args[0] = "start-desktop"
-		args = append(args, "--start-child="+command, "--exit-with-children=yes")
+		if *options.LaunchAfterConnect {
+			args = append(args, "--start-child-after-connect="+command, "--exit-with-children=yes")
+		} else {
+			args = append(args, "--start-child="+command, "--exit-with-children=yes")
+		}
 	} else {
 		// Application launchers often fork or D-Bus-activate another process;
 		// RunPilot owns this Xpra server and stops it explicitly instead.
-		args = append(args, "--start="+command)
+		if *options.LaunchAfterConnect {
+			args = append(args, "--start-after-connect="+command)
+		} else {
+			args = append(args, "--start="+command)
+		}
 	}
 	if dbusMode == model.RemoteDBusIsolated && hasDBusLaunch {
 		args = append(args, "--dbus-launch="+dbusLaunch)
@@ -214,6 +239,31 @@ func sessionArgs(kind model.RemoteTargetType, dbusMode model.RemoteDBusMode, com
 		args = append(args, "--dbus-launch=no")
 	}
 	return args
+}
+
+// clientParams is limited to xpra-html5 v19 parameters verified in its bundled
+// connect.html/index.html. Server-only settings such as DPI never appear here.
+func clientParams(options model.XpraRemoteOptions) map[string]string {
+	yesNo := func(value bool) string {
+		if value {
+			return "yes"
+		}
+		return "no"
+	}
+	params := map[string]string{
+		"encoding": options.Encoding, "video": yesNo(*options.Video),
+		"clipboard": yesNo(*options.Clipboard), "sound": "no", "printing": "no", "file_transfer": "no",
+		"toolbar_position": options.ToolbarPosition,
+	}
+	switch options.Menu {
+	case model.XpraMenuAutohide:
+		params["floating_menu"], params["autohide"] = "yes", "yes"
+	case model.XpraMenuVisible:
+		params["floating_menu"], params["autohide"] = "yes", "no"
+	case model.XpraMenuHidden:
+		params["floating_menu"], params["autohide"] = "no", "no"
+	}
+	return params
 }
 
 func reservePort() (string, error) {

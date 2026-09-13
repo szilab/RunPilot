@@ -106,7 +106,7 @@
           <section class="overview-section"><div class="section-head"><h2>Configured targets</h2></div><div id="remoteTargets" class="row-list"></div><div id="remoteTargetsEmpty" class="empty hidden"><h2>No remote targets yet</h2><p>Add an application or desktop target to launch through an available provider.</p></div></section>
           <section class="overview-section"><div class="section-head"><h2>Active sessions</h2></div><div id="remoteSessions" class="row-list"></div><div id="remoteSessionsEmpty" class="empty hidden"><h2>No active sessions</h2><p>Open a configured target to create an isolated remote session.</p></div></section>
         </div>
-        <div id="remoteSessionView" class="remote-session-view hidden"><div class="remote-session-toolbar"><div><strong id="remoteSessionName">Remote session</strong><span id="remoteSessionMeta" class="meta"></span></div><div class="row-actions"><button id="remoteFullscreen" class="button secondary small">Fullscreen</button><button id="remoteStop" class="button danger small">Stop</button><button id="remoteBack" class="button secondary small">Back</button></div></div><div id="remoteSessionError" class="form-error hidden"></div><div id="remoteSessionNotice" class="notice hidden"></div><div id="remoteFrameShell" class="remote-frame-shell"><div id="remoteLoading" class="remote-loading"><span class="spinner"></span><strong>Connecting to remote session…</strong><span>Preparing the Xpra client.</span></div><iframe id="remoteFrame" class="remote-frame" title="Remote Xpra session" allow="clipboard-read; clipboard-write; fullscreen"></iframe></div></div>
+        <div id="remoteSessionView" class="remote-session-view hidden"><div class="remote-session-toolbar"><div><strong id="remoteSessionName">Remote session</strong><span id="remoteSessionMeta" class="meta"></span></div><div class="row-actions"><button id="remoteFullscreen" class="button secondary small">Fullscreen</button><button id="remoteStop" class="button danger small">Stop</button><button id="remoteBack" class="button secondary small">Back</button></div></div><div id="remoteSessionError" class="form-error hidden"></div><div id="remoteSessionNotice" class="notice hidden"></div><div id="remoteFrameShell" class="remote-frame-shell"><div id="remoteLoading" class="remote-loading"><span class="spinner"></span><strong>Connecting to remote session…</strong><span>Preparing the Xpra client.</span></div><iframe id="remoteFrame" class="remote-frame" title="Remote Xpra session" tabindex="0" allow="clipboard-read; clipboard-write; fullscreen"></iframe></div></div>
       </section>
 
       <section id="dockerPage" class="page">
@@ -194,6 +194,24 @@
         <div class="environment-editor span-2" data-command-prefix="remote"><div class="environment-head"><div><strong>Environment variables</strong><span>Optional values passed only to this remote target.</span></div><button class="button secondary small env-add" type="button">+ Add variable</button></div><div id="remoteEnvRows" class="environment-rows"></div><p id="remoteEnvEmpty" class="environment-empty">No custom variables configured.</p><p id="remoteCommandError" class="form-error hidden" role="alert"></p></div>
         <label class="span-2">D-Bus session<select id="remoteDBusMode"><option value="isolated">Isolated (recommended)</option><option value="host-session">Host session — advanced compatibility</option></select></label>
         <p class="muted span-2">Isolated creates a private session bus for the remote application. Host session lets it contact desktop services, but single-instance applications can open on the physical desktop instead.</p>
+        <section id="remoteXpraSettings" class="remote-xpra-settings span-2">
+          <div class="section-head"><div><h3>Xpra display</h3><p class="muted">Optimized for browser-based administration and desktop applications.</p></div></div>
+          <div class="form-grid remote-xpra-grid">
+            <label>Rendering profile<select id="remoteXpraProfile"><option value="recommended">Recommended</option><option value="automatic">Automatic</option><option value="compatibility">Compatibility / Lossless</option><option value="custom">Custom</option></select></label>
+            <label>DPI<select id="remoteXpraDPIMode"><option value="auto">Auto</option><option value="96">96</option><option value="custom">Custom</option></select></label>
+            <label id="remoteXpraDPIWrap" class="hidden">Custom DPI<input id="remoteXpraDPI" type="number" min="72" max="240" step="1" value="96"></label>
+            <label class="check"><input id="remoteXpraClipboard" type="checkbox" checked> Enable clipboard</label>
+          </div>
+          <details class="remote-xpra-advanced"><summary>Advanced display settings</summary><div class="form-grid remote-xpra-grid">
+            <label>Picture encoding<select id="remoteXpraEncoding"><option value="webp">WebP</option><option value="auto">Auto</option><option value="rgb">RGB (lossless)</option></select></label>
+            <label class="check"><input id="remoteXpraVideo" type="checkbox"> Enable video codecs</label>
+            <label class="check"><input id="remoteXpraLaunchAfterConnect" type="checkbox" checked> Start application after browser connects</label>
+            <label class="check"><input id="remoteXpraDynamicResize" type="checkbox" checked> Resize virtual display with browser</label>
+            <label>Xpra menu<select id="remoteXpraMenu"><option value="autohide">Auto-hide</option><option value="visible">Always visible</option><option value="hidden">Hidden</option></select></label>
+            <label>Toolbar position<select id="remoteXpraToolbarPosition"><option value="top-left">Top left</option><option value="top-right">Top right</option></select></label>
+          </div></details>
+          <p class="muted">Sound, printing, and Xpra file transfer stay disabled; use RunPilot Storage for files.</p>
+        </section>
         <label class="check span-2"><input id="remoteTargetEnabled" type="checkbox" checked> Target enabled</label>
       </div>
       <div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="remoteTargetDialog">Cancel</button><button class="button primary" value="default">Save target</button></div>

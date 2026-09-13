@@ -187,7 +187,54 @@ type RemoteTarget struct {
 	// ForwardDBus is accepted only when loading legacy configurations. Normalize
 	// converts true to DBusMode host-session and never writes it back.
 	ForwardDBus bool `json:"forwardDbus,omitempty" yaml:"forwardDbus,omitempty"`
-	Enabled     bool `json:"enabled" yaml:"enabled"`
+	// Xpra contains typed provider-specific settings. It is nil in legacy
+	// targets; NormalizeXpraRemoteOptions supplies RunPilot defaults at runtime.
+	Xpra    *XpraRemoteOptions `json:"xpra,omitempty" yaml:"xpra,omitempty"`
+	Enabled bool               `json:"enabled" yaml:"enabled"`
+}
+
+type XpraProfile string
+
+const (
+	XpraProfileRecommended   XpraProfile = "recommended"
+	XpraProfileAutomatic     XpraProfile = "automatic"
+	XpraProfileCompatibility XpraProfile = "compatibility"
+	XpraProfileCustom        XpraProfile = "custom"
+)
+
+type XpraDPIMode string
+
+const (
+	XpraDPIAuto   XpraDPIMode = "auto"
+	XpraDPI96     XpraDPIMode = "96"
+	XpraDPICustom XpraDPIMode = "custom"
+)
+
+type XpraMenuMode string
+
+const (
+	XpraMenuAutohide XpraMenuMode = "autohide"
+	XpraMenuVisible  XpraMenuMode = "visible"
+	XpraMenuHidden   XpraMenuMode = "hidden"
+)
+
+// XpraRemoteOptions is deliberately small and typed. Pointer booleans let a
+// partial/legacy YAML target inherit defaults while still allowing false to be
+// an explicit user choice.
+type XpraRemoteOptions struct {
+	Profile            XpraProfile  `json:"profile,omitempty" yaml:"profile,omitempty"`
+	Encoding           string       `json:"encoding,omitempty" yaml:"encoding,omitempty"`
+	Video              *bool        `json:"video,omitempty" yaml:"video,omitempty"`
+	DPIMode            XpraDPIMode  `json:"dpiMode,omitempty" yaml:"dpiMode,omitempty"`
+	DPI                int          `json:"dpi,omitempty" yaml:"dpi,omitempty"`
+	LaunchAfterConnect *bool        `json:"launchAfterConnect,omitempty" yaml:"launchAfterConnect,omitempty"`
+	Clipboard          *bool        `json:"clipboard,omitempty" yaml:"clipboard,omitempty"`
+	DynamicResize      *bool        `json:"dynamicResize,omitempty" yaml:"dynamicResize,omitempty"`
+	Menu               XpraMenuMode `json:"menu,omitempty" yaml:"menu,omitempty"`
+	ToolbarPosition    string       `json:"toolbarPosition,omitempty" yaml:"toolbarPosition,omitempty"`
+	Sound              *bool        `json:"sound,omitempty" yaml:"sound,omitempty"`
+	Printing           *bool        `json:"printing,omitempty" yaml:"printing,omitempty"`
+	FileTransfer       *bool        `json:"fileTransfer,omitempty" yaml:"fileTransfer,omitempty"`
 }
 
 type RemoteProviderCapabilities struct {
@@ -209,6 +256,7 @@ type RemoteProviderStatus struct {
 	HTML5Available      bool                       `json:"html5Available"`
 	DBusLaunchAvailable bool                       `json:"dbusLaunchAvailable"`
 	Warnings            []string                   `json:"warnings,omitempty"`
+	XpraDefaults        *XpraRemoteOptions         `json:"xpraDefaults,omitempty"`
 }
 
 type RemoteSessionState string
@@ -236,6 +284,9 @@ type RemoteSession struct {
 	Failure     string             `json:"failure,omitempty"`
 	Message     string             `json:"message,omitempty"`
 	WindowCount *int               `json:"windowCount,omitempty"`
+	// Xpra is an effective, non-sensitive display configuration snapshot. It
+	// remains fixed for the lifetime of this running session.
+	Xpra *XpraRemoteOptions `json:"xpra,omitempty"`
 }
 
 // SoftwareConfig contains the external providers RunPilot manages for its
