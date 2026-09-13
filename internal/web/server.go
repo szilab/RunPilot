@@ -38,6 +38,8 @@ type Server struct {
 	terminal         *terminal.Manager
 	terminalTickets  map[string]terminalTicket
 	terminalTicketMu sync.Mutex
+	remoteTickets    map[string]remoteClientTicket
+	remoteTicketMu   sync.Mutex
 	docker           *dockercompose.Manager
 }
 type terminalTicket struct {
@@ -50,6 +52,10 @@ type downloadTicket struct {
 	StorageID, Path string
 	Expires         time.Time
 }
+type remoteClientTicket struct {
+	SessionID string
+	Expires   time.Time
+}
 
 func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	basePath := "/"
@@ -60,7 +66,7 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, terminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), terminalTickets: map[string]terminalTicket{}, docker: ctrl.Docker()}, nil
+	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, terminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), terminalTickets: map[string]terminalTicket{}, remoteTickets: map[string]remoteClientTicket{}, docker: ctrl.Docker()}, nil
 }
 
 func (s *Server) BasePath() string { return s.basePath }
@@ -91,6 +97,15 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/docker/projects/{name}/files/{kind}", s.handleDockerReadFile)
 	api.HandleFunc("PUT /api/v1/docker/projects/{name}/files/{kind}", s.handleDockerWriteFile)
 	api.HandleFunc("GET /api/v1/terminal", s.handleTerminalInfo)
+	api.HandleFunc("GET /api/v1/remote/providers", s.handleRemoteProviders)
+	api.HandleFunc("GET /api/v1/remote/targets", s.handleRemoteTargets)
+	api.HandleFunc("POST /api/v1/remote/targets", s.handleCreateRemoteTarget)
+	api.HandleFunc("PUT /api/v1/remote/targets/{id}", s.handleUpdateRemoteTarget)
+	api.HandleFunc("DELETE /api/v1/remote/targets/{id}", s.handleDeleteRemoteTarget)
+	api.HandleFunc("GET /api/v1/remote/sessions", s.handleRemoteSessions)
+	api.HandleFunc("POST /api/v1/remote/targets/{id}/sessions", s.handleStartRemoteSession)
+	api.HandleFunc("DELETE /api/v1/remote/sessions/{id}", s.handleStopRemoteSession)
+	api.HandleFunc("POST /api/v1/remote/sessions/{id}/client-ticket", s.handleRemoteClientTicket)
 	api.HandleFunc("POST /api/v1/terminal/ticket", s.handleTerminalTicket)
 	api.HandleFunc("GET /api/v1/overview", s.handleOverview)
 	api.HandleFunc("GET /api/v1/processes", s.handleListProcesses)
@@ -138,6 +153,11 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/v1/software/providers/{id}/refresh", s.handleSoftwareRefresh)
 
 	mux.Handle("/api/", s.auth(api))
+	// The embedded upstream HTML5 client cannot attach a Bearer header to every
+	// asset and WebSocket request. It receives only a scoped, HttpOnly,
+	// path-scoped cookie after an authenticated client-ticket request.
+	mux.HandleFunc("GET /api/v1/remote/sessions/{id}/client/{path...}", s.handleRemoteClient)
+	mux.HandleFunc("GET /remote/session/{id}", s.handleRemoteSessionPage)
 	// A terminal connection is authenticated by its short-lived, single-use
 	// ticket. It intentionally does not accept the permanent API token in a URL.
 	mux.HandleFunc("GET /api/v1/terminal/connect", s.handleTerminalConnect)

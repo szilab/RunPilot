@@ -148,11 +148,75 @@ type ServerConfig struct {
 }
 
 type Config struct {
-	Version   int                 `json:"version" yaml:"version"`
-	Server    ServerConfig        `json:"server" yaml:"server"`
-	Processes []ProcessDefinition `json:"processes" yaml:"processes"`
-	Jobs      []JobDefinition     `json:"jobs" yaml:"jobs"`
-	Software  SoftwareConfig      `json:"software" yaml:"software"`
+	Version       int                 `json:"version" yaml:"version"`
+	Server        ServerConfig        `json:"server" yaml:"server"`
+	Processes     []ProcessDefinition `json:"processes" yaml:"processes"`
+	Jobs          []JobDefinition     `json:"jobs" yaml:"jobs"`
+	Software      SoftwareConfig      `json:"software" yaml:"software"`
+	RemoteTargets []RemoteTarget      `json:"remoteTargets" yaml:"remoteTargets"`
+}
+
+// RemoteTarget is a reusable, administrator-configured graphical workload.
+// It intentionally uses CommandSpec so command validation and environment
+// semantics stay identical to the rest of RunPilot.
+type RemoteTargetType string
+
+const (
+	RemoteTargetApplication RemoteTargetType = "application"
+	RemoteTargetDesktop     RemoteTargetType = "desktop"
+)
+
+type RemoteTarget struct {
+	ID          string           `json:"id" yaml:"id"`
+	Name        string           `json:"name" yaml:"name"`
+	Provider    string           `json:"provider" yaml:"provider"`
+	Type        RemoteTargetType `json:"type" yaml:"type"`
+	Command     CommandSpec      `json:"command" yaml:"command"`
+	ForwardDBus bool             `json:"forwardDbus,omitempty" yaml:"forwardDbus,omitempty"`
+	Enabled     bool             `json:"enabled" yaml:"enabled"`
+}
+
+type RemoteProviderCapabilities struct {
+	ApplicationSessions bool `json:"applicationSessions"`
+	DesktopSessions     bool `json:"desktopSessions"`
+	Clipboard           bool `json:"clipboard"`
+	DynamicResize       bool `json:"dynamicResize"`
+	Fullscreen          bool `json:"fullscreen"`
+}
+
+type RemoteProviderStatus struct {
+	ID           string                     `json:"id"`
+	Name         string                     `json:"name"`
+	State        string                     `json:"state"`
+	Message      string                     `json:"message,omitempty"`
+	Version      string                     `json:"version,omitempty"`
+	Platform     string                     `json:"platform"`
+	Capabilities RemoteProviderCapabilities `json:"capabilities"`
+}
+
+type RemoteSessionState string
+
+const (
+	RemoteSessionStarting RemoteSessionState = "starting"
+	RemoteSessionRunning  RemoteSessionState = "running"
+	RemoteSessionStopping RemoteSessionState = "stopping"
+	RemoteSessionStopped  RemoteSessionState = "stopped"
+	RemoteSessionFailed   RemoteSessionState = "failed"
+)
+
+// RemoteSession is deliberately runtime-only. Internal endpoints, display
+// identifiers, and provider process details never leave the remote package.
+type RemoteSession struct {
+	ID         string             `json:"id"`
+	Provider   string             `json:"provider"`
+	TargetID   string             `json:"targetId"`
+	TargetName string             `json:"targetName"`
+	Type       RemoteTargetType   `json:"type"`
+	State      RemoteSessionState `json:"state"`
+	CreatedAt  time.Time          `json:"createdAt"`
+	StartedAt  *time.Time         `json:"startedAt,omitempty"`
+	StoppedAt  *time.Time         `json:"stoppedAt,omitempty"`
+	Failure    string             `json:"failure,omitempty"`
 }
 
 // SoftwareConfig contains the external providers RunPilot manages for its

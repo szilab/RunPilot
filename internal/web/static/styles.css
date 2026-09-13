@@ -73,6 +73,7 @@ header p { margin: 0; color: #64748b; }
 .status.starting, .status.stopping { background: #fef3c7; color: #92400e; }
 .status.stopped, .status.idle { background: #eef2f7; color: #475569; }
 .status.failure { background: #fee2e2; color: #991b1b; }
+.status.failed { background: #fee2e2; color: #991b1b; }
 .status.update { background: #fef3c7; color: #92400e; }
 .status.installed { background: #eef2f7; color: #475569; }
 .row-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 18px; font-size: 13px; }
@@ -198,6 +199,22 @@ header p { margin: 0; color: #64748b; }
 .terminal-pane .xterm { height: 100%; }
 .terminal-pane .xterm-viewport { overflow-y: auto !important; }
 .terminal-dialog { width:min(1000px,calc(100vw - 32px)); }.docker-attach-pane { height:min(65vh,600px); min-height:360px; overflow:hidden; border:1px solid #28374a; border-radius:10px; padding:8px; background:#0b1220; }.docker-attach-pane .xterm { height:100%; }.docker-attach-pane .xterm-viewport { overflow-y:auto !important; }
+.remote-overview { display: grid; gap: 6px; }
+.remote-session-view { height: calc(100vh - 166px); min-height: 460px; display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 10px; }
+.remote-session-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 14px; }
+.remote-session-toolbar > div:first-child { display: grid; gap: 3px; }
+.remote-session-toolbar strong { color: #111827; font-size: 17px; }
+.remote-frame-shell { position: relative; min-width: 0; min-height: 0; overflow: hidden; border: 1px solid #28374a; border-radius: 10px; background: #0b1220; }
+.remote-frame { display: block; width: 100%; height: 100%; min-height: 0; border: 0; background: #0b1220; }
+.remote-loading { position: absolute; inset: 0; z-index: 1; display: grid; place-content: center; justify-items: center; gap: 10px; color: #b9c7d9; background: #0b1220; font-size: 13px; }
+.remote-loading strong { color: #f8fafc; font-size: 15px; }
+main.remote-active { padding-top: 22px; padding-bottom: 22px; }
+main.remote-active > header { display: none; }
+main.remote-active #remotePage { height: calc(100vh - 44px); }
+main.remote-active .remote-session-view { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+main.remote-active .remote-frame-shell { flex: 1 1 0; height: 0; min-height: 0; }
+.button.danger { color: #b91c1c; background: #fff; border-color: #fecaca; }
+.button.danger:hover:not(:disabled) { background: #fef2f2; border-color: #fca5a5; }
 .spinner { width: 28px; height: 28px; border: 3px solid #cbd5e1; border-top-color: #2563eb; border-radius: 50%; animation: software-spin .8s linear infinite; }
 @keyframes software-spin { to { transform: rotate(360deg); } }
 code { font-family: "Cascadia Code", Consolas, monospace; }
@@ -247,6 +264,7 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 :root[data-theme="dark"] { color: #e5e7eb; background: #111827; }
 :root[data-theme="dark"] body, :root[data-theme="dark"] main { background: #111827; }
 :root[data-theme="dark"] .sidebar { background: #0b1426; }
+:root[data-theme="dark"] .remote-session-toolbar strong { color: #f8fafc; }
 :root[data-theme="dark"] .nav:hover, :root[data-theme="dark"] .nav.active { background: #1F437F; }
 :root[data-theme="dark"] h1,
 :root[data-theme="dark"] .metric strong,

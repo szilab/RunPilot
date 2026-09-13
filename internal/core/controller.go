@@ -15,6 +15,8 @@ import (
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/platform"
 	"github.com/szilab/RunPilot/internal/processmgr"
+	"github.com/szilab/RunPilot/internal/remote"
+	"github.com/szilab/RunPilot/internal/remote/xpra"
 	"github.com/szilab/RunPilot/internal/scheduler"
 	"github.com/szilab/RunPilot/internal/software"
 	"github.com/szilab/RunPilot/internal/storage"
@@ -30,6 +32,7 @@ type Controller struct {
 	software  *software.Manager
 	docker    *dockercompose.Manager
 	storage   *storage.Registry
+	remote    *remote.Service
 }
 
 func Open(dataDir string) (*Controller, error) {
@@ -54,6 +57,7 @@ func Open(dataDir string) (*Controller, error) {
 		scheduler: scheduler.New(jr),
 		software:  software.NewManager(dataDir),
 		docker:    dockercompose.NewManager(dataDir),
+		remote:    remote.New(dataDir, xpra.New()),
 	}
 	if platform.CurrentCapabilities().DockerCompose {
 		c.storage = storage.NewRegistry(c.docker)
@@ -73,11 +77,80 @@ func (c *Controller) Start() {
 }
 
 func (c *Controller) Close() {
+	c.remote.Close()
 	c.scheduler.Stop()
 	snap := c.config.Snapshot()
 	for _, p := range snap.Processes {
 		_ = c.processes.Stop(p.ID)
 	}
+}
+
+func (c *Controller) Remote() *remote.Service { return c.remote }
+
+func (c *Controller) RemoteTargets() []model.RemoteTarget { return c.config.Snapshot().RemoteTargets }
+
+func (c *Controller) RemoteTarget(id string) (model.RemoteTarget, error) {
+	for _, target := range c.RemoteTargets() {
+		if target.ID == id {
+			return target, nil
+		}
+	}
+	return model.RemoteTarget{}, fmt.Errorf("unknown remote target %q", id)
+}
+
+func (c *Controller) UpsertRemoteTarget(target model.RemoteTarget) (model.RemoteTarget, error) {
+	if strings.TrimSpace(target.Name) == "" {
+		return target, fmt.Errorf("remote target name is required")
+	}
+	if target.Provider == "" {
+		target.Provider = "xpra"
+	}
+	if target.Type != model.RemoteTargetApplication && target.Type != model.RemoteTargetDesktop {
+		return target, fmt.Errorf("remote target type must be application or desktop")
+	}
+	if strings.TrimSpace(target.Command.Path) == "" {
+		return target, fmt.Errorf("remote target command path is required")
+	}
+	if target.Command.Interpreter != "" && target.Command.Interpreter != "direct" && target.Command.Interpreter != "auto" {
+		return target, fmt.Errorf("remote targets require a direct executable command")
+	}
+	target.Command.Interpreter = "direct"
+	if err := model.ValidateCommand(target.Command); err != nil {
+		return target, err
+	}
+	if target.ID == "" {
+		target.ID = config.NewID("remote-target")
+	}
+	err := c.config.Update(func(cfg *model.Config) error {
+		for i := range cfg.RemoteTargets {
+			if cfg.RemoteTargets[i].ID == target.ID {
+				cfg.RemoteTargets[i] = target
+				return nil
+			}
+		}
+		cfg.RemoteTargets = append(cfg.RemoteTargets, target)
+		return nil
+	})
+	return target, err
+}
+
+func (c *Controller) DeleteRemoteTarget(id string) error {
+	return c.config.Update(func(cfg *model.Config) error {
+		out := cfg.RemoteTargets[:0]
+		found := false
+		for _, target := range cfg.RemoteTargets {
+			if target.ID == id {
+				found = true
+				continue
+			}
+			out = append(out, target)
+		}
+		if !found {
+			return fmt.Errorf("unknown remote target %q", id)
+		}
+		cfg.RemoteTargets = out
+		return nil
+	})
 }
 
 func (c *Controller) DataDir() string        { return c.dataDir }

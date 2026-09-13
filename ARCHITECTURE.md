@@ -123,6 +123,38 @@ The MVP uses embedded static HTML/CSS/JavaScript. There is no frontend runtime d
 
 A future React/Vue/Svelte frontend can replace the static client while preserving the same REST contract.
 
+## Remote Access
+
+Remote Access is a capability with provider adapters. It owns persistent,
+administrator-configured Remote targets and ephemeral runtime sessions; it is
+not a generic command API and does not implement a display protocol. Targets
+reuse `CommandSpec` for command arguments, working directory, and environment.
+The current Xpra provider supports Linux application (`xpra start`) and desktop
+(`xpra start-desktop`) sessions. A provider advertises availability and explicit
+capabilities so a later VNC/noVNC, RDP/Guacamole, or Windows-oriented provider
+does not require redesigning the Remote API or UI.
+
+Each Xpra session gets a RunPilot runtime directory, an Xpra-selected display,
+and a localhost-only HTTP/WebSocket listener. Xpra's supplied HTML5 client is
+served through a RunPilot same-origin reverse proxy under the session resource;
+its WebSocket upgrades remain on that proxy path. The public browser never sees
+or chooses the internal endpoint. An authenticated API request creates the
+embedded-client ticket, which becomes a bounded-lifetime, HttpOnly, path-scoped
+cookie. This keeps the ordinary API bearer-token boundary and avoids exposing a
+separate Xpra listener. Xpra itself is launched with mDNS disabled, HTML enabled,
+new command execution disabled, and output bounded for diagnostics.
+
+Remote sessions are owned by the current RunPilot process. On controlled
+shutdown it requests the child process stop and falls back to termination after
+a timeout; it does not reconcile or adopt unrelated/orphaned Xpra sessions on
+restart. Linux Xpra support is optional: absence is a discoverable provider
+state, while Windows returns a clear unsupported state. The implementation uses
+Xpra's `--displayfd` for collision-free display allocation. Xpra does not report
+an automatically selected WebSocket port to its parent, so RunPilot reserves a
+localhost ephemeral port immediately before start; there remains the usual
+small same-host bind race, contained to a private listener and reported as a
+session-start failure if it occurs.
+
 ## Docker Compose boundary
 
 `internal/dockercompose` is a Linux-only capability behind the existing platform capability model. It uses the Docker CLI with fixed argument arrays and an injectable runner, rather than the Docker SDK or a shell. Managed Compose projects persist as direct children of `<data-dir>/compose`; external Docker-discovered Compose projects are observable but read-only.

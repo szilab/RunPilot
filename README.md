@@ -30,6 +30,7 @@ RunPilot should integrate specialist tools such as Robocopy, Restic or future pa
 - YAML configuration under `%ProgramData%\RunPilot`
 - Software Management through a RunPilot-owned isolated Scoop provider
 - Interactive Terminal tabs backed by a Linux PTY or Windows ConPTY
+- Remote Access targets and sessions through the Linux Xpra provider
 
 ## Product direction
 
@@ -114,6 +115,43 @@ service account). It is protected by the same API token boundary as process and
 job management. The browser first obtains a short-lived, single-use connection
 ticket through the authenticated REST API; the permanent token is never placed
 in the WebSocket URL.
+
+## Remote Access (Xpra)
+
+Remote Access is a provider-based capability, not a remote-display protocol.
+The first provider is Xpra on Linux hosts. Add an enabled application target
+(for example `firefox`) or desktop target (for example `startxfce4`) from the
+Remote page; its command, arguments, working directory and environment are
+stored in `runpilot.yaml` like other configured workloads. Each Open action
+creates a new, ephemeral isolated session.
+
+RunPilot discovers `xpra` on `PATH` and reports the installed version, missing
+binary, or unsupported platform without preventing the daemon from starting.
+Install Xpra using your distribution's package source (for example, `apt install
+xpra` on Debian/Ubuntu or `dnf install xpra` on Fedora where those packages are
+available). The selected application and any desktop environment/window manager
+must already be installed; RunPilot does not install or configure them.
+
+Each target may opt in to **Forward RunPilot's D-Bus session**. This passes the
+RunPilot process's `DBUS_SESSION_BUS_ADDRESS` to that target only, allowing it
+to interact with desktop-session services. It is disabled by default because it
+reduces target isolation; if the daemon has no D-Bus session address, RunPilot
+reports a clear launch error and the address may instead be configured in the
+target's Environment fields.
+
+Xpra listens only on a per-session `127.0.0.1` WebSocket/HTTP port. The browser
+loads Xpra's upstream HTML5 client through a same-origin, ticketed RunPilot
+reverse proxy, so no Xpra port is exposed publicly. The ticket is exchanged for
+an HttpOnly, path-scoped, bounded-lifetime cookie used only for the embedded client's assets and
+WebSocket upgrade. RunPilot never accepts a browser-supplied upstream host or
+port. Clipboard, dynamic resize, and fullscreen are supplied by the upstream
+Xpra HTML5 client when the installed Xpra build supports them.
+
+Sessions are intentionally ephemeral: RunPilot stops the Xpra processes it owns
+during shutdown and does not adopt orphaned sessions after a restart. The first
+supported deployment is RunPilot directly on a Linux host. Xpra server support
+is reported as unsupported on Windows; future VNC/noVNC, RDP/Guacamole, or
+other providers can implement the same Remote provider boundary.
 
 ## Windows build
 

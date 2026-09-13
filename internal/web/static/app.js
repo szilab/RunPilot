@@ -10,6 +10,7 @@ let storageClipboard = null, editingTextPath = null, storageShowHidden = false, 
 let overview = null;
 let systemInfo = null, terminalInfo = null, terminalTabs = [], activeTerminalID = "";
 let dockerRuntime = null, dockerProjects = [], dockerVolumes = [], dockerNetworks = [], dockerBusy = new Set(), dockerPendingContainerStates = new Map(), dockerProjectErrors = new Map(), dockerEditing = null, dockerAttachTerminal = null;
+let remoteProviders = [], remoteTargets = [], remoteSessions = [], remoteSessionID = "";
 let logTimer = null;
 let logSource = null;
 let refreshTimer = null;
@@ -24,6 +25,7 @@ const pageMeta = {
   software: ["Software", "Install and maintain portable applications in a RunPilot-managed Scoop root on Windows.", null],
   terminal: ["Terminal", "Interactive shells run with the same OS authority as the RunPilot service.", null],
   docker: ["Docker", "Docker Compose projects, volumes, and networks managed with the RunPilot service identity.", "Create project"],
+  remote: ["Remote Access", "Launch configured graphical applications and desktops through the same RunPilot origin.", "Add target"],
 };
 
 async function api(path, options = {}) {
@@ -246,12 +248,13 @@ async function refresh() {
   if (refreshing || !token) return;
   refreshing = true;
   try {
-    const [p, j, o, st, sw, docker] = await Promise.all([
+    const [p, j, o, st, sw, docker, remote] = await Promise.all([
       api("api/v1/processes"),
       api("api/v1/jobs"),
       api("api/v1/overview"), api("api/v1/storage"),
       currentPage === "software" ? api("api/v1/software/providers") : Promise.resolve(null),
-      currentPage === "docker" ? Promise.all([api("api/v1/docker/projects"), api("api/v1/docker/volumes"), api("api/v1/docker/networks")]) : Promise.resolve(null)
+      currentPage === "docker" ? Promise.all([api("api/v1/docker/projects"), api("api/v1/docker/volumes"), api("api/v1/docker/networks")]) : Promise.resolve(null),
+      currentPage === "remote" ? Promise.all([api("api/v1/remote/providers"), api("api/v1/remote/targets"), api("api/v1/remote/sessions")]) : Promise.resolve(null)
     ]);
     processes = p;
     jobs = j;
@@ -272,6 +275,7 @@ async function refresh() {
     renderStorage();
     if (currentPage === "software") renderSoftware();
     if (docker) applyDockerSnapshot(docker);
+    if (remote) { [remoteProviders, remoteTargets, remoteSessions] = remote; renderRemote(); }
     setConnected(true);
   } catch (e) {
     softwareLoading = false; softwareLoadingKey = "";
@@ -283,6 +287,31 @@ async function refresh() {
     refreshing = false;
   }
 }
+
+function remoteStatus(state) { return state === "available" ? "running" : state === "not-installed" || state === "unsupported" ? "stopped" : "failure"; }
+function renderRemote() {
+  if (!$("remoteProviders")) return;
+  $("remoteProviders").innerHTML = remoteProviders.map(provider => `<article class="row"><div class="row-head"><div><h3>${escapeHtml(provider.name)}</h3><div class="meta">${escapeHtml(provider.platform)}${provider.version ? ` · ${escapeHtml(provider.version)}` : ""}</div></div><span class="status ${remoteStatus(provider.state)}">${escapeHtml(provider.state)}</span></div>${provider.message ? `<div class="row-details"><div class="kv"><span>Status</span><span>${escapeHtml(provider.message)}</span></div></div>` : ""}</article>`).join("") || `<div class="empty compact"><h2>No providers registered</h2></div>`;
+  $("remoteTargets").innerHTML = remoteTargets.map(target => `<article class="row"><div class="row-head"><div><h3>${escapeHtml(target.name)}</h3><div class="meta">${escapeHtml(target.type)} · ${escapeHtml(target.provider)} · ${escapeHtml(target.command?.path || "")}</div></div><span class="status ${target.enabled ? "running" : "stopped"}">${target.enabled ? "enabled" : "disabled"}</span></div><div class="row-actions"><button class="button primary small" ${target.enabled ? "" : "disabled"} onclick="startRemoteSession('${target.id}')">Open</button><button class="button secondary small" onclick="editRemoteTarget('${target.id}')">Edit</button><button class="button danger small" onclick="deleteRemoteTarget('${target.id}')">Delete</button></div></article>`).join("");
+  $("remoteTargetsEmpty").classList.toggle("hidden", remoteTargets.length > 0);
+  const active = remoteSessions.filter(session => ["starting", "running", "stopping"].includes(session.state));
+  $("remoteSessions").innerHTML = active.map(session => `<article class="row"><div class="row-head"><div><h3>${escapeHtml(session.targetName)}</h3><div class="meta">${escapeHtml(session.type)} · ${fmtDate(session.startedAt || session.createdAt)}</div></div>${statusBadge(session.state)}</div>${session.failure ? `<div class="form-error">${escapeHtml(session.failure)}</div>` : ""}<div class="row-actions"><button class="button primary small" ${session.state === "running" ? "" : "disabled"} onclick="openRemoteSession('${session.id}')">Open</button><button class="button danger small" onclick="stopRemoteSession('${session.id}')">Stop</button></div></article>`).join("");
+  $("remoteSessionsEmpty").classList.toggle("hidden", active.length > 0);
+  if (remoteSessionID && !remoteSessions.some(session => session.id === remoteSessionID)) {
+    closeRemoteSession();
+    toast("The remote session is no longer available.");
+    return;
+  }
+  if (remoteSessionID) renderRemoteSession();
+}
+function openRemoteTarget(existing = null) { $("remoteTargetForm").reset(); $("remoteTargetId").value=existing?.id||""; $("remoteTargetName").value=existing?.name||""; $("remoteTargetType").value=existing?.type||"application"; $("remoteTargetProvider").value=existing?.provider||"xpra"; $("remoteForwardDbus").checked=!!existing?.forwardDbus; $("remoteTargetEnabled").checked=existing ? !!existing.enabled : true; populateCommandEditor("remote",existing?.command||{interpreter:"direct"}); $("remoteTargetDialogTitle").textContent=existing?"Edit remote target":"Add remote target"; $("remoteTargetDialog").showModal(); }
+function editRemoteTarget(id) { openRemoteTarget(remoteTargets.find(target => target.id === id)); }
+async function deleteRemoteTarget(id) { if (!confirm("Delete this remote target?")) return; try { await api(`api/v1/remote/targets/${id}`,{method:"DELETE"}); await refresh(); } catch (e) { toast(e.message); } }
+async function startRemoteSession(id) { try { const session=await api(`api/v1/remote/targets/${id}/sessions`,{method:"POST"}); await refresh(); openRemoteSession(session.id); } catch (e) { toast(e.message); await refresh(); } }
+async function stopRemoteSession(id) { try { await api(`api/v1/remote/sessions/${id}`,{method:"DELETE"}); if (remoteSessionID===id) closeRemoteSession(); await refresh(); } catch (e) { toast(e.message); } }
+async function openRemoteSession(id) { remoteSessionID=id; setPage("remote",false); $("remoteSessionError").classList.add("hidden"); $("remoteLoading").classList.remove("hidden"); renderRemoteSession(); try { const ticket=await api(`api/v1/remote/sessions/${id}/client-ticket`,{method:"POST"}); const frame=$("remoteFrame"); frame.src=`api/v1/remote/sessions/${encodeURIComponent(id)}/client/?ticket=${encodeURIComponent(ticket.ticket)}`; history.replaceState(null,"",`?remoteSession=${encodeURIComponent(id)}`); } catch(e) { closeRemoteSession(); toast(`Remote session unavailable: ${e.message}`); } }
+function renderRemoteSession() { const session=remoteSessions.find(item=>item.id===remoteSessionID); document.querySelector("main").classList.add("remote-active"); $("remoteOverview").classList.add("hidden"); $("remoteSessionView").classList.remove("hidden"); $("remoteSessionName").textContent=session?.targetName||"Remote session"; $("remoteSessionMeta").textContent=session ? `${session.state} · ${fmtDate(session.startedAt || session.createdAt)}` : "Loading session…"; $("remoteStop").disabled=!session || !["starting","running","stopping"].includes(session.state); }
+function closeRemoteSession() { remoteSessionID=""; document.querySelector("main").classList.remove("remote-active"); $("remoteFrame").src="about:blank"; $("remoteLoading").classList.add("hidden"); $("remoteOverview").classList.remove("hidden"); $("remoteSessionView").classList.add("hidden"); history.replaceState(null,"",location.pathname); }
 
 function renderOverview() {
   if (!overview) return;
@@ -835,6 +864,7 @@ function closeTerminal(id) {
 
 function setPage(page) {
   currentPage = page;
+	if (page !== "remote") document.querySelector("main").classList.remove("remote-active");
   document.querySelectorAll(".nav").forEach(n => n.classList.toggle("active", n.dataset.page === page));
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
   $(`${page}Page`).classList.add("active");
@@ -847,6 +877,7 @@ function setPage(page) {
 	$("dockerNetworkAction").classList.toggle("hidden", page !== "docker");
 	if (page === "software") renderSoftware();
 	if (page === "docker") renderDocker();
+	if (page === "remote") renderRemote();
 	if (page === "terminal" && terminalInfo?.available && terminalTabs.length === 0) newTerminal();
   refresh();
 }
@@ -868,6 +899,17 @@ document.querySelectorAll("[data-dismiss]").forEach(button => button.addEventLis
 $("primaryAction").addEventListener("click", () => {
 	if (currentPage === "tasks") $("taskDialog").showModal();
 	if (currentPage === "docker") openDockerCreate();
+	if (currentPage === "remote") openRemoteTarget();
+});
+
+$("remoteBack").addEventListener("click", closeRemoteSession);
+$("remoteStop").addEventListener("click", () => { if (remoteSessionID) stopRemoteSession(remoteSessionID); });
+$("remoteFullscreen").addEventListener("click", () => $("remoteFrame").requestFullscreen?.().catch(error => toast(error.message)));
+$("remoteFrame").addEventListener("load", () => { if (remoteSessionID) $("remoteLoading").classList.add("hidden"); });
+$("remoteTargetForm").addEventListener("submit", async event => {
+  event.preventDefault(); const id=$("remoteTargetId").value; const command=commandFromEditor("remote"); if (!command) return;
+  const body={name:$("remoteTargetName").value.trim(),provider:$("remoteTargetProvider").value,type:$("remoteTargetType").value,forwardDbus:$("remoteForwardDbus").checked,enabled:$("remoteTargetEnabled").checked,command};
+  try { await api(id ? `api/v1/remote/targets/${id}` : "api/v1/remote/targets",{method:id?"PUT":"POST",body:JSON.stringify(body)}); $("remoteTargetDialog").close(); await refresh(); } catch(error) { setCommandError("remote",error.message); }
 });
 
 document.querySelectorAll("[data-task-filter]").forEach(button => button.addEventListener("click", () => { taskFilter = button.dataset.taskFilter; document.querySelectorAll("[data-task-filter]").forEach(item => item.classList.toggle("active", item === button)); renderTasks(); }));
@@ -1079,6 +1121,8 @@ $("loginForm").addEventListener("submit", async e => {
   setConnected(false);
   startConnectionMonitor();
   await refresh();
+  const requestedSession = new URLSearchParams(location.search).get("remoteSession");
+  if (requestedSession) { setPage("remote"); await openRemoteSession(requestedSession); }
   try { await loadTerminalInfo(); } catch (e) { if (e.message !== "Unauthorized") toast(e.message); }
   startAutoRefresh();
 })();

@@ -21,6 +21,7 @@
         <button class="nav" data-page="storage">Storage</button>
         <button class="nav" data-page="tasks">Tasks</button>
         <button class="nav" data-page="software">Software</button>
+        <button class="nav" data-page="remote">Remote</button>
         <button id="terminalNav" class="nav hidden" data-page="terminal">Terminal</button>
       </nav>
       <div class="side-foot">
@@ -94,6 +95,15 @@
         <div id="terminalWorkspace" class="terminal-workspace hidden"><div id="terminalTabs" class="terminal-tabs"></div><div id="terminalPanes" class="terminal-panes"></div></div>
       </section>
 
+      <section id="remotePage" class="page">
+        <div id="remoteOverview" class="remote-overview">
+          <section class="overview-section"><div class="section-head"><h2>Providers</h2></div><div id="remoteProviders" class="row-list"></div></section>
+          <section class="overview-section"><div class="section-head"><h2>Configured targets</h2></div><div id="remoteTargets" class="row-list"></div><div id="remoteTargetsEmpty" class="empty hidden"><h2>No remote targets yet</h2><p>Add an application or desktop target to launch through an available provider.</p></div></section>
+          <section class="overview-section"><div class="section-head"><h2>Active sessions</h2></div><div id="remoteSessions" class="row-list"></div><div id="remoteSessionsEmpty" class="empty hidden"><h2>No active sessions</h2><p>Open a configured target to create an isolated remote session.</p></div></section>
+        </div>
+        <div id="remoteSessionView" class="remote-session-view hidden"><div class="remote-session-toolbar"><div><strong id="remoteSessionName">Remote session</strong><span id="remoteSessionMeta" class="meta"></span></div><div class="row-actions"><button id="remoteFullscreen" class="button secondary small">Fullscreen</button><button id="remoteStop" class="button danger small">Stop</button><button id="remoteBack" class="button secondary small">Back</button></div></div><div id="remoteSessionError" class="form-error hidden"></div><div id="remoteFrameShell" class="remote-frame-shell"><div id="remoteLoading" class="remote-loading"><span class="spinner"></span><strong>Connecting to remote session…</strong><span>Preparing the Xpra client.</span></div><iframe id="remoteFrame" class="remote-frame" title="Remote Xpra session" allow="clipboard-read; clipboard-write; fullscreen"></iframe></div></div>
+      </section>
+
       <section id="dockerPage" class="page">
         <div id="dockerNotice" class="notice hidden"></div>
         <section class="docker-section"><div class="section-head"><h2>Compose projects</h2></div><div id="dockerProjectGrid" class="docker-grid"></div><div id="dockerProjectEmpty" class="empty hidden"><h2>No Compose projects found</h2><p>Create a RunPilot-managed project, or start an existing Compose project to see it here.</p></div></section>
@@ -161,6 +171,27 @@
         <button class="button secondary" type="button" data-dismiss="processDialog">Cancel</button>
         <button id="saveProcessBtn" class="button primary" value="default">Save task</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="remoteTargetDialog" class="dialog">
+    <form method="dialog" id="remoteTargetForm">
+      <div class="dialog-head"><div><h2 id="remoteTargetDialogTitle">Add remote target</h2><p>Launch an application or desktop in an isolated provider session.</p></div><button class="icon-btn" type="button" data-dismiss="remoteTargetDialog" aria-label="Close">×</button></div>
+      <input type="hidden" id="remoteTargetId">
+      <div class="form-grid">
+        <label>Name<input id="remoteTargetName" required placeholder="Firefox"></label>
+        <label>Session type<select id="remoteTargetType"><option value="application">Application</option><option value="desktop">Desktop</option></select></label>
+        <label>Provider<select id="remoteTargetProvider"><option value="xpra">Xpra</option></select></label>
+        <label>Interpreter<select id="remoteInterpreter"><option value="direct">Direct executable</option></select></label>
+        <label class="span-2">Executable<input id="remotePath" required placeholder="firefox or startxfce4"></label>
+        <label class="span-2">Arguments<input id="remoteArgs" placeholder="--private-window"></label>
+        <label class="span-2">Working directory<input id="remoteCwd" placeholder="Optional"></label>
+        <div class="environment-editor span-2" data-command-prefix="remote"><div class="environment-head"><div><strong>Environment variables</strong><span>Optional values passed only to this remote target.</span></div><button class="button secondary small env-add" type="button">+ Add variable</button></div><div id="remoteEnvRows" class="environment-rows"></div><p id="remoteEnvEmpty" class="environment-empty">No custom variables configured.</p><p id="remoteCommandError" class="form-error hidden" role="alert"></p></div>
+        <label class="check span-2"><input id="remoteForwardDbus" type="checkbox"> Forward RunPilot's D-Bus session to this application</label>
+        <p class="muted span-2">Allows the application to contact services in RunPilot's desktop session. Leave disabled for isolated sessions.</p>
+        <label class="check span-2"><input id="remoteTargetEnabled" type="checkbox" checked> Target enabled</label>
+      </div>
+      <div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="remoteTargetDialog">Cancel</button><button class="button primary" value="default">Save target</button></div>
     </form>
   </dialog>
 
