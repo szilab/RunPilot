@@ -36,7 +36,7 @@ func (p *fakeProvider) Start(context.Context, StartRequest) (Runtime, error) {
 }
 
 func target() model.RemoteTarget {
-	return model.RemoteTarget{ID: "target", Name: "Test", Provider: "fake", Type: model.RemoteTargetApplication, Enabled: true, Command: model.CommandSpec{Path: "xterm"}}
+	return model.RemoteTarget{ID: "target", Name: "Test", Provider: "fake", Type: model.RemoteTargetApplication, Command: model.CommandSpec{Path: "xterm"}}
 }
 func TestSessionLifecycleAndMultipleSessions(t *testing.T) {
 	p := &fakeProvider{}

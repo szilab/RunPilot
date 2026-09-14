@@ -96,10 +96,6 @@ func (s *Server) handleStartRemoteSession(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	if !target.Enabled {
-		writeError(w, http.StatusConflict, fmt.Errorf("remote target is disabled"))
-		return
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	session, err := s.ctrl.Remote().Start(ctx, target)

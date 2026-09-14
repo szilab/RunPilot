@@ -10,8 +10,9 @@ let storageClipboard = null, editingTextPath = null, storageShowHidden = false, 
 let overview = null;
 let systemInfo = null, terminalInfo = null, terminalTabs = [], activeTerminalID = "";
 let dockerRuntime = null, dockerProjects = [], dockerVolumes = [], dockerNetworks = [], dockerBusy = new Set(), dockerPendingContainerStates = new Map(), dockerProjectErrors = new Map(), dockerEditing = null, dockerAttachTerminal = null;
-let remoteProviders = [], remoteTargets = [], remoteSessions = [], remoteSessionID = "", remoteStartingTargets = new Set();
-let logTimer = null;
+let remoteProviders = [], remoteTargets = [], remoteSessions = [], remoteSessionID = "", remoteStartingTargets = new Set(), remoteRDPInteraction = null, remotePendingTarget = null;
+let remoteRDPModulePromise = null;
+let logTimer = null, toastTimer = null;
 let logSource = null;
 let refreshTimer = null;
 let refreshing = false;
@@ -26,7 +27,7 @@ const pageMeta = {
   software: ["Software", "Install and maintain portable applications in a RunPilot-managed Scoop root on Windows.", null],
   terminal: ["Terminal", "Interactive shells run with the same OS authority as the RunPilot service.", null],
   docker: ["Docker", "Docker Compose projects, volumes, and networks managed with the RunPilot service identity.", "Create project"],
-  remote: ["Remote Access", "Launch configured graphical applications and desktops through the same RunPilot origin.", "Add target"],
+  remote: ["Remote Access", "Launch configured graphical applications and desktops through the same RunPilot origin.", null],
 };
 
 async function api(path, options = {}) {
@@ -92,12 +93,18 @@ function initializeSidebar() {
   $("sidebarToggle").addEventListener("click", () => setSidebarCollapsed(!document.querySelector(".shell").classList.contains("sidebar-collapsed")));
 }
 
-function toast(message) {
+function toast(message, level = "info") {
   const el = $("toast");
-  el.textContent = message;
-  el.classList.remove("hidden");
-  setTimeout(() => el.classList.add("hidden"), 2600);
+  clearTimeout(toastTimer);
+  el.replaceChildren();
+  const content=document.createElement("div"), title=document.createElement("strong"), detail=document.createElement("span"), close=document.createElement("button");
+  title.textContent=level === "error" ? "Error" : "Notice"; detail.textContent=message;
+  content.append(title,detail);
+  close.type="button"; close.className="toast-close"; close.textContent="×"; close.setAttribute("aria-label","Dismiss notification"); close.addEventListener("click",()=>el.classList.add("hidden"));
+  el.append(content,close); el.classList.toggle("toast-error",level === "error"); el.setAttribute("role",level === "error" ? "alert" : "status"); el.classList.remove("hidden");
+  toastTimer=setTimeout(()=>el.classList.add("hidden"),level === "error" ? 10000 : 4000);
 }
+function toastError(message) { toast(message,"error"); }
 
 function splitArgs(text) {
   const out = [];
@@ -302,10 +309,12 @@ async function refresh() {
 }
 
 function remoteStatus(state) { return state === "available" ? "running" : state === "not-installed" || state === "unsupported" ? "stopped" : "failure"; }
+function remoteProviderHint(provider) { return provider.state === "available" ? "" : provider.installHint || provider.message || "This provider is not currently available."; }
+function remoteProviderCard(provider) { const hint=remoteProviderHint(provider), metadata=[provider.platform,provider.version].filter(Boolean).join(" · "), available=provider.state === "available"; return `<article class="remote-provider-card"><div class="remote-provider-heading"><div><h3>${escapeHtml(provider.name)}</h3>${metadata ? `<div class="meta">${escapeHtml(metadata)}</div>` : ""}</div><div class="remote-provider-status"><span class="status ${remoteStatus(provider.state)}">${escapeHtml(provider.state)}</span>${hint ? `<span class="provider-info" tabindex="0" role="img" aria-label="Provider installation hint" data-tooltip="${escapeHtml(hint)}">ⓘ</span>` : ""}</div></div><button class="button secondary small remote-provider-add" ${available ? "" : "disabled"} onclick="openRemoteTarget(null,'${escapeHtml(provider.id)}')">Add ${escapeHtml(provider.name)} target</button></article>`; }
 function renderRemote() {
   if (!$("remoteProviders")) return;
-  $("remoteProviders").innerHTML = remoteProviders.map(provider => `<article class="row"><div class="row-head"><div><h3>${escapeHtml(provider.name)}</h3><div class="meta">${escapeHtml(provider.platform)}${provider.version ? ` · ${escapeHtml(provider.version)}` : ""}</div></div><span class="status ${remoteStatus(provider.state)}">${escapeHtml(provider.state)}</span></div>${provider.message ? `<div class="row-details"><div class="kv"><span>Status</span><span>${escapeHtml(provider.message)}</span></div></div>` : ""}</article>`).join("") || `<div class="empty compact"><h2>No providers registered</h2></div>`;
-  $("remoteTargets").innerHTML = remoteTargets.map(target => { const starting=remoteStartingTargets.has(target.id); return `<article class="row"><div class="row-head"><div><h3>${escapeHtml(target.name)}</h3><div class="meta">${escapeHtml(target.type)} · ${escapeHtml(target.provider)} · ${escapeHtml(target.command?.path || "")}</div></div><span class="status ${target.enabled ? "running" : "stopped"}">${target.enabled ? "enabled" : "disabled"}</span></div><div class="row-actions"><button class="button primary small remote-open-button" ${target.enabled && !starting ? "" : "disabled"} aria-busy="${starting}" onclick="startRemoteSession('${target.id}')">${starting ? '<span class="spinner remote-button-spinner" aria-hidden="true"></span>Starting…' : "Open"}</button><button class="button secondary small" onclick="editRemoteTarget('${target.id}')">Edit</button><button class="button danger small" onclick="deleteRemoteTarget('${target.id}')">Delete</button></div></article>`; }).join("");
+  $("remoteProviders").innerHTML = remoteProviders.map(remoteProviderCard).join("") || `<div class="empty compact"><h2>No providers registered</h2></div>`;
+  $("remoteTargets").innerHTML = remoteTargets.map(target => { const starting=remoteStartingTargets.has(target.id), detail=target.provider === "rdp" ? `${target.rdp?.host || ""}${target.rdp?.port ? `:${target.rdp.port}` : ""}` : `${target.type} · ${target.command?.path || ""}`; return `<article class="row"><div class="row-head"><div><h3>${escapeHtml(target.name)}</h3><div class="meta">${escapeHtml(detail)}</div></div></div><div class="row-actions"><button class="button primary small remote-open-button" ${!starting ? "" : "disabled"} aria-busy="${starting}" onclick="startRemoteSession('${target.id}')">${starting ? '<span class="spinner remote-button-spinner" aria-hidden="true"></span>Starting…' : "Open"}</button><button class="button secondary small" onclick="editRemoteTarget('${target.id}')">Edit</button><button class="button danger small" onclick="deleteRemoteTarget('${target.id}')">Delete</button></div></article>`; }).join("");
   $("remoteTargetsEmpty").classList.toggle("hidden", remoteTargets.length > 0);
   const active = remoteSessions.filter(session => ["starting", "running", "stopping"].includes(session.state));
   $("remoteSessions").innerHTML = active.map(session => `<article class="row"><div class="row-head"><div><h3>${escapeHtml(session.targetName)}</h3><div class="meta">${escapeHtml(session.type)} · ${fmtDate(session.startedAt || session.createdAt)}</div></div>${statusBadge(session.state)}</div>${session.message ? `<div class="notice remote-session-notice"><strong>${escapeHtml(session.message)}</strong>${session.windowCount !== undefined ? `<span>${session.windowCount} visible application window${session.windowCount === 1 ? "" : "s"}.</span>` : ""}</div>` : ""}${session.failure ? `<div class="form-error">${escapeHtml(session.failure)}</div>` : ""}<div class="row-actions"><button class="button primary small" ${session.state === "running" ? "" : "disabled"} onclick="openRemoteSession('${session.id}')">Open</button><button class="button secondary small" onclick="openRemoteDiagnostics('${session.id}')">Diagnostics</button><button class="button danger small" onclick="stopRemoteSession('${session.id}')">Stop</button></div></article>`).join("");
@@ -319,18 +328,127 @@ function renderRemote() {
 }
 function remoteXpraDefaults() { return remoteProviders.find(provider => provider.id === "xpra")?.xpraDefaults || {}; }
 function setRemoteXpraSettings(options = remoteXpraDefaults()) { $("remoteXpraProfile").value=options.profile || "recommended"; $("remoteXpraEncoding").value=options.encoding || "webp"; $("remoteXpraVideo").checked=!!options.video; $("remoteXpraDPIMode").value=options.dpiMode || "auto"; $("remoteXpraDPI").value=options.dpi || 96; $("remoteXpraLaunchAfterConnect").checked=options.launchAfterConnect !== false; $("remoteXpraClipboard").checked=options.clipboard !== false; $("remoteXpraDynamicResize").checked=options.dynamicResize !== false; $("remoteXpraMenu").value=options.menu || "autohide"; $("remoteXpraToolbarPosition").value=options.toolbarPosition || "top-left"; updateRemoteXpraSettings(); }
-function updateRemoteXpraSettings() { const xpra=$("remoteTargetProvider").value === "xpra", customDPI=$("remoteXpraDPIMode").value === "custom"; $("remoteXpraSettings").classList.toggle("hidden",!xpra); $("remoteXpraDPIWrap").classList.toggle("hidden",!customDPI); $("remoteXpraDPI").required=customDPI; }
+function updateRemoteXpraSettings() { const xpra=$("remoteTargetProvider").value === "xpra", customDPI=$("remoteXpraDPIMode").value === "custom"; $("remoteXpraSettings").classList.toggle("hidden",!xpra); $("remoteRDPSettings").classList.toggle("hidden",xpra); document.querySelectorAll(".remote-xpra-only").forEach(node=>node.classList.toggle("hidden",!xpra)); $("remoteXpraDPIWrap").classList.toggle("hidden",!xpra || !customDPI); $("remoteXpraDPI").required=xpra && customDPI; $("remotePath").required=xpra; if (!xpra) $("remoteTargetType").value="desktop"; }
 function applyRemoteXpraProfile() { const profile=$("remoteXpraProfile").value; const values={recommended:["webp",false],automatic:["auto",true],compatibility:["rgb",false]}; if (values[profile]) { $("remoteXpraEncoding").value=values[profile][0]; $("remoteXpraVideo").checked=values[profile][1]; } }
-function openRemoteTarget(existing = null) { $("remoteTargetForm").reset(); $("remoteTargetId").value=existing?.id||""; $("remoteTargetName").value=existing?.name||""; $("remoteTargetType").value=existing?.type||"application"; $("remoteTargetProvider").value=existing?.provider||"xpra"; $("remoteDBusMode").value=existing?.dbusMode || (existing?.forwardDbus ? "host-session" : "isolated"); $("remoteTargetEnabled").checked=existing ? !!existing.enabled : true; setRemoteXpraSettings(existing?.xpra || remoteXpraDefaults()); populateCommandEditor("remote",existing?.command||{interpreter:"direct"}); $("remoteTargetDialogTitle").textContent=existing?"Edit remote target":"Add remote target"; $("remoteTargetDialog").showModal(); }
+function splitRDPUsername(value) { const text=(value||"").trim(), separator=text.indexOf("\\"); return separator > 0 ? {domain:text.slice(0,separator),username:text.slice(separator+1)} : {domain:"",username:text}; }
+function formatRDPUsername(username, domain) { return domain ? `${domain}\\${username}` : username||""; }
+function openRemoteTarget(existing = null, providerID = "xpra") { const provider=existing?.provider||providerID; $("remoteTargetForm").reset(); $("remoteTargetId").value=existing?.id||""; $("remoteTargetName").value=existing?.name||""; $("remoteTargetType").value=existing?.type||"application"; $("remoteTargetProvider").value=provider; $("remoteDBusMode").value=existing?.dbusMode || (existing?.forwardDbus ? "host-session" : "isolated"); setRemoteXpraSettings(existing?.xpra || remoteXpraDefaults()); const rdp=existing?.rdp||{}; $("remoteRDPHost").value=rdp.host||""; $("remoteRDPPort").value=rdp.port||3389; $("remoteRDPUsername").value=formatRDPUsername(rdp.username,rdp.domain); $("remoteRDPSecurity").value=rdp.securityMode||"automatic"; $("remoteRDPDynamicResize").checked=false; populateCommandEditor("remote",existing?.command||{interpreter:"direct"}); updateRemoteXpraSettings(); const rdpTarget=provider === "rdp"; $("remoteTargetDialogTitle").textContent=existing ? `Edit ${rdpTarget ? "RDP" : "Xpra"} target` : `Add ${rdpTarget ? "RDP" : "Xpra"} target`; $("remoteTargetDialogDescription").textContent=rdpTarget ? "Save a desktop endpoint; credentials are requested each time you connect." : "Launch an application or desktop in an isolated Xpra session."; $("remoteTargetDialog").showModal(); }
 function editRemoteTarget(id) { openRemoteTarget(remoteTargets.find(target => target.id === id)); }
 async function deleteRemoteTarget(id) { if (!confirm("Delete this remote target?")) return; try { await api(`api/v1/remote/targets/${id}`,{method:"DELETE"}); await refresh(); } catch (e) { toast(e.message); } }
-async function startRemoteSession(id) { if (remoteStartingTargets.has(id)) return; remoteStartingTargets.add(id); renderRemote(); try { const session=await api(`api/v1/remote/targets/${id}/sessions`,{method:"POST"}); await refresh(); await openRemoteSession(session.id); } catch (e) { toast(e.message); await refresh(); } finally { remoteStartingTargets.delete(id); if (currentPage === "remote") renderRemote(); } }
-async function stopRemoteSession(id) { try { await api(`api/v1/remote/sessions/${id}`,{method:"DELETE"}); if (remoteSessionID===id) closeRemoteSession(); await refresh(); } catch (e) { toast(e.message); } }
+function promptRDPConnection(target) { remotePendingTarget=target; $("remoteRDPConnectTitle").textContent=`Connect to ${target.name||"RDP target"}`; $("remoteRDPConnectUsername").value=formatRDPUsername(target.rdp?.username,target.rdp?.domain); $("remoteRDPConnectPassword").value=""; $("remoteRDPConnectDialog").showModal(); }
+async function startRemoteSession(id) { const target=remoteTargets.find(item=>item.id===id); if (target?.provider === "rdp") { promptRDPConnection(target); return; } await beginRemoteSession(id); }
+async function beginRemoteSession(id, credentials=null) { if (remoteStartingTargets.has(id)) return; remoteStartingTargets.add(id); renderRemote(); try { const session=await api(`api/v1/remote/targets/${id}/sessions`,{method:"POST"}); await refresh(); await openRemoteSession(session.id,credentials); } catch (e) { toastError(e.message); await refresh(); } finally { remoteStartingTargets.delete(id); if (currentPage === "remote") renderRemote(); } }
+async function stopRemoteSession(id) {
+  // Close the local client first. A terminated RDP transport can make its WASM
+  // shutdown throw, but that must never keep the user trapped in the session view.
+  const closingCurrentSession = remoteSessionID === id;
+  if (closingCurrentSession) closeRemoteSession();
+  try {
+    await api(`api/v1/remote/sessions/${id}`, {method: "DELETE"});
+    await refresh();
+  } catch (e) {
+    toastError(e.message);
+  }
+}
 async function openRemoteDiagnostics(id) { const session=remoteSessions.find(item=>item.id===id); openLog(`${session?.targetName || "Remote session"} diagnostics`, async () => { const details=await api(`api/v1/remote/sessions/${id}/diagnostics`); return details.log || details.session.message || "No Xpra diagnostics were captured."; }); }
-function focusRemoteFrame() { if (remoteSessionID) $("remoteFrame").focus({preventScroll:true}); }
-async function openRemoteSession(id) { remoteSessionID=id; setPage("remote",false); $("remoteSessionError").classList.add("hidden"); $("remoteLoading").classList.remove("hidden"); renderRemoteSession(); try { const ticket=await api(`api/v1/remote/sessions/${id}/client-ticket`,{method:"POST"}); const frame=$("remoteFrame"); frame.src=`api/v1/remote/sessions/${encodeURIComponent(id)}/client/?ticket=${encodeURIComponent(ticket.ticket)}`; history.replaceState(null,"",`?remoteSession=${encodeURIComponent(id)}`); } catch(e) { closeRemoteSession(); toast(`Remote session unavailable: ${e.message}`); } }
+function focusRemoteClient() {
+  if (!remoteSessionID) return;
+  const client = remoteRDPInteraction ? $("remoteRDP") : $("remoteFrame");
+  client.focus({preventScroll: true});
+}
+async function openRemoteSession(id, credentials=null) { const session=remoteSessions.find(item=>item.id===id); if (session?.provider === "rdp" && !credentials) { promptRDPConnection({name:session.targetName,rdp:session.rdp,sessionID:id}); return; } remoteSessionID=id; setPage("remote",false); $("remoteSessionError").classList.add("hidden"); $("remoteLoading").classList.remove("hidden"); renderRemoteSession(); try { if (session?.provider === "rdp") await openRDPRemoteSession(session,credentials); else { const ticket=await api(`api/v1/remote/sessions/${id}/client-ticket`,{method:"POST"}); const frame=$("remoteFrame"); $("remoteRDP").classList.add("hidden"); frame.classList.remove("hidden"); frame.src=`api/v1/remote/sessions/${encodeURIComponent(id)}/client/?ticket=${encodeURIComponent(ticket.ticket)}`; } history.replaceState(null,"",`?remoteSession=${encodeURIComponent(id)}`); } catch(e) { closeRemoteSession(); toastError(`Remote session unavailable: ${e.message}`); } }
 function renderRemoteSession() { const session=remoteSessions.find(item=>item.id===remoteSessionID); document.querySelector("main").classList.add("remote-active"); $("remoteOverview").classList.add("hidden"); $("remoteSessionView").classList.remove("hidden"); $("remoteSessionName").textContent=session?.targetName||"Remote session"; $("remoteSessionMeta").textContent=session ? `${session.state} · ${fmtDate(session.startedAt || session.createdAt)}` : "Loading session…"; $("remoteStop").disabled=!session || !["starting","running","stopping"].includes(session.state); $("remoteSessionNotice").textContent=session?.message || ""; $("remoteSessionNotice").classList.toggle("hidden", !session?.message); }
-function closeRemoteSession() { remoteSessionID=""; document.querySelector("main").classList.remove("remote-active"); $("remoteFrame").src="about:blank"; $("remoteLoading").classList.add("hidden"); $("remoteSessionNotice").classList.add("hidden"); $("remoteOverview").classList.remove("hidden"); $("remoteSessionView").classList.add("hidden"); history.replaceState(null,"",location.pathname); }
+function closeRemoteSession() {
+  const interaction = remoteRDPInteraction;
+  remoteSessionID = "";
+  remoteRDPInteraction = null;
+  // Restore navigation before asking the embedded client to tear down. Its
+  // session may already be gone when the remote side or Stop button ended it.
+  document.querySelector("main").classList.remove("remote-active");
+  $("remoteFrame").src = "about:blank";
+  $("remoteFrame").classList.remove("hidden");
+  $("remoteRDP").classList.add("hidden");
+  $("remoteLoading").classList.add("hidden");
+  $("remoteSessionNotice").classList.add("hidden");
+  $("remoteOverview").classList.remove("hidden");
+  $("remoteSessionView").classList.add("hidden");
+  history.replaceState(null, "", location.pathname);
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  try {
+    interaction?.shutdown();
+  } catch (error) {
+    console.warn("RDP client shutdown completed after a transport error.", error);
+  }
+}
+
+function remoteTransportURL(id) { const url=new URL(`api/v1/remote/sessions/${encodeURIComponent(id)}/transport`,document.baseURI); url.protocol=url.protocol === "https:" ? "wss:" : "ws:"; return url.toString(); }
+function loadRDPModule() {
+  if (!remoteRDPModulePromise) {
+    remoteRDPModulePromise = (async () => {
+      const [, rdp] = await Promise.all([
+        import(new URL("rdp/iron-remote-desktop-0.11.0.js", document.baseURI)),
+        import(new URL("rdp/iron-remote-desktop-rdp-0.7.0.js", document.baseURI)),
+      ]);
+      // The WASM binding requires a string, and its logger is initialized once per page.
+      await rdp.init("warn");
+      return rdp;
+    })().catch(error => { remoteRDPModulePromise = null; throw error; });
+  }
+  return remoteRDPModulePromise;
+}
+
+function waitForRDPInteraction(surface) {
+  return new Promise(resolve => surface.addEventListener("ready", event => {
+    const interaction = event.detail.irgUserInteraction;
+    // Configure the public API synchronously, before the component sets up clipboard support.
+    interaction.setEnableClipboard(false);
+    interaction.setEnableAutoClipboard(false);
+    resolve(interaction);
+  }, {once: true}));
+}
+
+async function openRDPRemoteSession(session, credentials) {
+  if (!credentials?.password) throw new Error("RDP password is required");
+  const rdp = await loadRDPModule();
+  const ticket = await api(`api/v1/remote/sessions/${session.id}/transport-ticket`, {method: "POST"});
+  const oldSurface = $("remoteRDP"), surface = document.createElement("iron-remote-desktop");
+  surface.id = "remoteRDP";
+  surface.className = "remote-rdp";
+  surface.tabIndex = 0;
+  const ready = waitForRDPInteraction(surface);
+  surface.module = rdp.Backend;
+  oldSurface.replaceWith(surface);
+  $("remoteFrame").src = "about:blank";
+  $("remoteFrame").classList.add("hidden");
+  const interaction = await ready;
+  remoteRDPInteraction = interaction;
+  const size = {width: Math.max(640, surface.clientWidth), height: Math.max(480, surface.clientHeight)};
+  const password = credentials.password;
+  credentials.password = "";
+  $("remoteRDPConnectPassword").value = "";
+  let builder = interaction.configBuilder()
+    .withUsername(credentials.username || "")
+    .withPassword(password)
+    .withDestination(`${session.rdp.host}:${session.rdp.port || 3389}`)
+    .withProxyAddress(remoteTransportURL(session.id))
+    .withAuthToken(ticket.ticket)
+    .withServerDomain(credentials.domain || "")
+    .withDesktopSize(size);
+  if (session.rdp?.securityMode !== "tls") builder = builder.withExtension(rdp.enableCredssp(true));
+  const info = await interaction.connect(builder.build());
+  interaction.setVisibility(true);
+  surface.focus({preventScroll: true});
+  $("remoteLoading").classList.add("hidden");
+  toast(`Connected to ${session.targetName || "RDP session"}.`);
+  info.run().then(() => {
+    if (remoteSessionID === session.id) stopRemoteSession(session.id);
+  }).catch(error => {
+    if (remoteSessionID === session.id) {
+      closeRemoteSession();
+      toastError(`RDP session ended: ${error.message || error}`);
+    }
+  });
+}
 
 function renderOverview() {
   if (!overview) return;
@@ -923,21 +1041,31 @@ $("primaryAction").addEventListener("click", () => {
 
 $("remoteBack").addEventListener("click", closeRemoteSession);
 $("remoteStop").addEventListener("click", () => { if (remoteSessionID) stopRemoteSession(remoteSessionID); });
-$("remoteFullscreen").addEventListener("click", async () => { try { await $("remoteFrame").requestFullscreen(); focusRemoteFrame(); } catch (error) { toast(`Fullscreen unavailable: ${error.message}`); } });
-document.addEventListener("fullscreenchange", focusRemoteFrame);
-$("remoteFrame").addEventListener("load", () => { if (remoteSessionID) { $("remoteLoading").classList.add("hidden"); focusRemoteFrame(); } });
-$("remoteFrame").addEventListener("pointerenter", focusRemoteFrame);
-$("remoteFrame").addEventListener("pointerdown", focusRemoteFrame);
-$("remoteTargetProvider").addEventListener("change", updateRemoteXpraSettings);
+$("remoteFullscreen").addEventListener("click", async () => {
+  try {
+    const surface = remoteRDPInteraction ? $("remoteRDP") : $("remoteFrame");
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await surface.requestFullscreen();
+    focusRemoteClient();
+  } catch (error) {
+    toast(`Fullscreen unavailable: ${error.message}`);
+  }
+});
+document.addEventListener("fullscreenchange", focusRemoteClient);
+$("remoteFrame").addEventListener("load", () => { if (remoteSessionID) { $("remoteLoading").classList.add("hidden"); focusRemoteClient(); } });
+$("remoteFrame").addEventListener("pointerenter", focusRemoteClient);
+$("remoteFrame").addEventListener("pointerdown", focusRemoteClient);
 $("remoteXpraDPIMode").addEventListener("change", updateRemoteXpraSettings);
 $("remoteXpraProfile").addEventListener("change", applyRemoteXpraProfile);
 [$("remoteXpraEncoding"), $("remoteXpraVideo")].forEach(control => control.addEventListener("change", () => { $("remoteXpraProfile").value="custom"; }));
 $("remoteTargetForm").addEventListener("submit", async event => {
-  event.preventDefault(); const id=$("remoteTargetId").value; const command=commandFromEditor("remote"); if (!command) return;
+  event.preventDefault(); const id=$("remoteTargetId").value, isRDP=$("remoteTargetProvider").value === "rdp"; const command=isRDP ? undefined : commandFromEditor("remote"); if (!isRDP && !command) return;
   const xpra=$("remoteTargetProvider").value === "xpra" ? {profile:$("remoteXpraProfile").value,encoding:$("remoteXpraEncoding").value,video:$("remoteXpraVideo").checked,dpiMode:$("remoteXpraDPIMode").value,dpi:Number($("remoteXpraDPI").value),launchAfterConnect:$("remoteXpraLaunchAfterConnect").checked,clipboard:$("remoteXpraClipboard").checked,dynamicResize:$("remoteXpraDynamicResize").checked,menu:$("remoteXpraMenu").value,toolbarPosition:$("remoteXpraToolbarPosition").value} : undefined;
-  const body={name:$("remoteTargetName").value.trim(),provider:$("remoteTargetProvider").value,type:$("remoteTargetType").value,dbusMode:$("remoteDBusMode").value,enabled:$("remoteTargetEnabled").checked,command,xpra};
+  const rdpIdentity=splitRDPUsername($("remoteRDPUsername").value), rdp=isRDP ? {host:$("remoteRDPHost").value.trim(),port:Number($("remoteRDPPort").value),username:rdpIdentity.username,domain:rdpIdentity.domain,securityMode:$("remoteRDPSecurity").value,dynamicResize:$("remoteRDPDynamicResize").checked} : undefined;
+  const body={name:$("remoteTargetName").value.trim(),provider:$("remoteTargetProvider").value,type:isRDP ? "desktop" : $("remoteTargetType").value,dbusMode:$("remoteDBusMode").value,command,xpra,rdp};
   try { await api(id ? `api/v1/remote/targets/${id}` : "api/v1/remote/targets",{method:id?"PUT":"POST",body:JSON.stringify(body)}); $("remoteTargetDialog").close(); await refresh(); } catch(error) { setCommandError("remote",error.message); }
 });
+$("remoteRDPConnectForm").addEventListener("submit", async event => { event.preventDefault(); const target=remotePendingTarget; if (!target) return; const identity=splitRDPUsername($("remoteRDPConnectUsername").value), credentials={username:identity.username,domain:identity.domain,password:$("remoteRDPConnectPassword").value}; remotePendingTarget=null; $("remoteRDPConnectDialog").close(); if (target.sessionID) await openRemoteSession(target.sessionID,credentials); else await beginRemoteSession(target.id,credentials); });
 
 document.querySelectorAll("[data-task-filter]").forEach(button => button.addEventListener("click", () => { taskFilter = button.dataset.taskFilter; document.querySelectorAll("[data-task-filter]").forEach(item => item.classList.toggle("active", item === button)); renderTasks(); }));
 document.querySelectorAll("[data-task-kind]").forEach(button => button.addEventListener("click", () => { $("taskDialog").close(); if (button.dataset.taskKind === "continuous") openProcess(); else if (button.dataset.taskKind === "scheduled") openJob(); else openBackup(); }));

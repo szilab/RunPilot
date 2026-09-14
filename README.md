@@ -30,7 +30,7 @@ RunPilot should integrate specialist tools such as Robocopy, Restic or future pa
 - YAML configuration under `%ProgramData%\RunPilot`
 - Software Management through a RunPilot-owned isolated Scoop provider
 - Interactive Terminal tabs backed by a Linux PTY or Windows ConPTY
-- Remote Access targets and sessions through the Linux Xpra provider
+- Remote Access targets and sessions through Xpra and embedded-browser RDP providers
 
 ## Product direction
 
@@ -116,10 +116,10 @@ job management. The browser first obtains a short-lived, single-use connection
 ticket through the authenticated REST API; the permanent token is never placed
 in the WebSocket URL.
 
-## Remote Access (Xpra)
+## Remote Access
 
 Remote Access is a provider-based capability, not a remote-display protocol.
-The first provider is Xpra on Linux hosts. Add an enabled application target
+Xpra is available on Linux hosts. Add an enabled application target
 (for example `firefox`) or desktop target (for example `startxfce4`) from the
 Remote page; its command, arguments, working directory and environment are
 stored in `runpilot.yaml` like other configured workloads. Each Open action
@@ -173,8 +173,45 @@ Xpra HTML5 client when the installed Xpra build supports them.
 Sessions are intentionally ephemeral: RunPilot stops the Xpra processes it owns
 during shutdown and does not adopt orphaned sessions after a restart. The first
 supported deployment is RunPilot directly on a Linux host. Xpra server support
-is reported as unsupported on Windows; future VNC/noVNC, RDP/Guacamole, or
-other providers can implement the same Remote provider boundary.
+is reported as unsupported on Windows.
+
+### RDP
+
+The RDP provider is available on Linux and Windows and uses the official
+IronRDP browser component/WASM embedded in the RunPilot executable. It requires
+no Guacamole, guacd, FreeRDP daemon, IronRDP daemon, Java, Node.js, Rust, or
+container runtime. Naturally, an RDP server such as Windows Remote Desktop or
+`xrdp` must exist at the configured destination.
+
+RDP targets are desktop-only and persist only host, port, username, domain,
+security preference and dynamic-resize settings. Clipboard integration and
+automatic remote desktop resizing are temporarily disabled for the embedded RDP
+client; the browser scales the desktop to fit, including in fullscreen.
+Passwords are
+prompted every time a session opens, stay in browser memory for the IronRDP
+connection setup, and are never stored in YAML, browser storage, API responses,
+diagnostics, or session metadata.
+
+The browser connects over the same RunPilot origin using a one-time,
+session-bound ticket in IronRDP's RDCleanPath handshake. RunPilot ignores the
+client-provided RDCleanPath destination and dials only the target snapshot
+already attached to the Remote session, then bridges the negotiated RDP TLS
+stream. This keeps RunPilot from becoming a generic TCP proxy. Fullscreen,
+keyboard, mouse, and wheel input are handled by the
+official embedded IronRDP component. Audio, devices, drives/files, printers,
+RD Gateway, multi-monitor, and RemoteApp are intentionally not enabled.
+
+RDP servers frequently use self-signed certificates. The RDCleanPath bridge
+passes the target certificate chain to IronRDP, whose CredSSP path verifies the
+target public key during NLA. The current upstream web binding has no
+interactive certificate trust prompt for TLS-only sessions; this is not
+Web-PKI certificate validation.
+
+The browser regression test exercises the embedded JavaScript/WASM startup,
+reopening sessions, canvas visibility, and notifications without sending RDP
+credentials. With Firefox installed, start `geckodriver --port 4445` and run
+`python3 tools/rdp-web/smoke_test.py`. It tests both `/` and `/pilot/` base paths;
+only the transport ticket and final network connection are stubbed.
 
 ## Windows build
 

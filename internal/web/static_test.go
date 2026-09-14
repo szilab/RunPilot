@@ -83,7 +83,7 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(app)
-	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "api/v1/software/providers", "/buckets", "api/v1/overview", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "Scoop root on Windows", "dockerProjectErrors", "Compose operation failed", "const canDelete = ready && !volume.inUse && !busy", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function openNewTextFile", `$("textEditorContent").readOnly=!canEdit`, "function initializeSidebar", "sidebarStorageKey", "function remoteXpraDefaults", "function focusRemoteFrame", `class="row"`} {
+	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "api/v1/software/providers", "/buckets", "api/v1/overview", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "Scoop root on Windows", "dockerProjectErrors", "Compose operation failed", "const canDelete = ready && !volume.inUse && !busy", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function openNewTextFile", `$("textEditorContent").readOnly=!canEdit`, "function initializeSidebar", "sidebarStorageKey", "function remoteXpraDefaults", "function focusRemoteClient", `class="row"`} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js does not contain %q", want)
 		}
@@ -117,5 +117,93 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	}
 	if !strings.Contains(script, `title.textContent=".."`) || !strings.Contains(script, `meta.textContent="parent folder"`) {
 		t.Fatal("app.js does not render parent navigation as a folder entry")
+	}
+}
+
+func TestRemoteProviderCardsShowAvailabilityAndHints(t *testing.T) {
+	index, err := staticFS.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(index), `id="remoteProviders" class="remote-provider-grid"`) {
+		t.Fatal("remote providers do not use the compact card grid")
+	}
+	app, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"function remoteProviderHint", "function remoteProviderCard", "provider.installHint", "class=\"provider-info\""} {
+		if !strings.Contains(string(app), want) {
+			t.Fatalf("remote provider UI is missing %q", want)
+		}
+	}
+	styles, err := staticFS.ReadFile("static/styles.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{".remote-provider-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr));", ".provider-info::after", "@media (max-width: 1100px)"} {
+		if !strings.Contains(string(styles), want) {
+			t.Fatalf("remote provider card styles are missing %q", want)
+		}
+	}
+}
+
+func TestRemoteTargetDialogIsProviderSpecific(t *testing.T) {
+	index, err := staticFS.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(index)
+	for _, want := range []string{
+		`id="remoteTargetProvider" value="xpra"`,
+		`id="remoteXpraSettings" class="remote-xpra-advanced span-2 remote-xpra-only"`,
+		`<summary>Advanced settings</summary>`,
+		`id="remoteRDPUsername" autocomplete="username" placeholder="DOMAIN\username"`,
+		`Clipboard temporarily unavailable`,
+		`id="remoteRDPConnectUsername" autocomplete="username" placeholder="DOMAIN\username"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("provider-specific remote target UI is missing %q", want)
+		}
+	}
+	for _, removed := range []string{`id="remoteTargetEnabled"`, `id="remoteRDPDomain"`, `id="remoteRDPConnectDomain"`, "Xpra display", "Optimized for browser-based administration and desktop applications."} {
+		if strings.Contains(page, removed) {
+			t.Fatalf("obsolete remote target UI remains: %q", removed)
+		}
+	}
+
+	app, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(app)
+	for _, want := range []string{"function splitRDPUsername", "function formatRDPUsername", "openRemoteTarget(null,'", "type:isRDP ? \"desktop\""} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("remote target script is missing %q", want)
+		}
+	}
+	if strings.Contains(script, "remoteTargetEnabled") || strings.Contains(script, "remoteRDPDomain") {
+		t.Fatal("remote target script still uses removed controls")
+	}
+}
+
+func TestErrorToastIsProminentAndPersistent(t *testing.T) {
+	app, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"function toastError", `level === "error" ? "Error" : "Notice"`, "level === \"error\" ? 10000 : 4000", "toastError(`Remote session unavailable:"} {
+		if !strings.Contains(string(app), want) {
+			t.Fatalf("error toast behavior is missing %q", want)
+		}
+	}
+	styles, err := staticFS.ReadFile("static/styles.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{".toast-error", ".toast-close", "z-index:50"} {
+		if !strings.Contains(string(styles), want) {
+			t.Fatalf("error toast styling is missing %q", want)
+		}
 	}
 }

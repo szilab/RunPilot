@@ -16,6 +16,7 @@ import (
 	"github.com/szilab/RunPilot/internal/platform"
 	"github.com/szilab/RunPilot/internal/processmgr"
 	"github.com/szilab/RunPilot/internal/remote"
+	"github.com/szilab/RunPilot/internal/remote/rdp"
 	"github.com/szilab/RunPilot/internal/remote/xpra"
 	"github.com/szilab/RunPilot/internal/scheduler"
 	"github.com/szilab/RunPilot/internal/software"
@@ -57,7 +58,7 @@ func Open(dataDir string) (*Controller, error) {
 		scheduler: scheduler.New(jr),
 		software:  software.NewManager(dataDir),
 		docker:    dockercompose.NewManager(dataDir),
-		remote:    remote.New(dataDir, xpra.New()),
+		remote:    remote.New(dataDir, xpra.New(), rdp.New()),
 	}
 	if platform.CurrentCapabilities().DockerCompose {
 		c.storage = storage.NewRegistry(c.docker)
@@ -90,16 +91,21 @@ func (c *Controller) Remote() *remote.Service { return c.remote }
 func (c *Controller) RemoteTargets() []model.RemoteTarget {
 	targets := c.config.Snapshot().RemoteTargets
 	for i := range targets {
-		if targets[i].Provider != "xpra" {
-			continue
+		switch targets[i].Provider {
+		case "xpra":
+			options, err := model.NormalizeXpraRemoteOptions(targets[i].Xpra)
+			if err != nil {
+				// A manually edited invalid legacy YAML value must not make all Remote
+				// pages unusable. API writes still reject invalid values below.
+				options = model.DefaultXpraRemoteOptions()
+			}
+			targets[i].Xpra = &options
+		case "rdp":
+			options, err := model.NormalizeRDPRemoteOptions(targets[i].RDP)
+			if err == nil {
+				targets[i].RDP = &options
+			}
 		}
-		options, err := model.NormalizeXpraRemoteOptions(targets[i].Xpra)
-		if err != nil {
-			// A manually edited invalid legacy YAML value must not make all Remote
-			// pages unusable. API writes still reject invalid values below.
-			options = model.DefaultXpraRemoteOptions()
-		}
-		targets[i].Xpra = &options
 	}
 	return targets
 }
@@ -123,33 +129,50 @@ func (c *Controller) UpsertRemoteTarget(target model.RemoteTarget) (model.Remote
 	if target.Type != model.RemoteTargetApplication && target.Type != model.RemoteTargetDesktop {
 		return target, fmt.Errorf("remote target type must be application or desktop")
 	}
-	if strings.TrimSpace(target.Command.Path) == "" {
-		return target, fmt.Errorf("remote target command path is required")
-	}
-	if target.Command.Interpreter != "" && target.Command.Interpreter != "direct" && target.Command.Interpreter != "auto" {
-		return target, fmt.Errorf("remote targets require a direct executable command")
-	}
-	target.Command.Interpreter = "direct"
-	if target.DBusMode == "" {
-		if target.ForwardDBus {
-			target.DBusMode = model.RemoteDBusHost
-		} else {
-			target.DBusMode = model.RemoteDBusIsolated
+	switch target.Provider {
+	case "xpra":
+		if strings.TrimSpace(target.Command.Path) == "" {
+			return target, fmt.Errorf("remote target command path is required")
 		}
-	}
-	if target.DBusMode != model.RemoteDBusIsolated && target.DBusMode != model.RemoteDBusHost {
-		return target, fmt.Errorf("remote target D-Bus mode must be isolated or host-session")
-	}
-	target.ForwardDBus = false
-	if target.Provider == "xpra" {
+		if target.Command.Interpreter != "" && target.Command.Interpreter != "direct" && target.Command.Interpreter != "auto" {
+			return target, fmt.Errorf("remote targets require a direct executable command")
+		}
+		target.Command.Interpreter = "direct"
+		if target.DBusMode == "" {
+			if target.ForwardDBus {
+				target.DBusMode = model.RemoteDBusHost
+			} else {
+				target.DBusMode = model.RemoteDBusIsolated
+			}
+		}
+		if target.DBusMode != model.RemoteDBusIsolated && target.DBusMode != model.RemoteDBusHost {
+			return target, fmt.Errorf("remote target D-Bus mode must be isolated or host-session")
+		}
+		target.ForwardDBus = false
 		options, err := model.NormalizeXpraRemoteOptions(target.Xpra)
 		if err != nil {
 			return target, err
 		}
 		target.Xpra = &options
-	}
-	if err := model.ValidateCommand(target.Command); err != nil {
-		return target, err
+		target.RDP = nil
+		if err := model.ValidateCommand(target.Command); err != nil {
+			return target, err
+		}
+	case "rdp":
+		if target.Type != model.RemoteTargetDesktop {
+			return target, fmt.Errorf("RDP supports desktop sessions only")
+		}
+		options, err := model.NormalizeRDPRemoteOptions(target.RDP)
+		if err != nil {
+			return target, err
+		}
+		target.RDP = &options
+		target.Xpra = nil
+		target.Command = model.CommandSpec{}
+		target.DBusMode = ""
+		target.ForwardDBus = false
+	default:
+		return target, fmt.Errorf("unknown remote provider %q", target.Provider)
 	}
 	if target.ID == "" {
 		target.ID = config.NewID("remote-target")

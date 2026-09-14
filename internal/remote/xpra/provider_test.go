@@ -18,7 +18,7 @@ func TestStatusReportsMissingOrAvailableBinary(t *testing.T) {
 	}
 	missing := New()
 	missing.lookPath = func(string) (string, error) { return "", errors.New("missing") }
-	if status := missing.Status(context.Background()); status.State != "not-installed" {
+	if status := missing.Status(context.Background()); status.State != "not-installed" || !strings.Contains(status.InstallHint, "apt install xpra") {
 		t.Fatalf("missing state=%q", status.State)
 	}
 	available := New()

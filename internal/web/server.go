@@ -40,6 +40,8 @@ type Server struct {
 	terminalTicketMu sync.Mutex
 	remoteTickets    map[string]remoteClientTicket
 	remoteTicketMu   sync.Mutex
+	rdpTickets       map[string]remoteTransportTicket
+	rdpTicketMu      sync.Mutex
 	docker           *dockercompose.Manager
 }
 type terminalTicket struct {
@@ -57,6 +59,10 @@ type remoteClientTicket struct {
 	ClientParams map[string]string
 	Expires      time.Time
 }
+type remoteTransportTicket struct {
+	SessionID string
+	Expires   time.Time
+}
 
 func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	basePath := "/"
@@ -67,7 +73,7 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, terminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), terminalTickets: map[string]terminalTicket{}, remoteTickets: map[string]remoteClientTicket{}, docker: ctrl.Docker()}, nil
+	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, terminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), terminalTickets: map[string]terminalTicket{}, remoteTickets: map[string]remoteClientTicket{}, rdpTickets: map[string]remoteTransportTicket{}, docker: ctrl.Docker()}, nil
 }
 
 func (s *Server) BasePath() string { return s.basePath }
@@ -108,6 +114,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/v1/remote/targets/{id}/sessions", s.handleStartRemoteSession)
 	api.HandleFunc("DELETE /api/v1/remote/sessions/{id}", s.handleStopRemoteSession)
 	api.HandleFunc("POST /api/v1/remote/sessions/{id}/client-ticket", s.handleRemoteClientTicket)
+	api.HandleFunc("POST /api/v1/remote/sessions/{id}/transport-ticket", s.handleRemoteTransportTicket)
 	api.HandleFunc("POST /api/v1/terminal/ticket", s.handleTerminalTicket)
 	api.HandleFunc("GET /api/v1/overview", s.handleOverview)
 	api.HandleFunc("GET /api/v1/processes", s.handleListProcesses)
@@ -159,6 +166,7 @@ func (s *Server) Handler() http.Handler {
 	// asset and WebSocket request. It receives only a scoped, HttpOnly,
 	// path-scoped cookie after an authenticated client-ticket request.
 	mux.HandleFunc("GET /api/v1/remote/sessions/{id}/client/{path...}", s.handleRemoteClient)
+	mux.HandleFunc("GET /api/v1/remote/sessions/{id}/transport", s.handleRemoteTransport)
 	mux.HandleFunc("GET /remote/session/{id}", s.handleRemoteSessionPage)
 	// A terminal connection is authenticated by its short-lived, single-use
 	// ticket. It intentionally does not accept the permanent API token in a URL.

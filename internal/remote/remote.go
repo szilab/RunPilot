@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
@@ -24,9 +25,24 @@ type StartRequest struct {
 	DataDir string
 }
 
-// Runtime belongs solely to a Provider. Endpoint is local-only and is used by
-// the HTTP bridge; the public API receives only the session metadata.
+type ClientKind string
+
+const (
+	ClientXpraHTML5 ClientKind = "xpra-html5"
+	ClientIronRDP   ClientKind = "ironrdp"
+)
+
+// ClientDescriptor tells the web layer how to render a provider client. It
+// carries client-safe metadata only; provider endpoints stay internal.
+type ClientDescriptor struct {
+	Kind   ClientKind
+	Params map[string]string
+}
+
+// Runtime belongs solely to a Provider. Endpoint is local-only and used by
+// Xpra's HTTP bridge; Dial is used by transport-oriented clients such as RDP.
 type Runtime struct {
+	Client   ClientDescriptor
 	Endpoint string
 	// ClientParams are provider-generated, non-sensitive HTML client settings.
 	// The web bridge applies them only during the initial authorized redirect.
@@ -35,6 +51,8 @@ type Runtime struct {
 	Done         <-chan error
 	Probe        func(context.Context) (SessionProbe, error)
 	Log          func() string
+	Dial         func(context.Context) (net.Conn, error)
+	Message      string
 }
 
 // SessionProbe contains provider-neutral runtime observations. It deliberately
@@ -58,8 +76,9 @@ type Service struct {
 }
 
 type session struct {
-	view    model.RemoteSession
-	runtime Runtime
+	view        model.RemoteSession
+	runtime     Runtime
+	connections map[net.Conn]struct{}
 }
 
 func New(dataDir string, providers ...Provider) *Service {
@@ -110,11 +129,75 @@ func (s *Service) ClientParams(id string) (map[string]string, error) {
 	if item == nil {
 		return nil, ErrUnknownSession
 	}
-	params := make(map[string]string, len(item.runtime.ClientParams))
+	params := make(map[string]string, len(item.runtime.Client.Params)+len(item.runtime.ClientParams))
+	for key, value := range item.runtime.Client.Params {
+		params[key] = value
+	}
 	for key, value := range item.runtime.ClientParams {
 		params[key] = value
 	}
 	return params, nil
+}
+
+func (s *Service) Client(id string) (ClientDescriptor, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item := s.sessions[id]
+	if item == nil {
+		return ClientDescriptor{}, ErrUnknownSession
+	}
+	if item.view.State != model.RemoteSessionRunning {
+		return ClientDescriptor{}, fmt.Errorf("remote session is not running")
+	}
+	client := item.runtime.Client
+	client.Params = make(map[string]string, len(client.Params))
+	for key, value := range item.runtime.Client.Params {
+		client.Params[key] = value
+	}
+	return client, nil
+}
+
+// Dial opens the provider-controlled transport bound to a session snapshot.
+// Callers never supply a destination and cannot repurpose RunPilot as a TCP proxy.
+func (s *Service) Dial(ctx context.Context, id string) (net.Conn, error) {
+	s.mu.RLock()
+	item := s.sessions[id]
+	if item == nil {
+		s.mu.RUnlock()
+		return nil, ErrUnknownSession
+	}
+	if item.view.State != model.RemoteSessionRunning || item.runtime.Dial == nil {
+		s.mu.RUnlock()
+		return nil, fmt.Errorf("remote session has no transport")
+	}
+	dial := item.runtime.Dial
+	s.mu.RUnlock()
+	conn, err := dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	item = s.sessions[id]
+	if item == nil || item.view.State != model.RemoteSessionRunning {
+		s.mu.Unlock()
+		_ = conn.Close()
+		return nil, fmt.Errorf("remote session is not running")
+	}
+	item.connections[conn] = struct{}{}
+	s.mu.Unlock()
+	return conn, nil
+}
+
+func (s *Service) ReleaseDial(id string, conn net.Conn) {
+	if conn == nil {
+		return
+	}
+	s.mu.Lock()
+	if item := s.sessions[id]; item != nil {
+		delete(item.connections, conn)
+	}
+	s.mu.Unlock()
+	_ = conn.Close()
 }
 
 func (s *Service) Start(ctx context.Context, target model.RemoteTarget) (model.RemoteSession, error) {
@@ -133,9 +216,16 @@ func (s *Service) Start(ctx context.Context, target model.RemoteTarget) (model.R
 		}
 		target.Xpra = &options
 	}
+	if target.Provider == "rdp" {
+		options, err := model.NormalizeRDPRemoteOptions(target.RDP)
+		if err != nil {
+			return model.RemoteSession{}, err
+		}
+		target.RDP = &options
+	}
 	id := config.NewID("remote")
 	now := time.Now().UTC()
-	item := &session{view: model.RemoteSession{ID: id, Provider: target.Provider, TargetID: target.ID, TargetName: target.Name, Type: target.Type, State: model.RemoteSessionStarting, CreatedAt: now, Xpra: target.Xpra}}
+	item := &session{view: model.RemoteSession{ID: id, Provider: target.Provider, TargetID: target.ID, TargetName: target.Name, Type: target.Type, State: model.RemoteSessionStarting, CreatedAt: now, Xpra: target.Xpra, RDP: target.RDP}, connections: map[net.Conn]struct{}{}}
 	s.mu.Lock()
 	s.sessions[id] = item
 	s.mu.Unlock()
@@ -150,6 +240,7 @@ func (s *Service) Start(ctx context.Context, target model.RemoteTarget) (model.R
 	started := time.Now().UTC()
 	item.view.StartedAt = &started
 	item.view.State = model.RemoteSessionRunning
+	item.view.Message = runtime.Message
 	view := item.view
 	s.mu.Unlock()
 	go s.watch(id, runtime.Done)
@@ -223,7 +314,14 @@ func (s *Service) Stop(ctx context.Context, id string) error {
 	}
 	item.view.State = model.RemoteSessionStopping
 	stop := item.runtime.Stop
+	connections := make([]net.Conn, 0, len(item.connections))
+	for conn := range item.connections {
+		connections = append(connections, conn)
+	}
 	s.mu.Unlock()
+	for _, conn := range connections {
+		_ = conn.Close()
+	}
 	if stop == nil {
 		s.finishStopped(id)
 		return nil

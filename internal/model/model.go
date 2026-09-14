@@ -189,8 +189,30 @@ type RemoteTarget struct {
 	ForwardDBus bool `json:"forwardDbus,omitempty" yaml:"forwardDbus,omitempty"`
 	// Xpra contains typed provider-specific settings. It is nil in legacy
 	// targets; NormalizeXpraRemoteOptions supplies RunPilot defaults at runtime.
-	Xpra    *XpraRemoteOptions `json:"xpra,omitempty" yaml:"xpra,omitempty"`
-	Enabled bool               `json:"enabled" yaml:"enabled"`
+	Xpra *XpraRemoteOptions `json:"xpra,omitempty" yaml:"xpra,omitempty"`
+	// RDP contains the configured, non-secret RDP endpoint settings. Passwords
+	// are intentionally never part of a RemoteTarget.
+	RDP *RDPRemoteOptions `json:"rdp,omitempty" yaml:"rdp,omitempty"`
+}
+
+type RDPSecurityMode string
+
+const (
+	RDPSecurityAutomatic RDPSecurityMode = "automatic"
+	RDPSecurityNLA       RDPSecurityMode = "nla"
+	RDPSecurityTLS       RDPSecurityMode = "tls"
+)
+
+// RDPRemoteOptions is deliberately limited to desktop connection settings.
+// Credentials are supplied in-memory by the browser for each connection.
+type RDPRemoteOptions struct {
+	Host          string          `json:"host" yaml:"host"`
+	Port          int             `json:"port,omitempty" yaml:"port,omitempty"`
+	Username      string          `json:"username,omitempty" yaml:"username,omitempty"`
+	Domain        string          `json:"domain,omitempty" yaml:"domain,omitempty"`
+	SecurityMode  RDPSecurityMode `json:"securityMode,omitempty" yaml:"securityMode,omitempty"`
+	Clipboard     *bool           `json:"clipboard,omitempty" yaml:"clipboard,omitempty"`
+	DynamicResize *bool           `json:"dynamicResize,omitempty" yaml:"dynamicResize,omitempty"`
 }
 
 type XpraProfile string
@@ -250,6 +272,7 @@ type RemoteProviderStatus struct {
 	Name                string                     `json:"name"`
 	State               string                     `json:"state"`
 	Message             string                     `json:"message,omitempty"`
+	InstallHint         string                     `json:"installHint,omitempty"`
 	Version             string                     `json:"version,omitempty"`
 	Platform            string                     `json:"platform"`
 	Capabilities        RemoteProviderCapabilities `json:"capabilities"`
@@ -287,6 +310,9 @@ type RemoteSession struct {
 	// Xpra is an effective, non-sensitive display configuration snapshot. It
 	// remains fixed for the lifetime of this running session.
 	Xpra *XpraRemoteOptions `json:"xpra,omitempty"`
+	// RDP is an effective, non-secret endpoint snapshot. It remains fixed for
+	// the session lifetime; in particular, it contains no password.
+	RDP *RDPRemoteOptions `json:"rdp,omitempty"`
 }
 
 // SoftwareConfig contains the external providers RunPilot manages for its

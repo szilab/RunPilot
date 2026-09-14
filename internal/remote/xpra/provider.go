@@ -43,12 +43,14 @@ func (p *Provider) Status(ctx context.Context) model.RemoteProviderStatus {
 	if runtime.GOOS != "linux" {
 		status.State = "unsupported"
 		status.Message = "Xpra remote-session server support is currently Linux-only"
+		status.InstallHint = "Xpra server sessions are Linux-only. Use the built-in RDP provider for Windows desktop sessions."
 		return status
 	}
 	path, err := p.lookPath("xpra")
 	if err != nil {
 		status.State = "not-installed"
 		status.Message = "The xpra executable was not found in PATH"
+		status.InstallHint = "Install Xpra with your distribution package manager (for example: sudo apt install xpra), then restart RunPilot."
 		return status
 	}
 	versionProbe, cancelVersion := context.WithTimeout(ctx, 2*time.Second)
@@ -57,6 +59,7 @@ func (p *Provider) Status(ctx context.Context) model.RemoteProviderStatus {
 	if err != nil {
 		status.State = "unavailable"
 		status.Message = "Xpra could not be queried"
+		status.InstallHint = "Check that Xpra is installed and executable by the RunPilot service account, then restart RunPilot."
 		return status
 	}
 	status.State = "available"
@@ -202,7 +205,7 @@ func (p *Provider) Start(ctx context.Context, request remote.StartRequest) (remo
 		}
 		return remote.SessionProbe{WindowCount: count}, nil
 	}
-	return remote.Runtime{Endpoint: endpoint, ClientParams: clientParams(options), Stop: stop, Done: done, Probe: probe, Log: output.String}, nil
+	return remote.Runtime{Client: remote.ClientDescriptor{Kind: remote.ClientXpraHTML5}, Endpoint: endpoint, ClientParams: clientParams(options), Stop: stop, Done: done, Probe: probe, Log: output.String}, nil
 }
 
 func sessionArgs(kind model.RemoteTargetType, dbusMode model.RemoteDBusMode, command, port, runtimeDir, dbusLaunch string, hasDBusLaunch bool, options model.XpraRemoteOptions) []string {

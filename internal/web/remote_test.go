@@ -25,7 +25,7 @@ func TestRemoteTargetCRUDAndClientIsNotPublic(t *testing.T) {
 	}
 	handler := server.Handler()
 	token := ctrl.Snapshot().Server.Token
-	body := []byte(`{"name":"Firefox","provider":"xpra","type":"application","enabled":true,"command":{"path":"firefox","interpreter":"direct"}}`)
+	body := []byte(`{"name":"Firefox","provider":"xpra","type":"application","command":{"path":"firefox","interpreter":"direct"}}`)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/remote/targets", bytes.NewReader(body))
 	request.Header.Set("Authorization", "Bearer "+token)
 	response := httptest.NewRecorder()
@@ -40,7 +40,7 @@ func TestRemoteTargetCRUDAndClientIsNotPublic(t *testing.T) {
 	if created.Xpra == nil || created.Xpra.Encoding != "webp" || created.Xpra.Video == nil || *created.Xpra.Video || created.Xpra.LaunchAfterConnect == nil || !*created.Xpra.LaunchAfterConnect {
 		t.Fatalf("legacy/default target was not normalized: %#v", created.Xpra)
 	}
-	invalid := []byte(`{"name":"Broken","provider":"xpra","type":"application","enabled":true,"command":{"path":"xterm"},"xpra":{"encoding":"h264"}}`)
+	invalid := []byte(`{"name":"Broken","provider":"xpra","type":"application","command":{"path":"xterm"},"xpra":{"encoding":"h264"}}`)
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/remote/targets", bytes.NewReader(invalid))
 	request.Header.Set("Authorization", "Bearer "+token)
 	response = httptest.NewRecorder()
@@ -103,5 +103,57 @@ func TestRemoteClientRedirectAddsOnlyTicketSnapshotParameters(t *testing.T) {
 	location := response.Header().Get("Location")
 	if !strings.Contains(location, "encoding=webp") || strings.Contains(location, "encoding=rgb") || !strings.Contains(location, "toolbar_position=top-left") {
 		t.Fatalf("redirect did not use the session snapshot: %q", location)
+	}
+}
+
+func TestRDPRemoteTargetHasNoCommandOrPasswordAndIssuesTransportTicket(t *testing.T) {
+	ctrl, err := core.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	server, err := New(ctrl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := ctrl.Snapshot().Server.Token
+	body := []byte(`{"name":"Local desktop","provider":"rdp","type":"desktop","rdp":{"host":"127.0.0.1","username":"admin"}}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/remote/targets", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create RDP=%d %s", response.Code, response.Body.String())
+	}
+	var target model.RemoteTarget
+	if err := json.NewDecoder(response.Body).Decode(&target); err != nil {
+		t.Fatal(err)
+	}
+	if target.Command.Path != "" || target.RDP == nil || target.RDP.Port != 3389 {
+		t.Fatalf("RDP target = %#v", target)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/remote/targets/"+target.ID+"/sessions", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("start RDP=%d %s", response.Code, response.Body.String())
+	}
+	var session model.RemoteSession
+	if err := json.NewDecoder(response.Body).Decode(&session); err != nil {
+		t.Fatal(err)
+	}
+	if session.RDP == nil || strings.Contains(response.Body.String(), "password") {
+		t.Fatalf("unsafe RDP session response: %s", response.Body.String())
+	}
+	if session.Message != "" {
+		t.Fatalf("RDP session must not advertise browser connection readiness: %q", session.Message)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/remote/sessions/"+session.ID+"/transport-ticket", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), "ticket") {
+		t.Fatalf("RDP ticket=%d %s", response.Code, response.Body.String())
 	}
 }
