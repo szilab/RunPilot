@@ -17,6 +17,35 @@ import (
 func (s *Server) handleRemoteProviders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.ctrl.Remote().ProviderStatuses(r.Context()))
 }
+func (s *Server) handleGuacdConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.ctrl.GuacdConfig())
+}
+func (s *Server) handleUpdateGuacdConfig(w http.ResponseWriter, r *http.Request) {
+	var value model.GuacdConfig
+	if !decodeJSON(w, r, &value) {
+		return
+	}
+	result, err := s.ctrl.UpdateGuacdConfig(value)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+func (s *Server) handleTestGuacd(w http.ResponseWriter, r *http.Request) {
+	value := s.ctrl.GuacdConfig()
+	if r.ContentLength != 0 {
+		if !decodeJSON(w, r, &value) {
+			return
+		}
+	}
+	status, err := s.ctrl.TestGuacdConfig(r.Context(), value)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
 func (s *Server) handleRemoteTargets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.ctrl.RemoteTargets())
 }
@@ -98,12 +127,52 @@ func (s *Server) handleStartRemoteSession(w http.ResponseWriter, r *http.Request
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
+	var credentials rdpCredentials
+	if target.Provider == "rdp" && r.ContentLength != 0 {
+		if !decodeJSON(w, r, &credentials) {
+			return
+		}
+		var credentialsErr error
+		credentials, credentialsErr = effectiveRDPCredentials(target, credentials)
+		if credentialsErr != nil {
+			writeError(w, http.StatusBadRequest, credentialsErr)
+			return
+		}
+	} else if target.Provider == "rdp" {
+		var credentialsErr error
+		credentials, credentialsErr = effectiveRDPCredentials(target, credentials)
+		if credentialsErr != nil {
+			writeError(w, http.StatusBadRequest, credentialsErr)
+			return
+		}
+	}
 	session, err := s.ctrl.Remote().Start(ctx, target)
 	if err != nil {
 		remoteError(w, err)
 		return
 	}
+	if target.Provider == "rdp" {
+		s.putRDPCredentials(session.ID, credentials)
+	}
 	writeJSON(w, http.StatusCreated, session)
+}
+
+// effectiveRDPCredentials deliberately prevents a prefilled target username
+// from becoming silent pre-authentication when the password is empty.
+func effectiveRDPCredentials(target model.RemoteTarget, supplied rdpCredentials) (rdpCredentials, error) {
+	if supplied.Password == "" {
+		if target.RDP != nil && (target.RDP.SecurityMode == model.RDPSecurityNLA || target.RDP.SecurityMode == model.RDPSecurityNLAExt) {
+			return rdpCredentials{}, fmt.Errorf("NLA requires credentials; provide a password or choose Automatic for interactive login")
+		}
+		return rdpCredentials{}, nil
+	}
+	if supplied.Username == "" && target.RDP != nil {
+		supplied.Username = target.RDP.Username
+	}
+	if supplied.Domain == "" && target.RDP != nil {
+		supplied.Domain = target.RDP.Domain
+	}
+	return supplied, nil
 }
 func (s *Server) handleStopRemoteSession(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
@@ -112,6 +181,7 @@ func (s *Server) handleStopRemoteSession(w http.ResponseWriter, r *http.Request)
 		remoteError(w, err)
 		return
 	}
+	s.clearRDPCredentials(r.PathValue("id"))
 	w.WriteHeader(http.StatusNoContent)
 }
 func remoteError(w http.ResponseWriter, err error) {

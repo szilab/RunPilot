@@ -135,6 +135,7 @@ func defaultConfig() model.Config {
 		},
 		Processes: []model.ProcessDefinition{},
 		Jobs:      []model.JobDefinition{},
+		Remote:    model.RemoteConfig{Guacd: model.DefaultGuacdConfig()},
 	}
 	if runtime.GOOS == "windows" {
 		config.Software.Providers = []model.SoftwareProviderDefinition{{

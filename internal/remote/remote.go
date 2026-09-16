@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,7 +30,7 @@ type ClientKind string
 
 const (
 	ClientXpraHTML5 ClientKind = "xpra-html5"
-	ClientIronRDP   ClientKind = "ironrdp"
+	ClientGuacamole ClientKind = "guacamole"
 )
 
 // ClientDescriptor tells the web layer how to render a provider client. It
@@ -69,30 +70,36 @@ type Provider interface {
 }
 
 type Service struct {
-	dataDir   string
-	providers map[string]Provider
-	mu        sync.RWMutex
-	sessions  map[string]*session
+	dataDir       string
+	providers     map[string]Provider
+	providerOrder []string
+	mu            sync.RWMutex
+	sessions      map[string]*session
 }
 
 type session struct {
 	view        model.RemoteSession
 	runtime     Runtime
 	connections map[net.Conn]struct{}
+	diagnostics []string
 }
 
 func New(dataDir string, providers ...Provider) *Service {
 	p := make(map[string]Provider, len(providers))
+	order := make([]string, 0, len(providers))
 	for _, provider := range providers {
+		if _, exists := p[provider.ID()]; !exists {
+			order = append(order, provider.ID())
+		}
 		p[provider.ID()] = provider
 	}
-	return &Service{dataDir: dataDir, providers: p, sessions: map[string]*session{}}
+	return &Service{dataDir: dataDir, providers: p, providerOrder: order, sessions: map[string]*session{}}
 }
 
 func (s *Service) ProviderStatuses(ctx context.Context) []model.RemoteProviderStatus {
-	statuses := make([]model.RemoteProviderStatus, 0, len(s.providers))
-	for _, provider := range s.providers {
-		statuses = append(statuses, provider.Status(ctx))
+	statuses := make([]model.RemoteProviderStatus, 0, len(s.providerOrder))
+	for _, id := range s.providerOrder {
+		statuses = append(statuses, s.providers[id].Status(ctx))
 	}
 	return statuses
 }
@@ -114,12 +121,32 @@ func (s *Service) Diagnostics(id string) (model.RemoteSession, string, error) {
 		s.mu.RUnlock()
 		return model.RemoteSession{}, "", ErrUnknownSession
 	}
-	view, log := item.view, item.runtime.Log
+	view, log, diagnostics := item.view, item.runtime.Log, append([]string(nil), item.diagnostics...)
 	s.mu.RUnlock()
-	if log == nil {
-		return view, "", nil
+	base := ""
+	if log != nil {
+		base = log()
 	}
-	return view, log(), nil
+	if len(diagnostics) == 0 {
+		return view, base, nil
+	}
+	if base != "" {
+		base += "\n\n"
+	}
+	return view, base + strings.Join(diagnostics, "\n"), nil
+}
+
+// AddDiagnostic records credential-safe session setup progress. Callers must
+// never pass credentials, tickets, cookies, or other secrets here.
+func (s *Service) AddDiagnostic(id, line string) {
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if item := s.sessions[id]; item != nil {
+		item.diagnostics = append(item.diagnostics, line)
+	}
 }
 
 func (s *Service) ClientParams(id string) (map[string]string, error) {

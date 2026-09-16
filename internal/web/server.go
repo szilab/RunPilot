@@ -42,6 +42,8 @@ type Server struct {
 	remoteTicketMu   sync.Mutex
 	rdpTickets       map[string]remoteTransportTicket
 	rdpTicketMu      sync.Mutex
+	rdpCredentials   map[string]rdpCredentials
+	rdpCredentialMu  sync.Mutex
 	docker           *dockercompose.Manager
 }
 type terminalTicket struct {
@@ -63,6 +65,7 @@ type remoteTransportTicket struct {
 	SessionID string
 	Expires   time.Time
 }
+type rdpCredentials struct{ Username, Domain, Password string }
 
 func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	basePath := "/"
@@ -73,7 +76,7 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, terminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), terminalTickets: map[string]terminalTicket{}, remoteTickets: map[string]remoteClientTicket{}, rdpTickets: map[string]remoteTransportTicket{}, docker: ctrl.Docker()}, nil
+	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, terminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), terminalTickets: map[string]terminalTicket{}, remoteTickets: map[string]remoteClientTicket{}, rdpTickets: map[string]remoteTransportTicket{}, rdpCredentials: map[string]rdpCredentials{}, docker: ctrl.Docker()}, nil
 }
 
 func (s *Server) BasePath() string { return s.basePath }
@@ -105,6 +108,9 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("PUT /api/v1/docker/projects/{name}/files/{kind}", s.handleDockerWriteFile)
 	api.HandleFunc("GET /api/v1/terminal", s.handleTerminalInfo)
 	api.HandleFunc("GET /api/v1/remote/providers", s.handleRemoteProviders)
+	api.HandleFunc("GET /api/v1/remote/guacd", s.handleGuacdConfig)
+	api.HandleFunc("PUT /api/v1/remote/guacd", s.handleUpdateGuacdConfig)
+	api.HandleFunc("POST /api/v1/remote/guacd/test", s.handleTestGuacd)
 	api.HandleFunc("GET /api/v1/remote/targets", s.handleRemoteTargets)
 	api.HandleFunc("POST /api/v1/remote/targets", s.handleCreateRemoteTarget)
 	api.HandleFunc("PUT /api/v1/remote/targets/{id}", s.handleUpdateRemoteTarget)

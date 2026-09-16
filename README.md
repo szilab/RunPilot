@@ -177,41 +177,33 @@ is reported as unsupported on Windows.
 
 ### RDP
 
-The RDP provider is available on Linux and Windows and uses the official
-IronRDP browser component/WASM embedded in the RunPilot executable. It requires
-no Guacamole, guacd, FreeRDP daemon, IronRDP daemon, Java, Node.js, Rust, or
-container runtime. Naturally, an RDP server such as Windows Remote Desktop or
-`xrdp` must exist at the configured destination.
+RDP is implemented through Apache Guacamole's `guacd` daemon. RunPilot embeds
+the official Apache Guacamole 1.6.0 `guacamole-common-js` client; the full
+Guacamole web application, Tomcat, Java, and a Guacamole database are not
+required. `guacd` is the only external RDP runtime component.
 
-RDP targets are desktop-only and persist only host, port, username, domain,
-security preference and dynamic-resize settings. Clipboard integration and
-automatic remote desktop resizing are temporarily disabled for the embedded RDP
-client; the browser scales the desktop to fit, including in fullscreen.
-Passwords are
-prompted every time a session opens, stay in browser memory for the IronRDP
-connection setup, and are never stored in YAML, browser storage, API responses,
-diagnostics, or session metadata.
+Configure the provider's guacd host, port, TLS, and connection timeout on the
+Remote Access page. Keep guacd on a trusted private network: it has no
+authentication. For a host deployment, bind it only to loopback:
 
-The browser connects over the same RunPilot origin using a one-time,
-session-bound ticket in IronRDP's RDCleanPath handshake. RunPilot ignores the
-client-provided RDCleanPath destination and dials only the target snapshot
-already attached to the Remote session, then bridges the negotiated RDP TLS
-stream. This keeps RunPilot from becoming a generic TCP proxy. Fullscreen,
-keyboard, mouse, and wheel input are handled by the
-official embedded IronRDP component. Audio, devices, drives/files, printers,
-RD Gateway, multi-monitor, and RemoteApp are intentionally not enabled.
+```bash
+docker run -d --name runpilot-guacd --restart unless-stopped \
+  -p 127.0.0.1:4822:4822 guacamole/guacd:1.6.0
+```
 
-RDP servers frequently use self-signed certificates. The RDCleanPath bridge
-passes the target certificate chain to IronRDP, whose CredSSP path verifies the
-target public key during NLA. The current upstream web binding has no
-interactive certificate trust prompt for TLS-only sessions; this is not
-Web-PKI certificate validation.
+RDP targets remain desktop-only and retain the public `rdp` provider ID. They
+store only non-secret target settings (host, port, username/domain, keyboard
+layout and typed advanced options). Passwords are posted over the authenticated
+same-origin API, used once for the guacd handshake, then discarded. They never
+enter YAML, browser storage, URLs, sessions, diagnostics, or logs.
 
-The browser regression test exercises the embedded JavaScript/WASM startup,
-reopening sessions, canvas visibility, and notifications without sending RDP
-credentials. With Firefox installed, start `geckodriver --port 4445` and run
-`python3 tools/rdp-web/smoke_test.py`. It tests both `/` and `/pilot/` base paths;
-only the transport ticket and final network connection are stubbed.
+The browser WebSocket carries only the Guacamole protocol and a short-lived
+session ticket. RunPilot snapshots both the target and guacd configuration and
+chooses every destination, so it is not a generic guacd/TCP proxy. The target
+host is resolved by guacd; when guacd is in Docker, `127.0.0.1` means that
+container. Use a host gateway name such as `host.docker.internal` when needed.
+For Hungarian RDP servers choose **Hungarian** in the target keyboard layout;
+this sends `server-layout=hu-hu-qwertz`.
 
 ## Windows build
 

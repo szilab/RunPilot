@@ -2,21 +2,23 @@ package web
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/remote"
+	"github.com/szilab/RunPilot/internal/remote/guacd"
 )
 
-const maxRDCleanPathPDU = 64 * 1024
-
+// A ticket is short-lived and single-use. It authorizes only the already
+// snapshotted session, never a client-selected guacd or RDP destination.
 func (s *Server) handleRemoteTransportTicket(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	client, err := s.ctrl.Remote().Client(id)
@@ -24,8 +26,8 @@ func (s *Server) handleRemoteTransportTicket(w http.ResponseWriter, r *http.Requ
 		remoteError(w, err)
 		return
 	}
-	if client.Kind != remote.ClientIronRDP {
-		writeError(w, http.StatusConflict, errors.New("remote session does not use a transport client"))
+	if client.Kind != remote.ClientGuacamole {
+		writeError(w, http.StatusConflict, errors.New("remote session does not use Guacamole"))
 		return
 	}
 	ticket, err := secureTicket()
@@ -39,216 +41,242 @@ func (s *Server) handleRemoteTransportTicket(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusCreated, map[string]string{"ticket": ticket})
 }
 
-// handleRemoteTransport deliberately takes no target address from its URL or
-// WebSocket query. IronRDP sends the ticket inside its RDCleanPath handshake;
-// the parsed destination field is ignored and the provider snapshot controls
-// every outbound TCP dial.
 func (s *Server) handleRemoteTransport(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	conn, err := websocket.Accept(w, r, nil)
-	if err != nil {
+	if !s.consumeRDPTransportTicket(r.URL.Query().Get("ticket"), id) {
+		http.Error(w, "remote transport authorization required", http.StatusUnauthorized)
 		return
 	}
-	defer conn.CloseNow()
+	// These markers distinguish an Azure/front-proxy WebSocket failure from a
+	// guacd failure. If neither marker is recorded, the request never reached
+	// RunPilot. They intentionally contain no ticket or credential data.
+	s.ctrl.Remote().AddDiagnostic(id, "browser tunnel request received")
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = s.ctrl.Remote().Stop(stopCtx, id)
+	}()
+	// Azure Container Apps and other TLS-terminating proxies may forward an
+	// upstream Host that differs from the public browser Origin. This endpoint
+	// is protected by a short-lived, single-use, high-entropy transport ticket,
+	// so the normal Host/Origin comparison would add no meaningful protection
+	// while incorrectly rejecting that valid proxied WebSocket upgrade.
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		Subprotocols:         []string{"guacamole"},
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		s.ctrl.Remote().AddDiagnostic(id, "browser tunnel upgrade failed: "+strings.TrimSpace(err.Error()))
+		return
+	}
+	s.ctrl.Remote().AddDiagnostic(id, "browser tunnel upgraded")
+	// Prefer a WebSocket close handshake. CloseNow() immediately tears down the
+	// transport and can discard a useful pre-guacd error reason, which the
+	// Guacamole browser client otherwise reduces to its generic status 519.
+	defer func() { _ = ws.Close(websocket.StatusNormalClosure, "") }()
+	credentials, ok := s.takeRDPCredentials(id)
+	if !ok {
+		credentials = rdpCredentials{}
+	}
+	defer func() { credentials.Username, credentials.Domain, credentials.Password = "", "", "" }()
+	session, err := s.ctrl.Remote().Get(id)
+	if err != nil || session.RDP == nil {
+		_ = ws.Close(websocket.StatusInternalError, "RDP session unavailable")
+		return
+	}
+	config := s.ctrl.GuacdConfig()
+	s.ctrl.Remote().AddDiagnostic(id, rdpSetupDiagnostics(id, config.Host, config.Port, *session.RDP, credentials.Password != ""))
+	width, _ := strconv.Atoi(r.URL.Query().Get("width"))
+	height, _ := strconv.Atoi(r.URL.Query().Get("height"))
+	dpi, _ := strconv.Atoi(r.URL.Query().Get("dpi"))
+	if width < 1 || width > 16384 {
+		width = 1024
+	}
+	if height < 1 || height > 16384 {
+		height = 768
+	}
+	if dpi < 50 || dpi > 400 {
+		dpi = 96
+	}
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-
-	kind, request, err := conn.Read(ctx)
-	if err != nil || kind != websocket.MessageBinary {
-		_ = conn.Close(websocket.StatusPolicyViolation, "RDCleanPath handshake required")
-		return
-	}
-	handshake, err := parseRDCleanPathRequest(request)
-	if err != nil || !s.consumeRDPTransportTicket(handshake.proxyAuth, id) {
-		_ = conn.Close(websocket.StatusPolicyViolation, "RDP transport ticket expired or invalid")
-		return
-	}
-
+	s.ctrl.Remote().AddDiagnostic(id, "connecting to guacd")
 	upstream, err := s.ctrl.Remote().Dial(ctx, id)
 	if err != nil {
-		_ = conn.Close(websocket.StatusInternalError, "RDP target connection failed")
+		s.failRDPTransport(ws, id, err)
 		return
 	}
 	defer s.ctrl.Remote().ReleaseDial(id, upstream)
-	// RDP has no child process to outlive its browser client. Once an attached
-	// transport ends, release the logical Remote session as well.
+	s.ctrl.Remote().AddDiagnostic(id, "guacd connected")
+	reader, err := guacd.ConnectRDPWithStages(ctx, upstream, *session.RDP, guacd.Credentials{Username: credentials.Username, Domain: credentials.Domain, Password: credentials.Password}, guacd.ClientInfo{Width: width, Height: height, DPI: dpi, TimeZone: r.URL.Query().Get("timezone"), ImageMimetypes: []string{"image/webp", "image/png", "image/jpeg"}}, func(stage string) { s.ctrl.Remote().AddDiagnostic(id, stage) })
+	if err != nil {
+		s.failRDPTransport(ws, id, err)
+		return
+	}
+	// Width, height, and DPI were negotiated as guacd connect arguments. Once
+	// the WebSocket tunnel is open, Guacamole.Client sends its ordinary size
+	// instruction. Do not inject an extra size instruction here: that would
+	// race the browser client and differs from Guacamole's normal tunnel flow.
+	tunnelReady, err := guacd.TunnelReady(id)
+	if err != nil {
+		s.failRDPTransport(ws, id, err)
+		return
+	}
+	if err := ws.Write(ctx, websocket.MessageText, tunnelReady); err != nil {
+		s.ctrl.Remote().AddDiagnostic(id, "browser tunnel setup failed: "+strings.TrimSpace(err.Error()))
+		return
+	}
+	s.ctrl.Remote().AddDiagnostic(id, "browser tunnel attached")
+	// Guacamole's browser client requires inbound protocol activity within 15
+	// seconds. Its own ping is normally echoed below, but a proxy that drops a
+	// browser-to-server frame would otherwise make a valid, slow RDP setup look
+	// like status 514. This internal control instruction is safe and never
+	// reaches guacd or contains connection data.
+	keepaliveStop := make(chan struct{})
+	keepaliveDone := make(chan struct{})
 	defer func() {
-		stopCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
-		defer stop()
-		_ = s.ctrl.Remote().Stop(stopCtx, id)
+		cancel()
+		close(keepaliveStop)
+		<-keepaliveDone
 	}()
-	if _, err := upstream.Write(handshake.x224); err != nil {
-		_ = conn.Close(websocket.StatusInternalError, "RDP negotiation failed")
-		return
-	}
-	x224, err := readX224Response(upstream)
-	if err != nil {
-		_ = conn.Close(websocket.StatusInternalError, "RDP negotiation failed")
-		return
-	}
-	session, err := s.ctrl.Remote().Get(id)
-	if err != nil || session.RDP == nil {
-		_ = conn.Close(websocket.StatusInternalError, "RDP target snapshot unavailable")
-		return
-	}
-	// RDCleanPath requires the proxy to terminate target TLS and sends the
-	// target certificate chain to IronRDP for its protocol-level verification.
-	// RDP servers commonly use self-signed certificates, so Go cannot apply
-	// Web-PKI validation here. IronRDP receives the target public key through
-	// this authenticated one-time handshake for CredSSP verification.
-	tlsConn := tls.Client(upstream, &tls.Config{ServerName: session.RDP.Host, InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}) // #nosec G402 -- see RDCleanPath rationale above.
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		_ = conn.Close(websocket.StatusInternalError, "RDP TLS negotiation failed")
-		return
-	}
-	certificates := tlsConn.ConnectionState().PeerCertificates
-	if len(certificates) == 0 {
-		_ = conn.Close(websocket.StatusInternalError, "RDP target did not present a certificate")
-		return
-	}
-	response, err := encodeRDCleanPathResponse(x224, certificates, upstream.RemoteAddr())
-	if err != nil {
-		_ = conn.Close(websocket.StatusInternalError, "RDP transport initialization failed")
-		return
-	}
-	if err := conn.Write(ctx, websocket.MessageBinary, response); err != nil {
-		return
-	}
-
-	wsConn := websocket.NetConn(ctx, conn, websocket.MessageBinary)
+	go func() {
+		defer close(keepaliveDone)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		sent := false
+		for {
+			select {
+			case <-keepaliveStop:
+				return
+			case <-ticker.C:
+				keepalive, err := guacd.TunnelKeepalive()
+				if err != nil {
+					return
+				}
+				if err := ws.Write(ctx, websocket.MessageText, keepalive); err != nil {
+					s.ctrl.Remote().AddDiagnostic(id, "browser tunnel server keepalive failed: "+strings.TrimSpace(err.Error()))
+					return
+				}
+				if !sent {
+					s.ctrl.Remote().AddDiagnostic(id, "browser tunnel server keepalive active")
+					sent = true
+				}
+			}
+		}
+	}()
+	// WebSocketTunnel exchanges raw Guacamole instruction text. NetConn keeps
+	// that stream intact without creating a second protocol or accepting any
+	// browser-controlled destination fields.
+	stream := websocket.NetConn(ctx, ws, websocket.MessageText)
 	done := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(tlsConn, wsConn)
+		keepaliveSeen := false
+		for {
+			messageType, data, err := ws.Read(ctx)
+			if err != nil {
+				s.ctrl.Remote().AddDiagnostic(id, "browser tunnel read ended: "+strings.TrimSpace(err.Error()))
+				break
+			}
+			if messageType != websocket.MessageText {
+				s.ctrl.Remote().AddDiagnostic(id, "browser tunnel received a non-text message")
+				break
+			}
+			controls, err := guacd.ForwardClientInstructions(data, upstream)
+			if err != nil {
+				s.ctrl.Remote().AddDiagnostic(id, "browser tunnel protocol error: "+strings.TrimSpace(err.Error()))
+				break
+			}
+			if len(controls) > 0 {
+				if !keepaliveSeen {
+					s.ctrl.Remote().AddDiagnostic(id, "browser tunnel keepalive active")
+					keepaliveSeen = true
+				}
+				if err := ws.Write(ctx, websocket.MessageText, controls); err != nil {
+					s.ctrl.Remote().AddDiagnostic(id, "browser tunnel keepalive failed: "+strings.TrimSpace(err.Error()))
+					break
+				}
+			}
+		}
+		// Stop guacd when the browser half closes. This also unblocks the
+		// opposite copy direction if guacd has no pending display output.
+		_ = upstream.Close()
 		close(done)
 	}()
-	_, _ = io.Copy(wsConn, tlsConn)
+	output := &rdpTunnelOutput{writer: stream, first: func() {
+		s.ctrl.Remote().AddDiagnostic(id, "received guacd RDP output")
+	}}
+	if _, err := io.Copy(output, reader); err != nil {
+		s.ctrl.Remote().AddDiagnostic(id, "guacd RDP output ended: "+strings.TrimSpace(err.Error()))
+	} else {
+		s.ctrl.Remote().AddDiagnostic(id, "guacd RDP output ended cleanly")
+	}
 	cancel()
-	_ = wsConn.Close()
-	_ = tlsConn.Close()
+	_ = stream.Close()
 	<-done
 }
 
-func (s *Server) consumeRDPTransportTicket(value, id string) bool {
+type rdpTunnelOutput struct {
+	writer io.Writer
+	first  func()
+	seen   bool
+}
+
+func (w *rdpTunnelOutput) Write(data []byte) (int, error) {
+	if len(data) > 0 && !w.seen {
+		w.seen = true
+		w.first()
+	}
+	return w.writer.Write(data)
+}
+
+func (s *Server) failRDPTransport(ws *websocket.Conn, id string, err error) {
+	// Handshake errors are safe: the codec never includes connect argument
+	// values. Record the useful cause server-side and avoid leaking it through
+	// Guacamole's opaque numeric browser status. Its WebSocket client parses
+	// the close reason as a Guacamole status code, so prefix the safe detail
+	// with 512 and preserve it for the browser as well as diagnostics.
+	detail := strings.TrimSpace(err.Error())
+	s.ctrl.Remote().AddDiagnostic(id, "tunnel error: "+detail)
+	_ = ws.Close(websocket.StatusInternalError, "512 Could not establish tunnel to guacd: "+detail)
+}
+
+func rdpSetupDiagnostics(id, host string, port int, options model.RDPRemoteOptions, supplied bool) string {
+	credentialState := "omitted"
+	if supplied {
+		credentialState = "supplied"
+	}
+	layout := options.ServerLayout
+	if layout == "" {
+		layout = "server default"
+	}
+	return fmt.Sprintf("RDP session %s\nguacd endpoint: %s\ntarget: %s:%d\ncredentials: %s\nsecurity: %s\nserver-layout: %s", id, net.JoinHostPort(host, strconv.Itoa(port)), options.Host, options.Port, credentialState, options.SecurityMode, layout)
+}
+
+func (s *Server) consumeRDPTransportTicket(ticket, id string) bool {
 	s.rdpTicketMu.Lock()
 	defer s.rdpTicketMu.Unlock()
-	ticket, ok := s.rdpTickets[value]
+	value, ok := s.rdpTickets[ticket]
 	if ok {
-		delete(s.rdpTickets, value)
+		delete(s.rdpTickets, ticket)
 	}
-	return ok && ticket.SessionID == id && time.Now().Before(ticket.Expires)
+	return ok && value.SessionID == id && time.Now().Before(value.Expires)
 }
-
-type rdcRequest struct {
-	proxyAuth string
-	x224      []byte
+func (s *Server) putRDPCredentials(id string, value rdpCredentials) {
+	s.rdpCredentialMu.Lock()
+	s.rdpCredentials[id] = value
+	s.rdpCredentialMu.Unlock()
 }
-
-func parseRDCleanPathRequest(data []byte) (rdcRequest, error) {
-	tag, body, rest, err := derTLV(data)
-	if err != nil || tag != 0x30 || len(rest) != 0 {
-		return rdcRequest{}, errors.New("invalid RDCleanPath envelope")
-	}
-	var out rdcRequest
-	for len(body) > 0 {
-		tag, value, next, err := derTLV(body)
-		if err != nil {
-			return rdcRequest{}, err
-		}
-		body = next
-		switch tag {
-		case 0xa3:
-			_, text, _, err := derTLV(value)
-			if err != nil {
-				return rdcRequest{}, errors.New("invalid RDCleanPath authorization")
-			}
-			out.proxyAuth = string(text)
-		case 0xa6:
-			innerTag, bytes, _, err := derTLV(value)
-			if err != nil || innerTag != 0x04 {
-				return rdcRequest{}, errors.New("invalid RDCleanPath X.224 request")
-			}
-			out.x224 = append([]byte(nil), bytes...)
-		}
-	}
-	if out.proxyAuth == "" || len(out.x224) == 0 {
-		return rdcRequest{}, errors.New("incomplete RDCleanPath request")
-	}
-	return out, nil
+func (s *Server) takeRDPCredentials(id string) (rdpCredentials, bool) {
+	s.rdpCredentialMu.Lock()
+	defer s.rdpCredentialMu.Unlock()
+	value, ok := s.rdpCredentials[id]
+	delete(s.rdpCredentials, id)
+	return value, ok
 }
-
-func encodeRDCleanPathResponse(x224 []byte, certificates []*x509.Certificate, address net.Addr) ([]byte, error) {
-	fields := append(derExplicit(0, derInteger(3390)), derExplicit(6, derOctets(x224))...)
-	certs := make([]byte, 0)
-	for _, certificate := range certificates {
-		certs = append(certs, derOctets(certificate.Raw)...)
+func (s *Server) clearRDPCredentials(id string) {
+	value, ok := s.takeRDPCredentials(id)
+	if ok {
+		value.Password = ""
 	}
-	fields = append(fields, derExplicit(7, derSequence(certs))...)
-	fields = append(fields, derExplicit(9, derUTF8(address.String()))...)
-	return derSequence(fields), nil
 }
-
-func readX224Response(conn net.Conn) ([]byte, error) {
-	header := make([]byte, 4)
-	if _, err := io.ReadFull(conn, header); err != nil {
-		return nil, err
-	}
-	if header[0] != 3 || header[1] != 0 {
-		return nil, errors.New("invalid RDP TPKT response")
-	}
-	length := int(header[2])<<8 | int(header[3])
-	if length < 7 || length > 512 {
-		return nil, fmt.Errorf("invalid RDP TPKT response length %d", length)
-	}
-	response := make([]byte, length)
-	copy(response, header)
-	_, err := io.ReadFull(conn, response[4:])
-	return response, err
-}
-
-func derTLV(data []byte) (byte, []byte, []byte, error) {
-	if len(data) < 2 || len(data) > maxRDCleanPathPDU {
-		return 0, nil, nil, errors.New("invalid DER value")
-	}
-	length := int(data[1])
-	offset := 2
-	if length&0x80 != 0 {
-		count := length & 0x7f
-		if count == 0 || count > 3 || len(data) < offset+count {
-			return 0, nil, nil, errors.New("invalid DER length")
-		}
-		length = 0
-		for _, b := range data[offset : offset+count] {
-			length = length<<8 | int(b)
-		}
-		offset += count
-	}
-	if length < 0 || length > maxRDCleanPathPDU || len(data) < offset+length {
-		return 0, nil, nil, errors.New("truncated DER value")
-	}
-	return data[0], data[offset : offset+length], data[offset+length:], nil
-}
-
-func derLength(length int) []byte {
-	if length < 128 {
-		return []byte{byte(length)}
-	}
-	if length <= 0xff {
-		return []byte{0x81, byte(length)}
-	}
-	return []byte{0x82, byte(length >> 8), byte(length)}
-}
-func der(tag byte, value []byte) []byte {
-	out := []byte{tag}
-	out = append(out, derLength(len(value))...)
-	return append(out, value...)
-}
-func derSequence(value []byte) []byte           { return der(0x30, value) }
-func derOctets(value []byte) []byte             { return der(0x04, value) }
-func derUTF8(value string) []byte               { return der(0x0c, []byte(value)) }
-func derExplicit(tag byte, value []byte) []byte { return der(0xa0|tag, value) }
-func derInteger(value int) []byte {
-	if value <= 0xff {
-		return der(0x02, []byte{byte(value)})
-	}
-	return der(0x02, []byte{byte(value >> 8), byte(value)})
-}
+func rdpTransportError(err error) error { return fmt.Errorf("RDP transport failed: %w", err) }

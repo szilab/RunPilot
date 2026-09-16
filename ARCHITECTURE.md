@@ -134,26 +134,19 @@ The current Xpra provider supports Linux application (`xpra start`) and desktop
 capabilities so a later VNC/noVNC, RDP/Guacamole, or Windows-oriented provider
 does not require redesigning the Remote API or UI.
 
-RDP is a second provider for desktop sessions on both Linux and Windows. Its
-official IronRDP browser JavaScript/WASM assets are embedded with the static UI,
-so the native RunPilot executable is the only RunPilot runtime component. It
-does not require Guacamole/guacd, FreeRDP, an IronRDP daemon, Java, Node.js,
-Rust, or containers. The destination still needs an RDP server, such as xrdp or
-Windows Remote Desktop.
+RDP is a desktop-only provider on Linux and Windows backed by Apache Guacamole
+`guacd`. The embedded static UI contains the official `guacamole-common-js`
+1.6.0 client; RunPilot does not require the full Guacamole web application,
+Tomcat, Java, or a database. guacd is configured provider-wide and may be
+native, containerized, or on a trusted private network.
 
-RDP provider configuration is typed (`host`, `port`, `username`, `domain`,
-security preference, clipboard and dynamic resize) and is captured when the
-logical session starts. It has no command, D-Bus, or Xpra settings. Passwords
-are supplied per connection directly to IronRDP in browser memory and never
-persist, enter RemoteSession JSON, diagnostics, logs, or the REST API.
-
-IronRDP's current web API uses an RDCleanPath handshake rather than a raw
-WebSocket/TCP pipe. RunPilot accepts a one-time session-bound ticket from that
-handshake, ignores its destination field, and dials only the configured target
-snapshot. It performs the required RDP front negotiation and TLS bridge before
-passing the protected RDP stream to IronRDP. Stopping a Remote session closes
-the WebSocket and TCP/TLS connection. This preserves the authenticated
-transport boundary and prevents a generic TCP proxy API.
+At session creation RunPilot snapshots the RDP target and guacd endpoint. The
+browser receives only a short-lived session ticket and opens a same-origin
+Guacamole WebSocket. RunPilot connects to guacd, sends `select rdp`, parses its
+`args` instruction, builds `connect` values in the returned order, and bridges
+the interactive Guacamole protocol after `ready`. Browser input cannot choose
+guacd, RDP host, port, or connection parameters. Passwords are memory-only,
+used for that handshake, and never serialized or logged.
 
 Each Xpra session gets a RunPilot runtime directory, an Xpra-selected display,
 and a localhost-only HTTP/WebSocket listener. Xpra's supplied HTML5 client is

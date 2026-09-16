@@ -5,7 +5,24 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/szilab/RunPilot/internal/model"
 )
+
+func TestGuacdConfigurationDefaultsAndPersistence(t *testing.T) {
+	c, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if got := c.GuacdConfig(); got.Host != "127.0.0.1" || got.Port != 4822 || got.ConnectTimeoutSeconds != 5 {
+		t.Fatalf("defaults=%#v", got)
+	}
+	value, err := c.UpdateGuacdConfig(model.GuacdConfig{Host: "guacd", Port: 4823, ConnectTimeoutSeconds: 7})
+	if err != nil || value.Host != "guacd" || c.Snapshot().Remote.Guacd.Port != 4823 {
+		t.Fatalf("persist=%#v err=%v", value, err)
+	}
+}
 
 func TestLegacyXpraTargetGetsDisplayDefaultsWithoutConfigRewrite(t *testing.T) {
 	dir := t.TempDir()

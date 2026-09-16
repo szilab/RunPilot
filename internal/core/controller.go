@@ -58,8 +58,8 @@ func Open(dataDir string) (*Controller, error) {
 		scheduler: scheduler.New(jr),
 		software:  software.NewManager(dataDir),
 		docker:    dockercompose.NewManager(dataDir),
-		remote:    remote.New(dataDir, xpra.New(), rdp.New()),
 	}
+	c.remote = remote.New(dataDir, xpra.New(), rdp.New(func() model.GuacdConfig { return c.Snapshot().Remote.Guacd }))
 	if platform.CurrentCapabilities().DockerCompose {
 		c.storage = storage.NewRegistry(c.docker)
 	} else {
@@ -87,6 +87,37 @@ func (c *Controller) Close() {
 }
 
 func (c *Controller) Remote() *remote.Service { return c.remote }
+
+func (c *Controller) GuacdConfig() model.GuacdConfig {
+	value, err := model.NormalizeGuacdConfig(c.config.Snapshot().Remote.Guacd)
+	if err != nil {
+		return c.config.Snapshot().Remote.Guacd
+	}
+	return value
+}
+
+func (c *Controller) UpdateGuacdConfig(value model.GuacdConfig) (model.GuacdConfig, error) {
+	if strings.TrimSpace(value.Host) == "" {
+		return value, fmt.Errorf("guacd host is required")
+	}
+	value, err := model.NormalizeGuacdConfig(value)
+	if err != nil {
+		return value, err
+	}
+	err = c.config.Update(func(cfg *model.Config) error { cfg.Remote.Guacd = value; return nil })
+	return value, err
+}
+
+func (c *Controller) TestGuacdConfig(ctx context.Context, value model.GuacdConfig) (model.RemoteProviderStatus, error) {
+	if strings.TrimSpace(value.Host) == "" {
+		return model.RemoteProviderStatus{}, fmt.Errorf("guacd host is required")
+	}
+	value, err := model.NormalizeGuacdConfig(value)
+	if err != nil {
+		return model.RemoteProviderStatus{}, err
+	}
+	return rdp.ProbeGuacd(ctx, value), nil
+}
 
 func (c *Controller) RemoteTargets() []model.RemoteTarget {
 	targets := c.config.Snapshot().RemoteTargets

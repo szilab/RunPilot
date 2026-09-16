@@ -83,7 +83,7 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(app)
-	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "api/v1/software/providers", "/buckets", "api/v1/overview", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "Scoop root on Windows", "dockerProjectErrors", "Compose operation failed", "const canDelete = ready && !volume.inUse && !busy", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function openNewTextFile", `$("textEditorContent").readOnly=!canEdit`, "function initializeSidebar", "sidebarStorageKey", "function remoteXpraDefaults", "function focusRemoteClient", `class="row"`} {
+	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "api/v1/software/providers", "/buckets", "api/v1/overview", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "Scoop root on Windows", "dockerProjectErrors", "Compose operation failed", "const canUp = ready && hasCompose && !busy;", "const canDelete = ready && !volume.inUse && !busy", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function openNewTextFile", `$("textEditorContent").readOnly=!canEdit`, "function initializeSidebar", "sidebarStorageKey", "function remoteXpraDefaults", "function focusRemoteClient", `class="row"`} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js does not contain %q", want)
 		}
@@ -117,6 +117,28 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	}
 	if !strings.Contains(script, `title.textContent=".."`) || !strings.Contains(script, `meta.textContent="parent folder"`) {
 		t.Fatal("app.js does not render parent navigation as a folder entry")
+	}
+}
+
+func TestRDPPasswordIsOptionalAndTunnelErrorsAreUseful(t *testing.T) {
+	page, err := staticFS.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page), "Password (optional)") || strings.Contains(string(page), `id="remoteRDPConnectPassword" type="password" autocomplete="current-password" required`) {
+		t.Fatal("RDP password remains required")
+	}
+	app, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"function guacamoleTunnelError", "Could not establish tunnel to guacd", "(519)", "function remoteTransportParams", "client.connect(transportParams)"} {
+		if !strings.Contains(string(app), want) {
+			t.Fatalf("missing tunnel error handling %q", want)
+		}
+	}
+	if strings.Contains(string(app), "client.connect();") {
+		t.Fatal("Guacamole tunnel must receive its query parameters through client.connect")
 	}
 }
 
@@ -159,14 +181,15 @@ func TestRemoteTargetDialogIsProviderSpecific(t *testing.T) {
 		`id="remoteXpraSettings" class="remote-xpra-advanced span-2 remote-xpra-only"`,
 		`<summary>Advanced settings</summary>`,
 		`id="remoteRDPUsername" autocomplete="username" placeholder="DOMAIN\username"`,
-		`Clipboard temporarily unavailable`,
+		`id="remoteRDPLayout"`,
+		`hu-hu-qwertz`,
 		`id="remoteRDPConnectUsername" autocomplete="username" placeholder="DOMAIN\username"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("provider-specific remote target UI is missing %q", want)
 		}
 	}
-	for _, removed := range []string{`id="remoteTargetEnabled"`, `id="remoteRDPDomain"`, `id="remoteRDPConnectDomain"`, "Xpra display", "Optimized for browser-based administration and desktop applications."} {
+	for _, removed := range []string{`id="remoteTargetEnabled"`, `id="remoteRDPDomain"`, `id="remoteRDPConnectDomain"`, "Xpra display", "Optimized for browser-based administration and desktop applications.", "Clipboard temporarily unavailable"} {
 		if strings.Contains(page, removed) {
 			t.Fatalf("obsolete remote target UI remains: %q", removed)
 		}
@@ -184,6 +207,34 @@ func TestRemoteTargetDialogIsProviderSpecific(t *testing.T) {
 	}
 	if strings.Contains(script, "remoteTargetEnabled") || strings.Contains(script, "remoteRDPDomain") {
 		t.Fatal("remote target script still uses removed controls")
+	}
+}
+
+func TestGuacamoleAssetAndRDPUIAreEmbedded(t *testing.T) {
+	asset, err := staticFS.ReadFile("static/vendor/guacamole/guacamole-common-js-1.6.0.min.js")
+	if err != nil || !strings.Contains(string(asset), "Guacamole") {
+		t.Fatalf("Guacamole asset missing: %v", err)
+	}
+	page, err := staticFS.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"guacamole-common-js-1.6.0.min.js", `type="password"`, `id="guacdSettingsDialog"`, `id="guacdHost"`, `id="guacdPort"`, `id="guacdTLS"`, `id="guacdTimeout"`, `id="guacdTest"`, `data-dismiss="guacdSettingsDialog"`, `id="remoteRDPLayout"`, `id="remoteRDPResize"`} {
+		if !strings.Contains(string(page), want) {
+			t.Fatalf("RDP UI missing %q", want)
+		}
+	}
+	if strings.Contains(string(page), "<section class=\"overview-section\"><div class=\"section-head\"><h2>RDP / Guacamole settings</h2>") {
+		t.Fatal("guacd settings remain inline")
+	}
+	app, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"function openGuacdSettings", `openGuacdSettings()">Settings`, "body:JSON.stringify(value)"} {
+		if !strings.Contains(string(app), want) {
+			t.Fatalf("guacd dialog behavior missing %q", want)
+		}
 	}
 }
 

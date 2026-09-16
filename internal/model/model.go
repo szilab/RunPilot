@@ -154,6 +154,20 @@ type Config struct {
 	Jobs          []JobDefinition     `json:"jobs" yaml:"jobs"`
 	Software      SoftwareConfig      `json:"software" yaml:"software"`
 	RemoteTargets []RemoteTarget      `json:"remoteTargets" yaml:"remoteTargets"`
+	Remote        RemoteConfig        `json:"remote,omitempty" yaml:"remote,omitempty"`
+}
+
+// RemoteConfig contains provider-wide settings. Destinations remain provider
+// configuration and are deliberately not accepted from browser clients.
+type RemoteConfig struct {
+	Guacd GuacdConfig `json:"guacd,omitempty" yaml:"guacd,omitempty"`
+}
+
+type GuacdConfig struct {
+	Host                  string `json:"host,omitempty" yaml:"host,omitempty"`
+	Port                  int    `json:"port,omitempty" yaml:"port,omitempty"`
+	TLS                   bool   `json:"tls,omitempty" yaml:"tls,omitempty"`
+	ConnectTimeoutSeconds int    `json:"connectTimeoutSeconds,omitempty" yaml:"connectTimeoutSeconds,omitempty"`
 }
 
 // RemoteTarget is a reusable, administrator-configured graphical workload.
@@ -200,19 +214,43 @@ type RDPSecurityMode string
 const (
 	RDPSecurityAutomatic RDPSecurityMode = "automatic"
 	RDPSecurityNLA       RDPSecurityMode = "nla"
+	RDPSecurityNLAExt    RDPSecurityMode = "nla-ext"
 	RDPSecurityTLS       RDPSecurityMode = "tls"
+	RDPSecurityRDP       RDPSecurityMode = "rdp"
+)
+
+type RDPCertificatePolicy string
+
+const (
+	RDPCertificateValidate    RDPCertificatePolicy = "validate"
+	RDPCertificateTOFU        RDPCertificatePolicy = "tofu"
+	RDPCertificateIgnore      RDPCertificatePolicy = "ignore"
+	RDPCertificateFingerprint RDPCertificatePolicy = "fingerprint"
 )
 
 // RDPRemoteOptions is deliberately limited to desktop connection settings.
 // Credentials are supplied in-memory by the browser for each connection.
 type RDPRemoteOptions struct {
-	Host          string          `json:"host" yaml:"host"`
-	Port          int             `json:"port,omitempty" yaml:"port,omitempty"`
-	Username      string          `json:"username,omitempty" yaml:"username,omitempty"`
-	Domain        string          `json:"domain,omitempty" yaml:"domain,omitempty"`
-	SecurityMode  RDPSecurityMode `json:"securityMode,omitempty" yaml:"securityMode,omitempty"`
-	Clipboard     *bool           `json:"clipboard,omitempty" yaml:"clipboard,omitempty"`
-	DynamicResize *bool           `json:"dynamicResize,omitempty" yaml:"dynamicResize,omitempty"`
+	Host                   string               `json:"host" yaml:"host"`
+	Port                   int                  `json:"port,omitempty" yaml:"port,omitempty"`
+	Username               string               `json:"username,omitempty" yaml:"username,omitempty"`
+	Domain                 string               `json:"domain,omitempty" yaml:"domain,omitempty"`
+	SecurityMode           RDPSecurityMode      `json:"securityMode,omitempty" yaml:"securityMode,omitempty"`
+	Clipboard              *bool                `json:"clipboard,omitempty" yaml:"clipboard,omitempty"`
+	DynamicResize          *bool                `json:"dynamicResize,omitempty" yaml:"dynamicResize,omitempty"`
+	ServerLayout           string               `json:"serverLayout,omitempty" yaml:"serverLayout,omitempty"`
+	ResizeMethod           string               `json:"resizeMethod,omitempty" yaml:"resizeMethod,omitempty"`
+	DPIMode                string               `json:"dpiMode,omitempty" yaml:"dpiMode,omitempty"`
+	DPI                    int                  `json:"dpi,omitempty" yaml:"dpi,omitempty"`
+	ColorDepth             int                  `json:"colorDepth,omitempty" yaml:"colorDepth,omitempty"`
+	CertificatePolicy      RDPCertificatePolicy `json:"certificatePolicy,omitempty" yaml:"certificatePolicy,omitempty"`
+	CertificateFingerprint string               `json:"certificateFingerprint,omitempty" yaml:"certificateFingerprint,omitempty"`
+	Copy                   *bool                `json:"copy,omitempty" yaml:"copy,omitempty"`
+	Paste                  *bool                `json:"paste,omitempty" yaml:"paste,omitempty"`
+	ClipboardNormalization string               `json:"clipboardNormalization,omitempty" yaml:"clipboardNormalization,omitempty"`
+	PerformanceProfile     string               `json:"performanceProfile,omitempty" yaml:"performanceProfile,omitempty"`
+	TimeoutSeconds         int                  `json:"timeoutSeconds,omitempty" yaml:"timeoutSeconds,omitempty"`
+	TimeZone               string               `json:"timeZone,omitempty" yaml:"timeZone,omitempty"`
 }
 
 type XpraProfile string

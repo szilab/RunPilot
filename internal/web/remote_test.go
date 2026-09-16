@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -112,6 +113,24 @@ func TestRDPRemoteTargetHasNoCommandOrPasswordAndIssuesTransportTicket(t *testin
 		t.Fatal(err)
 	}
 	defer ctrl.Close()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	_, err = ctrl.UpdateGuacdConfig(model.GuacdConfig{Host: "127.0.0.1", Port: listener.Addr().(*net.TCPAddr).Port, ConnectTimeoutSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
 	server, err := New(ctrl)
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +151,7 @@ func TestRDPRemoteTargetHasNoCommandOrPasswordAndIssuesTransportTicket(t *testin
 	if target.Command.Path != "" || target.RDP == nil || target.RDP.Port != 3389 {
 		t.Fatalf("RDP target = %#v", target)
 	}
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/remote/targets/"+target.ID+"/sessions", nil)
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/remote/targets/"+target.ID+"/sessions", bytes.NewBufferString(`{"password":"very-secret"}`))
 	request.Header.Set("Authorization", "Bearer "+token)
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
@@ -143,11 +162,15 @@ func TestRDPRemoteTargetHasNoCommandOrPasswordAndIssuesTransportTicket(t *testin
 	if err := json.NewDecoder(response.Body).Decode(&session); err != nil {
 		t.Fatal(err)
 	}
-	if session.RDP == nil || strings.Contains(response.Body.String(), "password") {
+	if session.RDP == nil || strings.Contains(response.Body.String(), "password") || strings.Contains(response.Body.String(), "very-secret") {
 		t.Fatalf("unsafe RDP session response: %s", response.Body.String())
 	}
-	if session.Message != "" {
-		t.Fatalf("RDP session must not advertise browser connection readiness: %q", session.Message)
+	_, diagnostics, err := ctrl.Remote().Diagnostics(session.ID)
+	if err != nil || strings.Contains(diagnostics, "very-secret") {
+		t.Fatalf("unsafe RDP diagnostics=%q err=%v", diagnostics, err)
+	}
+	if session.Message != "Waiting for browser" {
+		t.Fatalf("RDP session must wait for browser: %q", session.Message)
 	}
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/remote/sessions/"+session.ID+"/transport-ticket", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
@@ -155,5 +178,90 @@ func TestRDPRemoteTargetHasNoCommandOrPasswordAndIssuesTransportTicket(t *testin
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), "ticket") {
 		t.Fatalf("RDP ticket=%d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestGuacdCandidateTestDoesNotPersist(t *testing.T) {
+	ctrl, err := core.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	if _, err := ctrl.UpdateGuacdConfig(model.GuacdConfig{Host: "saved-guacd", Port: 4822, ConnectTimeoutSeconds: 5}); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	server, err := New(ctrl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := ctrl.Snapshot().Server.Token
+	candidate := model.GuacdConfig{Host: "127.0.0.1", Port: listener.Addr().(*net.TCPAddr).Port, ConnectTimeoutSeconds: 5}
+	body, _ := json.Marshal(candidate)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remote/guacd/test", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("candidate test=%d %s", response.Code, response.Body.String())
+	}
+	if got := ctrl.Snapshot().Remote.Guacd; got.Host != "saved-guacd" || got.Port != 4822 {
+		t.Fatalf("candidate test persisted %#v", got)
+	}
+	bad := httptest.NewRequest(http.MethodPost, "/api/v1/remote/guacd/test", bytes.NewBufferString(`{"host":"","port":4822,"connectTimeoutSeconds":5}`))
+	bad.Header.Set("Authorization", "Bearer "+token)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, bad)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid candidate=%d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestRDPCredentialsInteractiveLoginAndNLA(t *testing.T) {
+	target := model.RemoteTarget{Provider: "rdp", RDP: &model.RDPRemoteOptions{Username: "stored-user", Domain: "stored-domain", SecurityMode: model.RDPSecurityAutomatic}}
+	got, err := effectiveRDPCredentials(target, rdpCredentials{Username: "dialog-user", Domain: "dialog-domain"})
+	if err != nil || got.Username != "" || got.Domain != "" || got.Password != "" {
+		t.Fatalf("interactive credentials=%#v err=%v", got, err)
+	}
+	if target.RDP.Username != "stored-user" || target.RDP.Domain != "stored-domain" {
+		t.Fatalf("interactive login changed configured target identity: %#v", target.RDP)
+	}
+	got, err = effectiveRDPCredentials(target, rdpCredentials{Password: "secret"})
+	if err != nil || got.Username != "stored-user" || got.Domain != "stored-domain" || got.Password != "secret" {
+		t.Fatalf("supplied credentials=%#v err=%v", got, err)
+	}
+	got, err = effectiveRDPCredentials(target, rdpCredentials{Username: "dialog-user", Domain: "dialog-domain", Password: "secret"})
+	if err != nil || got.Username != "dialog-user" || got.Domain != "dialog-domain" {
+		t.Fatalf("dialog credentials=%#v err=%v", got, err)
+	}
+	target.RDP.SecurityMode = model.RDPSecurityNLA
+	if _, err := effectiveRDPCredentials(target, rdpCredentials{}); err == nil || !strings.Contains(err.Error(), "NLA requires credentials") {
+		t.Fatalf("NLA error=%v", err)
+	}
+}
+
+func TestRDPDiagnosticsNeverContainCredentials(t *testing.T) {
+	options := model.RDPRemoteOptions{Host: "10.0.0.20", Port: 3389, SecurityMode: model.RDPSecurityAutomatic, ServerLayout: "hu-hu-qwertz", Username: "admin", Domain: "example"}
+	log := rdpSetupDiagnostics("remote-test", "127.0.0.1", 4822, options, true)
+	for _, secret := range []string{"admin", "example", "password", "secret"} {
+		if strings.Contains(log, secret) {
+			t.Fatalf("diagnostics exposed %q: %s", secret, log)
+		}
+	}
+	if !strings.Contains(log, "credentials: supplied") || !strings.Contains(log, "server-layout: hu-hu-qwertz") {
+		t.Fatalf("diagnostics=%s", log)
 	}
 }

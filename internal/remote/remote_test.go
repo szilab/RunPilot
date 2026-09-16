@@ -17,6 +17,24 @@ type fakeProvider struct {
 	done   chan error
 }
 
+type orderedProvider struct{ id string }
+
+func (p orderedProvider) ID() string { return p.id }
+func (p orderedProvider) Status(context.Context) model.RemoteProviderStatus {
+	return model.RemoteProviderStatus{ID: p.id, Name: p.id, State: "available"}
+}
+func (p orderedProvider) Start(context.Context, StartRequest) (Runtime, error) { return Runtime{}, nil }
+
+func TestProviderStatusesPreserveRegistrationOrder(t *testing.T) {
+	service := New(t.TempDir(), orderedProvider{id: "first"}, orderedProvider{id: "second"}, orderedProvider{id: "third"})
+	for i := 0; i < 100; i++ {
+		statuses := service.ProviderStatuses(context.Background())
+		if len(statuses) != 3 || statuses[0].ID != "first" || statuses[1].ID != "second" || statuses[2].ID != "third" {
+			t.Fatalf("order=%#v", statuses)
+		}
+	}
+}
+
 func (p *fakeProvider) ID() string { return "fake" }
 func (p *fakeProvider) Status(context.Context) model.RemoteProviderStatus {
 	return model.RemoteProviderStatus{ID: "fake", Name: "Fake", State: "available"}

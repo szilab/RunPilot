@@ -1,88 +1,90 @@
-// Package rdp provides browser-side IronRDP desktop sessions. The RDP
-// protocol stays in the bundled IronRDP WASM client; this provider owns only
-// the configured target snapshot and controlled TCP dial capability.
+// Package rdp provides RunPilot's RDP / guacd provider. guacd is the only
+// external RDP runtime; no full Guacamole web application is involved.
 package rdp
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
-	"net/netip"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/remote"
 )
 
-const ironRDPVersion = "IronRDP web 0.11.0 / RDP 0.7.0"
+type Provider struct{ config func() model.GuacdConfig }
 
-type Provider struct{}
-
-func New() *Provider { return &Provider{} }
-
-func (p *Provider) ID() string { return "rdp" }
-
-func (p *Provider) Status(context.Context) model.RemoteProviderStatus {
-	return model.RemoteProviderStatus{
-		ID:       p.ID(),
-		Name:     "RDP",
-		State:    "available",
-		Message:  "IronRDP web client embedded",
-		Version:  ironRDPVersion,
-		Platform: "linux, windows",
-		Capabilities: model.RemoteProviderCapabilities{
-			DesktopSessions: true,
-			Clipboard:       false,
-			DynamicResize:   false,
-			Fullscreen:      true,
-		},
-		HTML5Available: true,
+func New(config func() model.GuacdConfig) *Provider { return &Provider{config: config} }
+func (p *Provider) ID() string                      { return "rdp" }
+func (p *Provider) settings() (model.GuacdConfig, error) {
+	return model.NormalizeGuacdConfig(p.config())
+}
+func (p *Provider) Status(ctx context.Context) model.RemoteProviderStatus {
+	config, err := p.settings()
+	if err != nil {
+		return model.RemoteProviderStatus{ID: p.ID(), Name: "RDP / Guacamole", State: "configuration invalid", Message: err.Error(), Platform: "linux, windows", HTML5Available: true}
 	}
+	return ProbeGuacd(ctx, config)
+}
+
+// ProbeGuacd validates and performs the lightweight TCP reachability test used
+// for provider status and unsaved settings candidates.
+func ProbeGuacd(ctx context.Context, config model.GuacdConfig) model.RemoteProviderStatus {
+	probeCtx, cancel := context.WithTimeout(ctx, time.Duration(config.ConnectTimeoutSeconds)*time.Second)
+	defer cancel()
+	address := net.JoinHostPort(config.Host, strconv.Itoa(config.Port))
+	dialer := net.Dialer{}
+	conn, err := dialer.DialContext(probeCtx, "tcp", address)
+	if err != nil {
+		return model.RemoteProviderStatus{ID: "rdp", Name: "RDP / Guacamole", State: "unavailable", Message: "Cannot connect to guacd at " + address + ": " + err.Error(), Platform: "linux, windows", HTML5Available: true}
+	}
+	_ = conn.Close()
+	return model.RemoteProviderStatus{ID: "rdp", Name: "RDP / Guacamole", State: "available", Message: "guacd: " + address, Version: "Apache Guacamole guacd", Platform: "linux, windows", HTML5Available: true, Capabilities: model.RemoteProviderCapabilities{DesktopSessions: true, Clipboard: true, DynamicResize: true, Fullscreen: true}}
 }
 
 func (p *Provider) Start(_ context.Context, request remote.StartRequest) (remote.Runtime, error) {
 	if request.Target.Type != model.RemoteTargetDesktop {
 		return remote.Runtime{}, fmt.Errorf("RDP supports desktop sessions only")
 	}
-	options, err := model.NormalizeRDPRemoteOptions(request.Target.RDP)
+	if _, err := model.NormalizeRDPRemoteOptions(request.Target.RDP); err != nil {
+		return remote.Runtime{}, err
+	}
+	config, err := p.settings()
 	if err != nil {
 		return remote.Runtime{}, err
 	}
-	address := net.JoinHostPort(options.Host, fmt.Sprintf("%d", options.Port))
-	if _, err := netip.ParseAddrPort(address); err != nil {
-		// DNS names are expected; JoinHostPort already handles IPv6 literals.
-		if _, _, splitErr := net.SplitHostPort(address); splitErr != nil {
-			return remote.Runtime{}, fmt.Errorf("invalid RDP address: %w", splitErr)
-		}
-	}
+	address := net.JoinHostPort(config.Host, strconv.Itoa(config.Port))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	var once sync.Once
-	stop := func(context.Context) error {
-		once.Do(func() {
-			cancel()
-			close(done)
-		})
-		return nil
-	}
-	dial := func(callCtx context.Context) (net.Conn, error) {
-		combined, stopCall := context.WithCancel(callCtx)
+	return remote.Runtime{Client: remote.ClientDescriptor{Kind: remote.ClientGuacamole}, Stop: func(context.Context) error { once.Do(func() { cancel(); close(done) }); return nil }, Done: done, Message: "Waiting for browser", Log: func() string {
+		return fmt.Sprintf("RDP / guacd\n  guacd: %s\n  RDP target: %s:%d", address, request.Target.RDP.Host, request.Target.RDP.Port)
+	}, Dial: func(callCtx context.Context) (net.Conn, error) {
+		combined, stop := context.WithCancel(callCtx)
+		defer stop()
 		go func() {
 			select {
 			case <-ctx.Done():
-				stopCall()
+				stop()
 			case <-combined.Done():
 			}
 		}()
-		defer stopCall()
 		var dialer net.Dialer
-		return dialer.DialContext(combined, "tcp", address)
-	}
-	return remote.Runtime{
-		Client: remote.ClientDescriptor{Kind: remote.ClientIronRDP},
-		Stop:   stop,
-		Done:   done,
-		Dial:   dial,
-		Log:    func() string { return "RDP target transport is owned by the session-bound IronRDP bridge." },
-	}, nil
+		conn, err := dialer.DialContext(combined, "tcp", address)
+		if err != nil {
+			return nil, fmt.Errorf("cannot connect to guacd at %s: %w", address, err)
+		}
+		if config.TLS {
+			tlsConn := tls.Client(conn, &tls.Config{ServerName: config.Host, MinVersion: tls.VersionTLS12})
+			if err := tlsConn.HandshakeContext(combined); err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+			return tlsConn, nil
+		}
+		return conn, nil
+	}}, nil
 }
