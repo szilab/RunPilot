@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -62,7 +64,7 @@ func (s *Server) handleRemoteTransport(w http.ResponseWriter, r *http.Request) {
 	// so the normal Host/Origin comparison would add no meaningful protection
 	// while incorrectly rejecting that valid proxied WebSocket upgrade.
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		Subprotocols:         []string{"guacamole"},
+		Subprotocols:       []string{"guacamole"},
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
@@ -74,6 +76,7 @@ func (s *Server) handleRemoteTransport(w http.ResponseWriter, r *http.Request) {
 	// transport and can discard a useful pre-guacd error reason, which the
 	// Guacamole browser client otherwise reduces to its generic status 519.
 	defer func() { _ = ws.Close(websocket.StatusNormalClosure, "") }()
+	outbound := &guacamoleWSWriter{ws: ws}
 	credentials, ok := s.takeRDPCredentials(id)
 	if !ok {
 		credentials = rdpCredentials{}
@@ -108,7 +111,7 @@ func (s *Server) handleRemoteTransport(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.ctrl.Remote().ReleaseDial(id, upstream)
 	s.ctrl.Remote().AddDiagnostic(id, "guacd connected")
-	reader, err := guacd.ConnectRDPWithStages(ctx, upstream, *session.RDP, guacd.Credentials{Username: credentials.Username, Domain: credentials.Domain, Password: credentials.Password}, guacd.ClientInfo{Width: width, Height: height, DPI: dpi, TimeZone: r.URL.Query().Get("timezone"), ImageMimetypes: []string{"image/webp", "image/png", "image/jpeg"}}, func(stage string) { s.ctrl.Remote().AddDiagnostic(id, stage) })
+	reader, err := guacd.ConnectRDPWithStages(ctx, upstream, *session.RDP, guacd.Credentials{Username: credentials.Username, Domain: credentials.Domain, Password: credentials.Password}, guacd.ClientInfo{Width: width, Height: height, DPI: dpi, TimeZone: r.URL.Query().Get("timezone"), ImageMimetypes: []string{"image/png", "image/jpeg"}}, func(stage string) { s.ctrl.Remote().AddDiagnostic(id, stage) })
 	if err != nil {
 		s.failRDPTransport(ws, id, err)
 		return
@@ -122,78 +125,38 @@ func (s *Server) handleRemoteTransport(w http.ResponseWriter, r *http.Request) {
 		s.failRDPTransport(ws, id, err)
 		return
 	}
-	if err := ws.Write(ctx, websocket.MessageText, tunnelReady); err != nil {
+	if err := outbound.Write(ctx, tunnelReady); err != nil {
 		s.ctrl.Remote().AddDiagnostic(id, "browser tunnel setup failed: "+strings.TrimSpace(err.Error()))
 		return
 	}
 	s.ctrl.Remote().AddDiagnostic(id, "browser tunnel attached")
-	// Guacamole's browser client requires inbound protocol activity within 15
-	// seconds. Its own ping is normally echoed below, but a proxy that drops a
-	// browser-to-server frame would otherwise make a valid, slow RDP setup look
-	// like status 514. This internal control instruction is safe and never
-	// reaches guacd or contains connection data.
-	keepaliveStop := make(chan struct{})
-	keepaliveDone := make(chan struct{})
-	defer func() {
-		cancel()
-		close(keepaliveStop)
-		<-keepaliveDone
-	}()
-	go func() {
-		defer close(keepaliveDone)
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		sent := false
-		for {
-			select {
-			case <-keepaliveStop:
-				return
-			case <-ticker.C:
-				keepalive, err := guacd.TunnelKeepalive()
-				if err != nil {
-					return
-				}
-				if err := ws.Write(ctx, websocket.MessageText, keepalive); err != nil {
-					s.ctrl.Remote().AddDiagnostic(id, "browser tunnel server keepalive failed: "+strings.TrimSpace(err.Error()))
-					return
-				}
-				if !sent {
-					s.ctrl.Remote().AddDiagnostic(id, "browser tunnel server keepalive active")
-					sent = true
-				}
-			}
-		}
-	}()
-	// WebSocketTunnel exchanges raw Guacamole instruction text. NetConn keeps
-	// that stream intact without creating a second protocol or accepting any
-	// browser-controlled destination fields.
-	stream := websocket.NetConn(ctx, ws, websocket.MessageText)
 	done := make(chan struct{})
 	go func() {
 		keepaliveSeen := false
+		browserDiagnostics := browserInstructionDiagnostics(func(line string) {
+			s.ctrl.Remote().AddDiagnostic(id, line)
+		})
 		for {
 			messageType, data, err := ws.Read(ctx)
 			if err != nil {
-				s.ctrl.Remote().AddDiagnostic(id, "browser tunnel read ended: "+strings.TrimSpace(err.Error()))
+				if !errors.Is(err, context.Canceled) {
+					s.ctrl.Remote().AddDiagnostic(id, "browser tunnel read ended: "+strings.TrimSpace(err.Error()))
+				}
 				break
 			}
 			if messageType != websocket.MessageText {
 				s.ctrl.Remote().AddDiagnostic(id, "browser tunnel received a non-text message")
 				break
 			}
-			controls, err := guacd.ForwardClientInstructions(data, upstream)
+			responded, err := forwardBrowserInstructionsWithObserver(ctx, data, upstream, outbound, browserDiagnostics)
 			if err != nil {
-				s.ctrl.Remote().AddDiagnostic(id, "browser tunnel protocol error: "+strings.TrimSpace(err.Error()))
+				s.ctrl.Remote().AddDiagnostic(id, "browser -> guacd forwarding failed: "+strings.TrimSpace(err.Error()))
 				break
 			}
-			if len(controls) > 0 {
+			if responded {
 				if !keepaliveSeen {
 					s.ctrl.Remote().AddDiagnostic(id, "browser tunnel keepalive active")
 					keepaliveSeen = true
-				}
-				if err := ws.Write(ctx, websocket.MessageText, controls); err != nil {
-					s.ctrl.Remote().AddDiagnostic(id, "browser tunnel keepalive failed: "+strings.TrimSpace(err.Error()))
-					break
 				}
 			}
 		}
@@ -202,31 +165,178 @@ func (s *Server) handleRemoteTransport(w http.ResponseWriter, r *http.Request) {
 		_ = upstream.Close()
 		close(done)
 	}()
-	output := &rdpTunnelOutput{writer: stream, first: func() {
-		s.ctrl.Remote().AddDiagnostic(id, "received guacd RDP output")
-	}}
-	if _, err := io.Copy(output, reader); err != nil {
+	if err := forwardGuacdInstructions(ctx, reader, outbound, guacdInstructionDiagnostics(func(line string) {
+		s.ctrl.Remote().AddDiagnostic(id, line)
+	})); err != nil {
 		s.ctrl.Remote().AddDiagnostic(id, "guacd RDP output ended: "+strings.TrimSpace(err.Error()))
 	} else {
 		s.ctrl.Remote().AddDiagnostic(id, "guacd RDP output ended cleanly")
 	}
 	cancel()
-	_ = stream.Close()
 	<-done
 }
 
-type rdpTunnelOutput struct {
-	writer io.Writer
-	first  func()
-	seen   bool
+// guacamoleWSWriter serializes all server-to-browser WebSocket messages. A
+// guacd instruction and a tunnel ping response must never be interleaved.
+type guacamoleWSWriter struct {
+	mu sync.Mutex
+	ws *websocket.Conn
 }
 
-func (w *rdpTunnelOutput) Write(data []byte) (int, error) {
-	if len(data) > 0 && !w.seen {
-		w.seen = true
-		w.first()
+func (w *guacamoleWSWriter) Write(ctx context.Context, data []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.ws.Write(ctx, websocket.MessageText, data)
+}
+
+type guacamoleOutbound interface {
+	Write(context.Context, []byte) error
+}
+
+func forwardBrowserInstructions(ctx context.Context, data []byte, upstream net.Conn, outbound guacamoleOutbound) (bool, error) {
+	return forwardBrowserInstructionsWithObserver(ctx, data, upstream, outbound, nil)
+}
+
+func forwardBrowserInstructionsWithObserver(ctx context.Context, data []byte, upstream net.Conn, outbound guacamoleOutbound, observe func(guacd.Instruction, bool)) (bool, error) {
+	controls, err := guacd.ForwardClientInstructionsWithObserver(data, upstream, observe)
+	if err != nil {
+		return false, err
 	}
-	return w.writer.Write(data)
+	if len(controls) == 0 {
+		return false, nil
+	}
+	if err := outbound.Write(ctx, controls); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func browserInstructionDiagnostics(add func(string)) func(guacd.Instruction, bool) {
+	deduplicated := map[string]map[bool]bool{}
+	return func(instruction guacd.Instruction, forwarded bool) {
+		phase := "received"
+		if forwarded {
+			phase = "forwarded"
+		}
+		line := ""
+		switch instruction.Opcode {
+		case "sync":
+			if len(instruction.Args) == 1 && safeGuacamoleDiagnosticValue(instruction.Args[0]) {
+				line = "browser -> sync " + phase + " timestamp=" + instruction.Args[0]
+			}
+		case "size":
+			if len(instruction.Args) >= 2 && safeGuacamoleDiagnosticValue(instruction.Args[0]) && safeGuacamoleDiagnosticValue(instruction.Args[1]) {
+				line = "browser -> size " + phase + " " + instruction.Args[0] + "x" + instruction.Args[1]
+			}
+		case "nop", "disconnect":
+			line = "browser -> " + instruction.Opcode + " " + phase
+		case "ack":
+			if len(instruction.Args) >= 3 && safeGuacamoleDiagnosticValue(instruction.Args[0]) && safeGuacamoleDiagnosticValue(instruction.Args[len(instruction.Args)-1]) {
+				line = "browser -> ack " + phase + " stream=" + instruction.Args[0] + " code=" + instruction.Args[len(instruction.Args)-1]
+			}
+		case "mouse", "key":
+			if deduplicated[instruction.Opcode] == nil {
+				deduplicated[instruction.Opcode] = map[bool]bool{}
+			}
+			if !deduplicated[instruction.Opcode][forwarded] {
+				deduplicated[instruction.Opcode][forwarded] = true
+				line = "browser -> " + instruction.Opcode + " " + phase
+			}
+		}
+		if line != "" {
+			add(line)
+		}
+	}
+}
+
+func safeGuacamoleDiagnosticValue(value string) bool {
+	if value == "" || len(value) > 32 {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func forwardGuacdInstructions(ctx context.Context, reader *bufio.Reader, outbound guacamoleOutbound, observe func(guacd.Instruction)) error {
+	for {
+		instruction, err := guacd.DecodeInstruction(reader)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		if observe != nil {
+			observe(instruction)
+		}
+		encoded, err := guacd.EncodeTunnelInstruction(instruction)
+		if err != nil {
+			return err
+		}
+		if err := outbound.Write(ctx, encoded); err != nil {
+			return err
+		}
+	}
+}
+
+func guacdInstructionDiagnostics(add func(string)) func(guacd.Instruction) {
+	count := 0
+	firstImageStream := ""
+	firstImageRecorded := false
+	awaitingFirstImageSync := false
+	return func(instruction guacd.Instruction) {
+		if count < 10 {
+			count++
+			line := "guacd -> " + instruction.Opcode
+			if instruction.Opcode == "error" && len(instruction.Args) >= 2 && safeGuacamoleStatusCode(instruction.Args[1]) {
+				line += " (code=" + instruction.Args[1] + ")"
+			}
+			add(line)
+		}
+
+		// The first image stream confirms that the complete Guacamole image
+		// sequence crossed the guacd-to-browser relay. Record only structural
+		// metadata: image payloads can be both large and sensitive.
+		switch instruction.Opcode {
+		case "img":
+			if !firstImageRecorded && len(instruction.Args) >= 4 {
+				firstImageStream = instruction.Args[1]
+				firstImageRecorded = true
+				add("guacd -> img stream=" + firstImageStream + " layer=" + instruction.Args[2] + " mimetype=" + instruction.Args[3])
+			}
+		case "blob":
+			if firstImageStream != "" && len(instruction.Args) >= 2 && instruction.Args[0] == firstImageStream {
+				add("guacd -> blob stream=" + firstImageStream + " chars=" + strconv.Itoa(len(instruction.Args[1])))
+			}
+		case "end":
+			if firstImageStream != "" && len(instruction.Args) >= 1 && instruction.Args[0] == firstImageStream {
+				add("guacd -> end stream=" + firstImageStream)
+				firstImageStream = ""
+				awaitingFirstImageSync = true
+			}
+		case "sync":
+			if awaitingFirstImageSync {
+				add("guacd -> sync after first img")
+				awaitingFirstImageSync = false
+			}
+		}
+	}
+}
+
+func safeGuacamoleStatusCode(value string) bool {
+	if value == "" || len(value) > 6 {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) failRDPTransport(ws *websocket.Conn, id string, err error) {

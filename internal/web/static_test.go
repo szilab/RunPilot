@@ -132,13 +132,59 @@ func TestRDPPasswordIsOptionalAndTunnelErrorsAreUseful(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"function guacamoleTunnelError", "Could not establish tunnel to guacd", "(519)", "function remoteTransportParams", "client.connect(transportParams)"} {
+	for _, want := range []string{"function guacamoleTunnelError", "function guacamoleClientError", "Could not establish tunnel to guacd", "Guacamole client/RDP error", "client.onerror", "client.onstatechange", "Guacamole WebSocket tunnel error", `519:"Guacamole could not find the upstream RDP service"`, "function remoteTransportParams", "client.connect(transportParams)"} {
 		if !strings.Contains(string(app), want) {
 			t.Fatalf("missing tunnel error handling %q", want)
 		}
 	}
 	if strings.Contains(string(app), "client.connect();") {
 		t.Fatal("Guacamole tunnel must receive its query parameters through client.connect")
+	}
+}
+
+func TestRDPDisplayDiagnosticsPreserveActiveClientSurface(t *testing.T) {
+	app, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(app)
+	for _, want := range []string{
+		"function inspectGuacamoleDisplay",
+		"function instrumentGuacamoleDisplay",
+		"browser received img stream=",
+		"browser received blob stream=",
+		"browser received end stream=",
+		"browser received sync timestamp=",
+		"Guacamole display resized to",
+		"sampled pixels:",
+		"Guacamole image decode promise rejected",
+		"Guacamole image CSP violation",
+		"stopDisplayInstrumentation",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("RDP display diagnostics missing %q", want)
+		}
+	}
+	if strings.Contains(script, "console.debug(`browser received blob stream=${firstImageStream} length=${value(1)}`)") {
+		t.Fatal("browser image diagnostics must not log blob payloads")
+	}
+	start := strings.Index(script, "function renderRemoteSession()")
+	end := strings.Index(script[start:], "function closeRemoteSession()")
+	if start < 0 || end < 0 {
+		t.Fatal("remote session rendering functions are missing")
+	}
+	if strings.Contains(script[start:start+end], "replaceChildren()") {
+		t.Fatal("periodic remote session rendering must not destroy the active Guacamole display")
+	}
+
+	styles, err := staticFS.ReadFile("static/styles.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{".remote-rdp { display: block; width: 100%; height: 100%;", "main.remote-active .remote-frame-shell { flex: 1 1 0; height: 0; min-height: 0;"} {
+		if !strings.Contains(string(styles), want) {
+			t.Fatalf("active RDP display surface is not sized: %q", want)
+		}
 	}
 }
 

@@ -15,7 +15,63 @@ type Credentials struct{ Username, Domain, Password string }
 type ClientInfo struct {
 	Width, Height, DPI int
 	TimeZone           string
+	Name               string
+	AudioMimetypes     []string
+	VideoMimetypes     []string
 	ImageMimetypes     []string
+}
+
+// protocolVersion mirrors GuacamoleProtocolVersion in guacamole-common 1.6.0.
+// VERSION_1_5_0 is the newest protocol version implemented by that release,
+// despite the product release being numbered 1.6.0.
+type protocolVersion struct{ major, minor, patch int }
+
+var (
+	legacyProtocolVersion = protocolVersion{major: 1, minor: 0, patch: 0}
+	latestProtocolVersion = protocolVersion{major: 1, minor: 5, patch: 0}
+)
+
+func (v protocolVersion) String() string {
+	return fmt.Sprintf("VERSION_%d_%d_%d", v.major, v.minor, v.patch)
+}
+
+func (v protocolVersion) atLeast(other protocolVersion) bool {
+	if v.major != other.major {
+		return v.major > other.major
+	}
+	if v.minor != other.minor {
+		return v.minor > other.minor
+	}
+	return v.patch >= other.patch
+}
+
+func parseProtocolVersion(value string) (protocolVersion, bool) {
+	const prefix = "VERSION_"
+	if !strings.HasPrefix(value, prefix) {
+		return protocolVersion{}, false
+	}
+	parts := strings.Split(strings.TrimPrefix(value, prefix), "_")
+	if len(parts) != 3 {
+		return protocolVersion{}, false
+	}
+	version := protocolVersion{}
+	values := []*int{&version.major, &version.minor, &version.patch}
+	for i, part := range parts {
+		if part == "" {
+			return protocolVersion{}, false
+		}
+		for _, character := range part {
+			if character < '0' || character > '9' {
+				return protocolVersion{}, false
+			}
+		}
+		parsed, err := strconv.Atoi(part)
+		if err != nil {
+			return protocolVersion{}, false
+		}
+		*values[i] = parsed
+	}
+	return version, true
 }
 
 // ConnectRDP uses guacd's returned args list instead of assuming a positional
@@ -40,10 +96,55 @@ func ConnectRDPWithStages(ctx context.Context, conn net.Conn, options model.RDPR
 		return nil, fmt.Errorf("guacd did not accept RDP: %s", args.Opcode)
 	}
 	stageIf(stage, "received args")
-	values := connectionValues(options, credentials, client)
+	values := connectionValues(options, credentials)
 	connect := make([]string, len(args.Args))
+	negotiatedVersion := legacyProtocolVersion
 	for i, name := range args.Args {
+		if i == 0 {
+			if version, ok := parseProtocolVersion(name); ok {
+				// This exactly follows ConfiguredGuacamoleSocket: guacd provides
+				// its maximum supported version and the client caps it at its own.
+				if version.atLeast(latestProtocolVersion) {
+					version = latestProtocolVersion
+				}
+				connect[i] = version.String()
+				negotiatedVersion = version
+				stageIf(stage, "negotiated protocol version: "+connect[i])
+				continue
+			}
+		}
 		connect[i] = values[name]
+	}
+	if err := WriteInstruction(conn, "size", strconv.Itoa(client.Width), strconv.Itoa(client.Height), strconv.Itoa(client.DPI)); err != nil {
+		return nil, fmt.Errorf("send size: %w", err)
+	}
+	stageIf(stage, "sent size")
+	if err := WriteInstruction(conn, "audio", client.AudioMimetypes...); err != nil {
+		return nil, fmt.Errorf("send audio: %w", err)
+	}
+	stageIf(stage, "sent audio")
+	if err := WriteInstruction(conn, "video", client.VideoMimetypes...); err != nil {
+		return nil, fmt.Errorf("send video: %w", err)
+	}
+	stageIf(stage, "sent video")
+	if err := WriteInstruction(conn, "image", client.ImageMimetypes...); err != nil {
+		return nil, fmt.Errorf("send image: %w", err)
+	}
+	stageIf(stage, "sent image")
+	if negotiatedVersion.atLeast(protocolVersion{major: 1, minor: 1, patch: 0}) {
+		timezone := effectiveTimeZone(options, client)
+		if timezone != "" {
+			if err := WriteInstruction(conn, "timezone", timezone); err != nil {
+				return nil, fmt.Errorf("send timezone: %w", err)
+			}
+			stageIf(stage, "sent timezone")
+		}
+	}
+	if negotiatedVersion.atLeast(protocolVersion{major: 1, minor: 5, patch: 0}) && client.Name != "" {
+		if err := WriteInstruction(conn, "name", client.Name); err != nil {
+			return nil, fmt.Errorf("send name: %w", err)
+		}
+		stageIf(stage, "sent name")
 	}
 	if err := WriteInstruction(conn, "connect", connect...); err != nil {
 		return nil, fmt.Errorf("send connect: %w", err)
@@ -56,6 +157,9 @@ func ConnectRDPWithStages(ctx context.Context, conn net.Conn, options model.RDPR
 	if ready.Opcode != "ready" {
 		return nil, fmt.Errorf("guacd RDP connection failed: %s", ready.Opcode)
 	}
+	if len(ready.Args) == 0 || ready.Args[0] == "" {
+		return nil, fmt.Errorf("guacd ready instruction did not include a connection ID")
+	}
 	stageIf(stage, "received ready")
 	return reader, nil
 }
@@ -66,22 +170,15 @@ func stageIf(stage func(string), value string) {
 	}
 }
 
-func connectionValues(options model.RDPRemoteOptions, credentials Credentials, client ClientInfo) map[string]string {
+func effectiveTimeZone(options model.RDPRemoteOptions, client ClientInfo) string {
+	if options.TimeZone != "" {
+		return options.TimeZone
+	}
+	return client.TimeZone
+}
+
+func connectionValues(options model.RDPRemoteOptions, credentials Credentials) map[string]string {
 	value := map[string]string{"hostname": options.Host, "port": strconv.Itoa(options.Port), "username": credentials.Username, "password": credentials.Password, "domain": credentials.Domain, "security": mapSecurity(options.SecurityMode), "timeout": strconv.Itoa(options.TimeoutSeconds), "enable-drive": "false", "enable-printing": "false", "disable-audio": "true", "disable-copy": strconv.FormatBool(options.Copy == nil || !*options.Copy), "disable-paste": strconv.FormatBool(options.Paste == nil || !*options.Paste), "normalize-clipboard": options.ClipboardNormalization}
-	if client.Width > 0 {
-		value["width"] = strconv.Itoa(client.Width)
-	}
-	if client.Height > 0 {
-		value["height"] = strconv.Itoa(client.Height)
-	}
-	if client.DPI > 0 {
-		value["dpi"] = strconv.Itoa(client.DPI)
-	}
-	// Only advertise image formats the embedded Guacamole browser client can
-	// render. Audio is deliberately disabled for this provider.
-	if len(client.ImageMimetypes) > 0 {
-		value["image"] = strings.Join(client.ImageMimetypes, ",")
-	}
 	if options.ServerLayout != "" {
 		value["server-layout"] = options.ServerLayout
 	}
@@ -92,9 +189,10 @@ func connectionValues(options model.RDPRemoteOptions, credentials Credentials, c
 		value["color-depth"] = strconv.Itoa(options.ColorDepth)
 	}
 	if options.TimeZone != "" {
+		// This remains an RDP connection parameter when guacd explicitly
+		// includes "timezone" in its args list. Browser timezone is sent only
+		// through the capability-gated timezone handshake above.
 		value["timezone"] = options.TimeZone
-	} else {
-		value["timezone"] = client.TimeZone
 	}
 	switch options.CertificatePolicy {
 	case model.RDPCertificateTOFU:

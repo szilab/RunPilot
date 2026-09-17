@@ -24,7 +24,15 @@ func EncodeInstruction(opcode string, args ...string) ([]byte, error) {
 	if opcode == "" {
 		return nil, errors.New("guacamole opcode is required")
 	}
-	parts := append([]string{opcode}, args...)
+	return EncodeTunnelInstruction(Instruction{Opcode: opcode, Args: args})
+}
+
+// EncodeTunnelInstruction preserves a decoded Guacamole instruction exactly,
+// including the empty opcode reserved for WebSocket tunnel control traffic.
+// It is intentionally separate from EncodeInstruction(), which rejects that
+// internal opcode for ordinary guacd instructions.
+func EncodeTunnelInstruction(instruction Instruction) ([]byte, error) {
+	parts := append([]string{instruction.Opcode}, instruction.Args...)
 	return encodeElements(parts)
 }
 
@@ -108,6 +116,14 @@ func TunnelKeepalive() ([]byte, error) {
 // consumes the empty-opcode UUID control. It returns any ping controls that
 // must be echoed to the browser to keep its WebSocket tunnel alive.
 func ForwardClientInstructions(data []byte, destination io.Writer) ([]byte, error) {
+	return ForwardClientInstructionsWithObserver(data, destination, nil)
+}
+
+// ForwardClientInstructionsWithObserver behaves like ForwardClientInstructions
+// while reporting each complete instruction when received and, for normal
+// instructions, again only after its immediate write to guacd succeeds. The
+// observer is diagnostic-only and never controls forwarding.
+func ForwardClientInstructionsWithObserver(data []byte, destination io.Writer, observe func(Instruction, bool)) ([]byte, error) {
 	reader := bufio.NewReader(bytes.NewReader(data))
 	var controls bytes.Buffer
 	for {
@@ -123,6 +139,9 @@ func ForwardClientInstructions(data []byte, destination io.Writer) ([]byte, erro
 		instruction, err := DecodeInstruction(reader)
 		if err != nil {
 			return nil, err
+		}
+		if observe != nil {
+			observe(instruction, false)
 		}
 		if instruction.Opcode == "" {
 			if len(instruction.Args) > 0 && instruction.Args[0] == "ping" {
@@ -140,6 +159,9 @@ func ForwardClientInstructions(data []byte, destination io.Writer) ([]byte, erro
 		}
 		if _, err := destination.Write(encoded); err != nil {
 			return nil, err
+		}
+		if observe != nil {
+			observe(instruction, true)
 		}
 	}
 }
