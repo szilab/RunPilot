@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/szilab/RunPilot/internal/websocketsecure"
 )
 
 // handleVNCRemoteTransport bridges the embedded noVNC client's RFB WebSocket
@@ -27,10 +28,14 @@ func (s *Server) handleVNCRemoteTransport(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer func() { _ = ws.Close(websocket.StatusNormalClosure, "") }()
-	s.ctrl.Remote().AddDiagnostic(id, "noVNC browser tunnel upgraded")
-
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	secure, err := websocketsecure.ServerHandshake(ctx, ws, s.ctrl.Snapshot().Server.WebSocketPayloadMode)
+	if err != nil {
+		_ = ws.Close(websocket.StatusPolicyViolation, "secure WebSocket negotiation failed")
+		return
+	}
+	s.ctrl.Remote().AddDiagnostic(id, "noVNC browser tunnel upgraded")
 	upstream, err := s.ctrl.Remote().Dial(ctx, id)
 	if err != nil {
 		s.ctrl.Remote().AddDiagnostic(id, "VNC target connection failed: "+strings.TrimSpace(err.Error()))
@@ -41,8 +46,8 @@ func (s *Server) handleVNCRemoteTransport(w http.ResponseWriter, r *http.Request
 	s.ctrl.Remote().AddDiagnostic(id, "VNC target connected")
 
 	copyDone := make(chan error, 2)
-	go func() { copyDone <- copyNoVNCToTCP(ctx, ws, upstream) }()
-	go func() { copyDone <- copyTCPToNoVNC(ctx, upstream, ws) }()
+	go func() { copyDone <- copyNoVNCToTCP(ctx, secure, upstream) }()
+	go func() { copyDone <- copyTCPToNoVNC(ctx, upstream, secure) }()
 	err = <-copyDone
 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
 		s.ctrl.Remote().AddDiagnostic(id, "noVNC tunnel ended: "+strings.TrimSpace(err.Error()))
@@ -53,7 +58,12 @@ func (s *Server) handleVNCRemoteTransport(w http.ResponseWriter, r *http.Request
 	<-copyDone
 }
 
-func copyNoVNCToTCP(ctx context.Context, ws *websocket.Conn, upstream io.Writer) error {
+type messageConn interface {
+	Read(context.Context) (websocket.MessageType, []byte, error)
+	Write(context.Context, websocket.MessageType, []byte) error
+}
+
+func copyNoVNCToTCP(ctx context.Context, ws messageConn, upstream io.Writer) error {
 	for {
 		messageType, data, err := ws.Read(ctx)
 		if err != nil {
@@ -68,7 +78,7 @@ func copyNoVNCToTCP(ctx context.Context, ws *websocket.Conn, upstream io.Writer)
 	}
 }
 
-func copyTCPToNoVNC(ctx context.Context, upstream io.Reader, ws *websocket.Conn) error {
+func copyTCPToNoVNC(ctx context.Context, upstream io.Reader, ws messageConn) error {
 	buffer := make([]byte, 32*1024)
 	for {
 		count, err := upstream.Read(buffer)

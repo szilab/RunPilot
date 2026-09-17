@@ -252,7 +252,8 @@ export default class Websock {
     }
 
     open(uri, protocols) {
-        this.attach(new WebSocket(uri, protocols));
+        const Channel = window.RunPilotSecureWebSocket || WebSocket;
+        this.attach(new Channel(uri, window.runPilotWebSocketPayloadMode || "disabled", protocols));
     }
 
     attach(rawChannel) {

@@ -71,6 +71,7 @@ h1 { margin: 0; font-size: 28px; color: #111827; }
 .overview-section { margin-top: 18px; }
 .section-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 10px; }
 .section-head h2 { margin: 0; font-size: 15px; color: #111827; }
+.task-filters { display: flex; gap: 6px; }
 .compact { padding: 13px 16px; border: 0; border-radius: 0; }
 .issue-row { border-left: 3px solid #ef4444; }
 .row-list { background: white; border: 1px solid #e3e7ee; border-radius: 10px; overflow: hidden; }

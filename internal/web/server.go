@@ -25,6 +25,7 @@ import (
 	"github.com/szilab/RunPilot/internal/software"
 	"github.com/szilab/RunPilot/internal/storage"
 	"github.com/szilab/RunPilot/internal/terminal"
+	"github.com/szilab/RunPilot/internal/websocketsecure"
 )
 
 //go:embed static/*
@@ -236,12 +237,13 @@ func (s *Server) auth(next http.Handler) http.Handler {
 func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	cfg := s.ctrl.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":         "RunPilot",
-		"version":      "0.1.0-dev",
-		"dataDir":      s.ctrl.DataDir(),
-		"configPath":   s.ctrl.ConfigPath(),
-		"bind":         cfg.Server.Bind,
-		"capabilities": platform.CurrentCapabilities(),
+		"name":                 "RunPilot",
+		"version":              "0.1.0-dev",
+		"dataDir":              s.ctrl.DataDir(),
+		"configPath":           s.ctrl.ConfigPath(),
+		"bind":                 cfg.Server.Bind,
+		"capabilities":         platform.CurrentCapabilities(),
+		"websocketPayloadMode": websocketsecure.NormalizeMode(cfg.Server.WebSocketPayloadMode),
 	})
 }
 
@@ -564,9 +566,16 @@ func (s *Server) handleTerminalConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.CloseNow()
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
 	ticket, ok := s.consumeTerminalTicket(r.URL.Query().Get("ticket"))
 	if !ok {
 		_ = conn.Close(websocket.StatusPolicyViolation, "terminal connection expired or already used")
+		return
+	}
+	secure, err := websocketsecure.ServerHandshake(ctx, conn, s.ctrl.Snapshot().Server.WebSocketPayloadMode)
+	if err != nil {
+		_ = conn.Close(websocket.StatusPolicyViolation, "secure WebSocket negotiation failed")
 		return
 	}
 	var session *terminal.Session
@@ -581,8 +590,6 @@ func (s *Server) handleTerminalConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer session.Close()
 
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -590,7 +597,7 @@ func (s *Server) handleTerminalConnect(w http.ResponseWriter, r *http.Request) {
 		for {
 			n, readErr := session.Read(buffer)
 			if n > 0 {
-				if writeErr := conn.Write(ctx, websocket.MessageBinary, buffer[:n]); writeErr != nil {
+				if writeErr := secure.Write(ctx, websocket.MessageBinary, buffer[:n]); writeErr != nil {
 					return
 				}
 			}
@@ -600,7 +607,7 @@ func (s *Server) handleTerminalConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	for {
-		kind, data, readErr := conn.Read(ctx)
+		kind, data, readErr := secure.Read(ctx)
 		if readErr != nil {
 			break
 		}

@@ -77,7 +77,27 @@ server:
   bind: 127.0.0.1:9070 # Host part is used with port; full legacy address also works.
   port: 9070
   basePath: /runpilot
+  websocketPayloadMode: disabled # disabled, optional, or required
 ```
+
+### WebSocket payload encryption
+
+RunPilot can encrypt application payloads inside the existing WSS connection with
+ephemeral P-256 ECDH, HKDF-SHA-256, and AES-256-GCM. This protects payload
+contents from passive TLS-inspecting proxies; connection endpoints, timing,
+frame sizes, and traffic volume remain visible, and WSS remains required.
+
+`disabled` preserves current WebSocket behavior. `optional` negotiates encryption
+with a compatible client but permits an unencrypted legacy client, so it is
+compatible but vulnerable to an active downgrade. `required` rejects clients
+that do not complete the secure negotiation and never falls back to plaintext.
+Each connection creates fresh ephemeral keys and directional sequence numbers;
+closing or reconnecting discards the session.
+
+The current browser deployment has no independently provisioned server identity
+trust anchor. The handshake therefore protects against passive observation, but
+does not claim protection against an active application-layer MITM that can
+substitute both handshake keys. Do not call this E2EE.
 
 `--port` and `--base-path` override these values for one foreground run:
 

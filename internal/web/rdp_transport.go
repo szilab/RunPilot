@@ -17,6 +17,7 @@ import (
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/remote"
 	"github.com/szilab/RunPilot/internal/remote/guacd"
+	"github.com/szilab/RunPilot/internal/websocketsecure"
 )
 
 // A ticket is short-lived and single-use. It authorizes only the already
@@ -88,11 +89,16 @@ func (s *Server) handleRDPRemoteTransport(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.ctrl.Remote().AddDiagnostic(id, "browser tunnel upgraded")
+	secure, err := websocketsecure.ServerHandshake(r.Context(), ws, s.ctrl.Snapshot().Server.WebSocketPayloadMode)
+	if err != nil {
+		_ = ws.Close(websocket.StatusPolicyViolation, "secure WebSocket negotiation failed")
+		return
+	}
 	// Prefer a WebSocket close handshake. CloseNow() immediately tears down the
 	// transport and can discard a useful pre-guacd error reason, which the
 	// Guacamole browser client otherwise reduces to its generic status 519.
 	defer func() { _ = ws.Close(websocket.StatusNormalClosure, "") }()
-	outbound := &guacamoleWSWriter{ws: ws}
+	outbound := &guacamoleWSWriter{ws: secure}
 	credentials, ok := s.takeRDPCredentials(id)
 	if !ok {
 		credentials = rdpCredentials{}
@@ -153,7 +159,7 @@ func (s *Server) handleRDPRemoteTransport(w http.ResponseWriter, r *http.Request
 			s.ctrl.Remote().AddDiagnostic(id, line)
 		})
 		for {
-			messageType, data, err := ws.Read(ctx)
+			messageType, data, err := secure.Read(ctx)
 			if err != nil {
 				if !errors.Is(err, context.Canceled) {
 					s.ctrl.Remote().AddDiagnostic(id, "browser tunnel read ended: "+strings.TrimSpace(err.Error()))
@@ -196,7 +202,7 @@ func (s *Server) handleRDPRemoteTransport(w http.ResponseWriter, r *http.Request
 // guacd instruction and a tunnel ping response must never be interleaved.
 type guacamoleWSWriter struct {
 	mu sync.Mutex
-	ws *websocket.Conn
+	ws messageConn
 }
 
 func (w *guacamoleWSWriter) Write(ctx context.Context, data []byte) error {

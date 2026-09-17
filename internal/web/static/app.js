@@ -55,7 +55,11 @@ function setConnected(ok) {
   const restored = ok && connectionWasLost;
   connectionOnline = ok;
   $("connectionDot").classList.toggle("ok", ok);
-  $("connectionText").textContent = ok ? "Connected" : "Offline";
+  const mode = systemInfo?.websocketPayloadMode || "disabled";
+  const encryptionStatus = mode === "required" ? "Encrypted" : "Normal";
+  $("connectionText").textContent = ok ? `Connected · ${encryptionStatus}` : "Offline";
+  $("connectionDot").title = ok ? encryptionStatus : "RunPilot is offline";
+  $("connectionText").title = ok ? encryptionStatus : "RunPilot is offline";
   if (restored && !reloadingAfterReconnect) {
     reloadingAfterReconnect = true;
     window.location.reload();
@@ -458,9 +462,9 @@ function renderOverview() {
   const host = overview.host || {};
   const memoryUsed = Math.max(0, (host.memoryTotalBytes || 0) - (host.memoryFreeBytes || 0));
   $("overviewMetrics").innerHTML = [
-    `<div class="metric"><span>Memory</span><strong>${escapeHtml(`${fmtBytes(memoryUsed)} / ${fmtBytes(host.memoryTotalBytes)}`)}</strong>${meter(percent(memoryUsed, host.memoryTotalBytes), "violet")}</div>`,
     utilizationMetric("CPU", host.cpuPercent, host.cpuAveragePercent, "blue"),
     utilizationMetric("GPU", host.gpuPercent, host.gpuAveragePercent, "pink", host.gpuAvailable),
+    `<div class="metric"><span>Memory</span><strong>${escapeHtml(`${fmtBytes(memoryUsed)} / ${fmtBytes(host.memoryTotalBytes)}`)}</strong>${meter(percent(memoryUsed, host.memoryTotalBytes), "violet")}</div>`,
     ["Tasks", `${overview.runningTasks || 0} running / ${overview.taskCount || 0}`, percent(overview.runningTasks || 0, overview.taskCount || 0), "green"],
   ].map(metric => Array.isArray(metric) ? `<div class="metric"><span>${metric[0]}</span><strong>${escapeHtml(metric[1])}</strong>${meter(metric[2], metric[3])}</div>` : metric).join("");
 
@@ -886,7 +890,7 @@ async function dockerAttachContainer(id) {
   try {
     const ticket = await api(`api/v1/docker/containers/${encodeURIComponent(id)}/attach-ticket`, {method:"POST", body:JSON.stringify({cols:term.cols, rows:term.rows})});
     if (dockerAttachTerminal !== session) return;
-    const socket = new WebSocket(terminalWebSocketURL(ticket.ticket)); session.socket = socket; socket.binaryType = "arraybuffer";
+    const socket = new RunPilotSecureWebSocket(terminalWebSocketURL(ticket.ticket), systemInfo?.websocketPayloadMode || "disabled"); session.socket = socket; socket.binaryType = "arraybuffer";
     socket.onmessage = event => { if (dockerAttachTerminal === session && event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data)); };
     socket.onerror = () => { if (dockerAttachTerminal === session) term.writeln("\r\nTerminal connection failed."); };
     socket.onclose = event => { if (dockerAttachTerminal === session && !event.wasClean) term.writeln(`\r\n${event.reason || "Terminal connection closed."}`); };
@@ -911,6 +915,8 @@ $("dockerAttachDialog").addEventListener("close",disposeDockerAttachTerminal);
 
 async function loadTerminalInfo() {
   systemInfo = await api("api/v1/system");
+  window.runPilotWebSocketPayloadMode = systemInfo?.websocketPayloadMode || "disabled";
+  if (connectionOnline) setConnected(true);
   configurePlatformAwareFields(systemInfo.capabilities || {});
   const enabled = !!systemInfo?.capabilities?.terminal;
   $("terminalNav").classList.toggle("hidden", !enabled);
@@ -973,6 +979,8 @@ function terminalWebSocketURL(ticket) {
   wsURL.searchParams.set("ticket", ticket);
   return wsURL;
 }
+// RunPilotSecureWebSocket owns the underlying new WebSocket and preserves the
+// native event/message surface expected by terminal consumers.
 
 function sendTerminalResize(tab) {
   if (tab.socket?.readyState === WebSocket.OPEN) tab.socket.send(JSON.stringify({type:"resize", cols:tab.term.cols, rows:tab.term.rows}));
@@ -988,7 +996,7 @@ async function openTerminalSession(shell, requestTicket) {
   tab.observer = new ResizeObserver(() => { fit.fit(); sendTerminalResize(tab); }); tab.observer.observe(pane);
   try {
     const ticket = await requestTicket(term);
-    const socket = new WebSocket(terminalWebSocketURL(ticket.ticket)); tab.socket = socket; socket.binaryType = "arraybuffer";
+    const socket = new RunPilotSecureWebSocket(terminalWebSocketURL(ticket.ticket), systemInfo?.websocketPayloadMode || "disabled"); tab.socket = socket; socket.binaryType = "arraybuffer";
     socket.onmessage = event => { if (event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data)); };
     socket.onerror = () => term.writeln("\r\nTerminal connection failed.");
     socket.onclose = event => { if (!event.wasClean) term.writeln(`\r\n${event.reason || "Terminal connection closed."}`); };
