@@ -133,7 +133,7 @@ func (s *Server) handleRemoteTransport(w http.ResponseWriter, r *http.Request) {
 	done := make(chan struct{})
 	go func() {
 		keepaliveSeen := false
-		browserDiagnostics := browserInstructionDiagnostics(func(line string) {
+		browserResizeDiagnostics := browserResizeDiagnostics(func(line string) {
 			s.ctrl.Remote().AddDiagnostic(id, line)
 		})
 		for {
@@ -148,7 +148,7 @@ func (s *Server) handleRemoteTransport(w http.ResponseWriter, r *http.Request) {
 				s.ctrl.Remote().AddDiagnostic(id, "browser tunnel received a non-text message")
 				break
 			}
-			responded, err := forwardBrowserInstructionsWithObserver(ctx, data, upstream, outbound, browserDiagnostics)
+			responded, err := forwardBrowserInstructionsWithObserver(ctx, data, upstream, outbound, browserResizeDiagnostics)
 			if err != nil {
 				s.ctrl.Remote().AddDiagnostic(id, "browser -> guacd forwarding failed: "+strings.TrimSpace(err.Error()))
 				break
@@ -249,6 +249,23 @@ func browserInstructionDiagnostics(add func(string)) func(guacd.Instruction, boo
 	}
 }
 
+// browserResizeDiagnostics keeps the only runtime client-to-guacd trace that
+// is needed during normal operation: a requested remote resize must be seen
+// by RunPilot and successfully written to guacd. It deliberately excludes
+// input, clipboard, and display payload instructions.
+func browserResizeDiagnostics(add func(string)) func(guacd.Instruction, bool) {
+	return func(instruction guacd.Instruction, forwarded bool) {
+		if instruction.Opcode != "size" || len(instruction.Args) < 2 || !safeGuacamoleDiagnosticValue(instruction.Args[0]) || !safeGuacamoleDiagnosticValue(instruction.Args[1]) {
+			return
+		}
+		phase := "received"
+		if forwarded {
+			phase = "forwarded"
+		}
+		add("browser -> size " + phase + " " + instruction.Args[0] + "x" + instruction.Args[1])
+	}
+}
+
 func safeGuacamoleDiagnosticValue(value string) bool {
 	if value == "" || len(value) > 32 {
 		return false
@@ -284,45 +301,9 @@ func forwardGuacdInstructions(ctx context.Context, reader *bufio.Reader, outboun
 }
 
 func guacdInstructionDiagnostics(add func(string)) func(guacd.Instruction) {
-	count := 0
-	firstImageStream := ""
-	firstImageRecorded := false
-	awaitingFirstImageSync := false
 	return func(instruction guacd.Instruction) {
-		if count < 10 {
-			count++
-			line := "guacd -> " + instruction.Opcode
-			if instruction.Opcode == "error" && len(instruction.Args) >= 2 && safeGuacamoleStatusCode(instruction.Args[1]) {
-				line += " (code=" + instruction.Args[1] + ")"
-			}
-			add(line)
-		}
-
-		// The first image stream confirms that the complete Guacamole image
-		// sequence crossed the guacd-to-browser relay. Record only structural
-		// metadata: image payloads can be both large and sensitive.
-		switch instruction.Opcode {
-		case "img":
-			if !firstImageRecorded && len(instruction.Args) >= 4 {
-				firstImageStream = instruction.Args[1]
-				firstImageRecorded = true
-				add("guacd -> img stream=" + firstImageStream + " layer=" + instruction.Args[2] + " mimetype=" + instruction.Args[3])
-			}
-		case "blob":
-			if firstImageStream != "" && len(instruction.Args) >= 2 && instruction.Args[0] == firstImageStream {
-				add("guacd -> blob stream=" + firstImageStream + " chars=" + strconv.Itoa(len(instruction.Args[1])))
-			}
-		case "end":
-			if firstImageStream != "" && len(instruction.Args) >= 1 && instruction.Args[0] == firstImageStream {
-				add("guacd -> end stream=" + firstImageStream)
-				firstImageStream = ""
-				awaitingFirstImageSync = true
-			}
-		case "sync":
-			if awaitingFirstImageSync {
-				add("guacd -> sync after first img")
-				awaitingFirstImageSync = false
-			}
+		if instruction.Opcode == "error" && len(instruction.Args) >= 2 && safeGuacamoleStatusCode(instruction.Args[1]) {
+			add("guacd -> error (code=" + instruction.Args[1] + ")")
 		}
 	}
 }

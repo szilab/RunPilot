@@ -142,31 +142,34 @@ func TestRDPPasswordIsOptionalAndTunnelErrorsAreUseful(t *testing.T) {
 	}
 }
 
-func TestRDPDisplayDiagnosticsPreserveActiveClientSurface(t *testing.T) {
+func TestRDPClientSurfaceUsesFrameShellAndScopedCursor(t *testing.T) {
 	app, err := staticFS.ReadFile("static/app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	script := string(app)
 	for _, want := range []string{
-		"function inspectGuacamoleDisplay",
-		"function instrumentGuacamoleDisplay",
-		"browser received img stream=",
-		"browser received blob stream=",
-		"browser received end stream=",
-		"browser received sync timestamp=",
-		"Guacamole display resized to",
-		"sampled pixels:",
-		"Guacamole image decode promise rejected",
-		"Guacamole image CSP violation",
-		"stopDisplayInstrumentation",
+		"surface.classList.add(\"rdp-active\")",
+		"classList.remove(\"rdp-active\")",
+		"initialRDPSurfaceSize(frameShell)",
+		"getSurfaceSize:()=>currentRDPSurfaceSize(frameShell)",
+		"observer.observe(frameShell)",
+		"window.addEventListener(\"resize\",surfaceChanged)",
+		"layoutTransitionStarted:()=>sizing.layoutTransitionStarted()",
+		"sizing.layoutTransitionFinished()",
+		"remote RDP resize requested",
+		"function instrumentGuacamoleResizeMessages",
+		"Guacamole client emitted size",
+		"remoteRDPInteraction?.surfaceChanged?.()",
 	} {
 		if !strings.Contains(script, want) {
-			t.Fatalf("RDP display diagnostics missing %q", want)
+			t.Fatalf("RDP client sizing is missing %q", want)
 		}
 	}
-	if strings.Contains(script, "console.debug(`browser received blob stream=${firstImageStream} length=${value(1)}`)") {
-		t.Fatal("browser image diagnostics must not log blob payloads")
+	for _, removed := range []string{"function inspectGuacamoleDisplay", "function instrumentGuacamoleDisplay", "browser received blob stream=", "Guacamole image decode promise rejected"} {
+		if strings.Contains(script, removed) {
+			t.Fatalf("temporary RDP display tracing remains: %q", removed)
+		}
 	}
 	start := strings.Index(script, "function renderRemoteSession()")
 	end := strings.Index(script[start:], "function closeRemoteSession()")
@@ -181,10 +184,14 @@ func TestRDPDisplayDiagnosticsPreserveActiveClientSurface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{".remote-rdp { display: block; width: 100%; height: 100%;", "main.remote-active .remote-frame-shell { flex: 1 1 0; height: 0; min-height: 0;"} {
+	for _, want := range []string{".remote-rdp { display: block; width: 100%; height: 100%;", ".remote-rdp.rdp-active { display: grid; place-items: center; overflow: hidden; cursor: none; }", ".remote-rdp.rdp-active, .remote-rdp.rdp-active * { cursor: none; }", "main.remote-active .remote-frame-shell { flex: 1 1 0; height: 0; min-height: 0;"} {
 		if !strings.Contains(string(styles), want) {
 			t.Fatalf("active RDP display surface is not sized: %q", want)
 		}
+	}
+	index, err := staticFS.ReadFile("static/index.html")
+	if err != nil || !strings.Contains(string(index), `src="rdp-sizing.js"`) {
+		t.Fatal("RDP sizing controller is not embedded before the application")
 	}
 }
 

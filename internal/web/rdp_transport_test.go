@@ -119,7 +119,7 @@ func TestForwardGuacdInstructionsPreservesNormalDisplayInstructionOrder(t *testi
 	if !reflect.DeepEqual(opcodes, []string{"size", "rect", "png", "sync"}) {
 		t.Fatalf("opcodes=%q", opcodes)
 	}
-	if !reflect.DeepEqual(diagnostics, []string{"guacd -> size", "guacd -> rect", "guacd -> png", "guacd -> sync"}) {
+	if len(diagnostics) != 0 {
 		t.Fatalf("diagnostics=%q", diagnostics)
 	}
 }
@@ -143,7 +143,7 @@ func TestForwardGuacdInstructionsPropagatesErrorInstructionAndDiagnostic(t *test
 	}
 }
 
-func TestGuacdInstructionDiagnosticsTraceFirstImageWithoutPayload(t *testing.T) {
+func TestForwardGuacdInstructionsPreservesFirstImageStream(t *testing.T) {
 	const payload = "sensitive-image-payload-must-not-be-logged"
 	stream := append(encodeGuacdInstruction(t, "img", "255", "7", "3", "image/png", "12", "24"), encodeGuacdInstruction(t, "blob", "7", payload)...)
 	stream = append(stream, encodeGuacdInstruction(t, "blob", "7", "more-data")...)
@@ -165,19 +165,8 @@ func TestGuacdInstructionDiagnosticsTraceFirstImageWithoutPayload(t *testing.T) 
 	if !reflect.DeepEqual(opcodes, []string{"img", "blob", "blob", "end", "sync"}) {
 		t.Fatalf("opcodes=%q", opcodes)
 	}
-	for _, want := range []string{
-		"guacd -> img stream=7 layer=3 mimetype=image/png",
-		"guacd -> blob stream=7 chars=42",
-		"guacd -> blob stream=7 chars=9",
-		"guacd -> end stream=7",
-		"guacd -> sync after first img",
-	} {
-		if !containsDiagnostic(diagnostics, want) {
-			t.Fatalf("missing %q in diagnostics=%q", want, diagnostics)
-		}
-	}
-	if strings.Contains(strings.Join(diagnostics, "\n"), payload) {
-		t.Fatalf("image payload leaked into diagnostics: %q", diagnostics)
+	if len(diagnostics) != 0 {
+		t.Fatalf("normal image flow should not create diagnostics: %q", diagnostics)
 	}
 }
 
@@ -268,6 +257,17 @@ func TestSyncRoundTripAllowsImageStreamProgression(t *testing.T) {
 		if !containsDiagnostic(diagnostics, want) {
 			t.Fatalf("missing %q in diagnostics=%q", want, diagnostics)
 		}
+	}
+}
+
+func TestBrowserResizeDiagnosticsRecordsReceiptAndForwardingOnly(t *testing.T) {
+	var diagnostics []string
+	observe := browserResizeDiagnostics(func(line string) { diagnostics = append(diagnostics, line) })
+	observe(guacd.Instruction{Opcode: "size", Args: []string{"1388", "1038", "96"}}, false)
+	observe(guacd.Instruction{Opcode: "mouse", Args: []string{"10", "20", "0"}}, false)
+	observe(guacd.Instruction{Opcode: "size", Args: []string{"1388", "1038", "96"}}, true)
+	if !reflect.DeepEqual(diagnostics, []string{"browser -> size received 1388x1038", "browser -> size forwarded 1388x1038"}) {
+		t.Fatalf("diagnostics=%q", diagnostics)
 	}
 }
 

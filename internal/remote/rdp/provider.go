@@ -60,7 +60,7 @@ func (p *Provider) Start(_ context.Context, request remote.StartRequest) (remote
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	var once sync.Once
-	return remote.Runtime{Client: remote.ClientDescriptor{Kind: remote.ClientGuacamole}, Stop: func(context.Context) error { once.Do(func() { cancel(); close(done) }); return nil }, Done: done, Message: "Waiting for browser", Log: func() string {
+	return remote.Runtime{Client: remote.ClientDescriptor{Kind: remote.ClientGuacamole}, Stop: func(context.Context) error { once.Do(func() { cancel(); close(done) }); return nil }, Done: done, Log: func() string {
 		return fmt.Sprintf("RDP / guacd\n  guacd: %s\n  RDP target: %s:%d", address, request.Target.RDP.Host, request.Target.RDP.Port)
 	}, Dial: func(callCtx context.Context) (net.Conn, error) {
 		combined, stop := context.WithCancel(callCtx)

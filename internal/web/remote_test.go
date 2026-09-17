@@ -169,8 +169,8 @@ func TestRDPRemoteTargetHasNoCommandOrPasswordAndIssuesTransportTicket(t *testin
 	if err != nil || strings.Contains(diagnostics, "very-secret") {
 		t.Fatalf("unsafe RDP diagnostics=%q err=%v", diagnostics, err)
 	}
-	if session.Message != "Waiting for browser" {
-		t.Fatalf("RDP session must wait for browser: %q", session.Message)
+	if session.Message != "" {
+		t.Fatalf("RDP session must not expose a placeholder browser message: %q", session.Message)
 	}
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/remote/sessions/"+session.ID+"/transport-ticket", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
