@@ -1,5 +1,9 @@
 # RunPilot
 
+<div align="center">
+  <img src="internal/web/static/runpilot-logo.png" width="120">
+</div>
+
 RunPilot is a lightweight Windows host-management application written in Go. One native Windows service manages configured workloads and operations and exposes an embedded local web UI.
 
 RunPilot provides process supervision, scheduling, backup jobs, storage access and isolated software management through a coherent Windows management GUI.

@@ -397,10 +397,13 @@ func TestNetworkDiscoveryUsageAndLifecycle(t *testing.T) {
 	if got := f.calls[len(f.calls)-1].args; join(got) != join([]string{"network", "create", "--driver", "bridge", "--label", "com.runpilot.managed=true", "runpilot_net"}) {
 		t.Fatalf("create args %q", got)
 	}
-	if err := m.DeleteNetwork(context.Background(), "app_net"); !errors.Is(err, ErrNetworkInUse) {
-		t.Fatalf("used delete %v", err)
+	if err := m.DeleteNetwork(context.Background(), "app_net"); !errors.Is(err, ErrComposeNetwork) {
+		t.Fatalf("used Compose-managed delete %v", err)
 	}
 	results[join([]string{"ps", "-aq"})] = Result{}
+	if err := m.DeleteNetwork(context.Background(), "app_net"); !errors.Is(err, ErrComposeNetwork) {
+		t.Fatalf("Compose-managed delete %v", err)
+	}
 	if err := m.DeleteNetwork(context.Background(), "runpilot_net"); err != nil {
 		t.Fatal(err)
 	}

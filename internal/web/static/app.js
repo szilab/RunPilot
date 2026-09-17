@@ -20,13 +20,13 @@ const themeStorageKey = "runpilot.theme";
 const sidebarStorageKey = "runpilot.sidebar-collapsed";
 
 const pageMeta = {
-  overview: ["Overview", "RunPilot service and resource health at a glance.", null],
-  storage: ["Storage", "Browse the local filesystem and automatically discovered Docker volumes.", null],
-  tasks: ["Tasks", "Continuous commands, scheduled commands, and backups managed in one place.", "Add task"],
-  software: ["Software", "Install and maintain portable applications in a RunPilot-managed Scoop root on Windows.", null],
-  terminal: ["Terminal", "Interactive shells run with the same OS authority as the RunPilot service.", null],
-  docker: ["Docker", "Docker Compose projects, volumes, and networks managed with the RunPilot service identity.", "Create project"],
-  remote: ["Remote Access", "Launch configured graphical applications and desktops through the same RunPilot origin.", null],
+  overview: ["Overview", null],
+  storage: ["Storage", null],
+  tasks: ["Tasks", "Add task"],
+  software: ["Software", null],
+  terminal: ["Terminal", null],
+  docker: ["Docker", "Create project"],
+  remote: ["Remote Access", "Add target"],
 };
 
 async function api(path, options = {}) {
@@ -85,7 +85,9 @@ function setSidebarCollapsed(collapsed) {
   if (changing) remoteRDPInteraction?.layoutTransitionStarted?.();
   shell.classList.toggle("sidebar-collapsed", collapsed);
   $("sidebarToggle").setAttribute("aria-expanded", String(!collapsed));
-  $("sidebarToggle").title = collapsed ? "Expand sidebar" : "Collapse sidebar";
+  const label = collapsed ? "Expand sidebar" : "Collapse sidebar";
+  $("sidebarToggle").title = label;
+  $("sidebarToggle").setAttribute("aria-label", label);
   localStorage.setItem(sidebarStorageKey, String(collapsed));
 }
 
@@ -316,15 +318,25 @@ function setGuacdStatus(message="", error=false) { const node=$("guacdSettingsSt
 function validateGuacdForm(value) { if(!value.host) return "guacd host is required"; if(!Number.isInteger(value.port)||value.port<1||value.port>65535) return "guacd port must be between 1 and 65535"; if(!Number.isInteger(value.connectTimeoutSeconds)||value.connectTimeoutSeconds<1||value.connectTimeoutSeconds>60) return "guacd connect timeout must be between 1 and 60 seconds"; return ""; }
 async function openGuacdSettings() { setGuacdError(); setGuacdStatus(); try { const value=await api("api/v1/remote/guacd"); $("guacdHost").value=value.host||"127.0.0.1"; $("guacdPort").value=value.port||4822; $("guacdTLS").checked=!!value.tls; $("guacdTimeout").value=value.connectTimeoutSeconds||5; $("guacdSettingsDialog").showModal(); } catch(e) { toastError(e.message); } }
 function remoteProviderHint(provider) { return provider.state === "available" ? "" : provider.installHint || provider.message || "This provider is not currently available."; }
-function remoteProviderCard(provider) { const hint=remoteProviderHint(provider), metadata=[provider.platform,provider.version].filter(Boolean).join(" · "), rdp=provider.id==="rdp", available=provider.state === "available", summary=provider.message ? `<div class="meta">${escapeHtml(provider.message)}</div>` : (metadata ? `<div class="meta">${escapeHtml(metadata)}</div>` : ""), action=rdp ? `<button class="button secondary small remote-provider-add" onclick="openGuacdSettings()">Settings</button>` : `<button class="button secondary small remote-provider-add" ${available ? "" : "disabled"} onclick="openRemoteTarget(null,'${escapeHtml(provider.id)}')">Add target</button>`; return `<article class="docker-card remote-provider-card"><div class="docker-card-head"><div><h2>${escapeHtml(provider.name)}</h2>${summary}</div><div class="remote-provider-status"><span class="status ${remoteStatus(provider.state)}">${escapeHtml(provider.state)}</span>${hint&&!rdp ? `<span class="provider-info" tabindex="0" role="img" aria-label="Provider installation hint" data-tooltip="${escapeHtml(hint)}">ⓘ</span>` : ""}</div></div>${action}</article>`; }
+function remoteProviderCard(provider) { const hint=remoteProviderHint(provider), metadata=[provider.platform,provider.version].filter(Boolean).join(" · "), rdp=provider.id==="rdp", summary=provider.message ? `<div class="meta">${escapeHtml(provider.message)}</div>` : (metadata ? `<div class="meta">${escapeHtml(metadata)}</div>` : ""); return `<article class="docker-card remote-provider-card"><div class="docker-card-head"><div><h2>${escapeHtml(provider.name)}</h2>${summary}</div><div class="remote-provider-status"><span class="status ${remoteStatus(provider.state)}">${escapeHtml(provider.state)}</span>${hint&&!rdp ? `<span class="provider-info" tabindex="0" role="img" aria-label="Provider installation hint" data-tooltip="${escapeHtml(hint)}">ⓘ</span>` : ""}</div></div></article>`; }
+function remoteTargetCard(target, sessions) {
+  const starting = remoteStartingTargets.has(target.id);
+  const endpoint = target.provider === "rdp" ? target.rdp : target.provider === "vnc" ? target.vnc : null;
+  const detail = endpoint ? `${endpoint.host || ""}${endpoint.port ? `:${endpoint.port}` : ""}` : `${target.type} · ${target.command?.path || ""}`;
+  const session = sessions[0];
+  const statusState = session ? session.state : "idle";
+  const sessionDetails = sessions.map(session => `<div class="remote-target-session"><span class="meta">Started ${escapeHtml(fmtDate(session.startedAt || session.createdAt))}</span>${session.message ? `<span class="meta" title="${escapeHtml(session.message)}">${escapeHtml(session.message)}</span>` : ""}${session.failure ? `<span class="form-error">${escapeHtml(session.failure)}</span>` : ""}</div>`).join("");
+  const diagnoseButton = session ? `<button class="button secondary small" onclick="openRemoteDiagnostics('${session.id}')">Diagnostics</button>` : `<button class="button secondary small" disabled>Diagnostics</button>`;
+  const openButton = session ? `<button class="button primary small remote-open-button" ${session.state === "running" ? "" : "disabled"} onclick="openRemoteSession('${session.id}')">Open</button>` : `<button class="button primary small remote-open-button" ${!starting ? "" : "disabled"} aria-busy="${starting}" onclick="startRemoteSession('${target.id}')">${starting ? '<span class="spinner remote-button-spinner" aria-hidden="true"></span>Starting…' : "Open"}</button>`;
+  return `<article class="docker-card remote-card"><div class="docker-card-head"><div><h2>${escapeHtml(target.name)}</h2><div class="meta">${escapeHtml(detail)}</div></div><div class="remote-card-status"><span class="status ${escapeHtml(statusState)}">${escapeHtml(statusState)}</span><span class="status ${escapeHtml(target.provider === "xpra" ? "installed" : "running")}">${escapeHtml(target.provider)}</span></div></div>${sessionDetails}<div class="row-actions"><button class="button danger small" onclick="deleteRemoteTarget('${target.id}')">Delete</button>${diagnoseButton}<button class="button secondary small" onclick="editRemoteTarget('${target.id}')">Edit</button>${openButton}</div></article>`;
+}
 function renderRemote() {
   if (!$("remoteProviders")) return;
   $("remoteProviders").innerHTML = remoteProviders.map(remoteProviderCard).join("") || `<div class="empty compact"><h2>No providers registered</h2></div>`;
-  $("remoteTargets").innerHTML = remoteTargets.map(target => { const starting=remoteStartingTargets.has(target.id), endpoint=target.provider === "rdp" ? target.rdp : target.provider === "vnc" ? target.vnc : null, detail=endpoint ? `${endpoint.host || ""}${endpoint.port ? `:${endpoint.port}` : ""}` : `${target.type} · ${target.command?.path || ""}`; return `<article class="docker-card remote-card"><div class="docker-card-head"><div><h2>${escapeHtml(target.name)}</h2><div class="meta">${escapeHtml(detail)}</div></div><span class="status ${escapeHtml(target.provider === "xpra" ? "installed" : "running")}">${escapeHtml(target.provider)}</span></div><div class="row-actions"><button class="button primary small remote-open-button" ${!starting ? "" : "disabled"} aria-busy="${starting}" onclick="startRemoteSession('${target.id}')">${starting ? '<span class="spinner remote-button-spinner" aria-hidden="true"></span>Starting…' : "Open"}</button><button class="button secondary small" onclick="editRemoteTarget('${target.id}')">Edit</button><button class="button danger small" onclick="deleteRemoteTarget('${target.id}')">Delete</button></div></article>`; }).join("");
+  const activeByTarget = new Map();
+  remoteSessions.filter(session => ["starting", "running", "stopping"].includes(session.state)).forEach(session => { const sessions=activeByTarget.get(session.targetId) || []; sessions.push(session); activeByTarget.set(session.targetId, sessions); });
+  $("remoteTargets").innerHTML = remoteTargets.map(target => remoteTargetCard(target, activeByTarget.get(target.id) || [])).join("");
   $("remoteTargetsEmpty").classList.toggle("hidden", remoteTargets.length > 0);
-  const active = remoteSessions.filter(session => ["starting", "running", "stopping"].includes(session.state));
-  $("remoteSessions").innerHTML = active.map(session => `<article class="docker-card remote-card"><div class="docker-card-head"><div><h2>${escapeHtml(session.targetName)}</h2><div class="meta">${escapeHtml(session.provider)} · ${fmtDate(session.startedAt || session.createdAt)}</div></div>${statusBadge(session.state)}</div>${session.message ? `<div class="notice remote-session-notice"><strong>${escapeHtml(session.message)}</strong>${session.windowCount !== undefined ? `<span>${session.windowCount} visible application window${session.windowCount === 1 ? "" : "s"}.</span>` : ""}</div>` : ""}${session.failure ? `<div class="form-error">${escapeHtml(session.failure)}</div>` : ""}<div class="row-actions"><button class="button primary small" ${session.state === "running" ? "" : "disabled"} onclick="openRemoteSession('${session.id}')">Open</button><button class="button secondary small" onclick="openRemoteDiagnostics('${session.id}')">Diagnostics</button><button class="button danger small" onclick="stopRemoteSession('${session.id}')">Stop</button></div></article>`).join("");
-  $("remoteSessionsEmpty").classList.toggle("hidden", active.length > 0);
   if (remoteSessionID && !remoteSessions.some(session => session.id === remoteSessionID)) {
     closeRemoteSession();
     toast("The remote session is no longer available.");
@@ -338,7 +350,9 @@ function updateRemoteXpraSettings() { const provider=$("remoteTargetProvider").v
 function applyRemoteXpraProfile() { const profile=$("remoteXpraProfile").value; const values={recommended:["webp",false],automatic:["auto",true],compatibility:["rgb",false]}; if (values[profile]) { $("remoteXpraEncoding").value=values[profile][0]; $("remoteXpraVideo").checked=values[profile][1]; } }
 function splitRDPUsername(value) { const text=(value||"").trim(), separator=text.indexOf("\\"); return separator > 0 ? {domain:text.slice(0,separator),username:text.slice(separator+1)} : {domain:"",username:text}; }
 function formatRDPUsername(username, domain) { return domain ? `${domain}\\${username}` : username||""; }
-function openRemoteTarget(existing = null, providerID = "xpra") { const provider=existing?.provider||providerID; $("remoteTargetForm").reset(); $("remoteTargetId").value=existing?.id||""; $("remoteTargetName").value=existing?.name||""; $("remoteTargetType").value=existing?.type||"application"; $("remoteTargetProvider").value=provider; $("remoteDBusMode").value=existing?.dbusMode || (existing?.forwardDbus ? "host-session" : "isolated"); setRemoteXpraSettings(existing?.xpra || remoteXpraDefaults()); const rdp=existing?.rdp||{}, vnc=existing?.vnc||{}; $("remoteRDPHost").value=rdp.host||""; $("remoteRDPPort").value=rdp.port||3389; $("remoteRDPUsername").value=formatRDPUsername(rdp.username,rdp.domain); $("remoteRDPSecurity").value=rdp.securityMode||"automatic"; $("remoteRDPLayout").value=rdp.serverLayout||""; $("remoteRDPResize").value=rdp.resizeMethod||"display-update"; $("remoteRDPCertificate").value=rdp.certificatePolicy||"validate"; $("remoteRDPTimeout").value=rdp.timeoutSeconds||10; $("remoteRDPClipboard").value=rdp.clipboardNormalization||"preserve"; $("remoteRDPPerformance").value=rdp.performanceProfile||"balanced"; $("remoteVNCHost").value=vnc.host||""; $("remoteVNCPort").value=vnc.port||5900; $("remoteVNCTimeout").value=vnc.connectTimeoutSeconds||10; populateCommandEditor("remote",existing?.command||{interpreter:"direct"}); updateRemoteXpraSettings(); const label=provider === "rdp" ? "RDP" : provider === "vnc" ? "VNC" : "Xpra"; $("remoteTargetDialogTitle").textContent=existing ? `Edit ${label} target` : `Add ${label} target`; $("remoteTargetDialogDescription").textContent=provider === "rdp" ? "Save a desktop endpoint; credentials are requested each time you connect." : provider === "vnc" ? "Save a VNC desktop endpoint. noVNC requests credentials only when the VNC server requires them." : "Launch an application or desktop in an isolated Xpra session."; $("remoteTargetDialog").showModal(); }
+function populateRemoteProviderSelect(selected, editing) { const select=$("remoteTargetProvider"), providers=remoteProviders.length ? remoteProviders : [{id:selected||"xpra",name:selected||"Xpra",state:"available"}]; select.innerHTML=providers.map(provider => `<option value="${escapeHtml(provider.id)}" ${provider.state === "available" || provider.id === selected ? "" : "disabled"}>${escapeHtml(provider.name)}</option>`).join(""); select.value=selected || providers.find(provider => provider.state === "available")?.id || providers[0].id; select.disabled=editing; }
+function updateRemoteTargetDialogCopy(editing=!!$("remoteTargetId").value) { const provider=$("remoteTargetProvider").value, label=provider === "rdp" ? "RDP" : provider === "vnc" ? "VNC" : "Xpra"; $("remoteTargetDialogTitle").textContent=editing ? `Edit ${label} target` : "Add remote target"; $("remoteTargetDialogDescription").textContent=provider === "rdp" ? "Save a desktop endpoint; credentials are requested each time you connect." : provider === "vnc" ? "Save a VNC desktop endpoint. noVNC requests credentials only when the VNC server requires them." : "Launch an application or desktop in an isolated Xpra session."; }
+function openRemoteTarget(existing = null, providerID = "xpra") { const provider=existing?.provider||providerID; $("remoteTargetForm").reset(); populateRemoteProviderSelect(provider, !!existing); $("remoteTargetId").value=existing?.id||""; $("remoteTargetName").value=existing?.name||""; $("remoteTargetType").value=existing?.type||"application"; $("remoteDBusMode").value=existing?.dbusMode || (existing?.forwardDbus ? "host-session" : "isolated"); setRemoteXpraSettings(existing?.xpra || remoteXpraDefaults()); const rdp=existing?.rdp||{}, vnc=existing?.vnc||{}; $("remoteRDPHost").value=rdp.host||""; $("remoteRDPPort").value=rdp.port||3389; $("remoteRDPUsername").value=formatRDPUsername(rdp.username,rdp.domain); $("remoteRDPSecurity").value=rdp.securityMode||"automatic"; $("remoteRDPLayout").value=rdp.serverLayout||""; $("remoteRDPResize").value=rdp.resizeMethod||"display-update"; $("remoteRDPCertificate").value=rdp.certificatePolicy||"validate"; $("remoteRDPTimeout").value=rdp.timeoutSeconds||10; $("remoteRDPClipboard").value=rdp.clipboardNormalization||"preserve"; $("remoteRDPPerformance").value=rdp.performanceProfile||"balanced"; $("remoteVNCHost").value=vnc.host||""; $("remoteVNCPort").value=vnc.port||5900; $("remoteVNCConfigUsername").value=vnc.username||""; $("remoteVNCTimeout").value=vnc.connectTimeoutSeconds||10; populateCommandEditor("remote",existing?.command||{interpreter:"direct"}); updateRemoteXpraSettings(); updateRemoteTargetDialogCopy(!!existing); $("remoteTargetDialog").showModal(); }
 function editRemoteTarget(id) { openRemoteTarget(remoteTargets.find(target => target.id === id)); }
 async function deleteRemoteTarget(id) { if (!confirm("Delete this remote target?")) return; try { await api(`api/v1/remote/targets/${id}`,{method:"DELETE"}); await refresh(); } catch (e) { toast(e.message); } }
 function promptRDPConnection(target) { remotePendingTarget=target; $("remoteRDPConnectTitle").textContent=`Connect to ${target.name||"RDP target"}`; $("remoteRDPConnectUsername").value=formatRDPUsername(target.rdp?.username,target.rdp?.domain); $("remoteRDPConnectPassword").value=""; $("remoteRDPConnectDialog").showModal(); }
@@ -424,7 +438,7 @@ async function openRDPRemoteSession(session, credentials) {
 }
 
 function remoteVNCTransportURL(id, ticket) { const url=new URL(remoteTransportURL(id)); url.searchParams.set("ticket",ticket); return url.toString(); }
-function promptVNCCredentials(session, rfb) { remoteVNCPendingCredentials={sessionID:session.id,rfb}; $("remoteVNCCredentialsTitle").textContent=`Credentials for ${session.targetName||"VNC target"}`; $("remoteVNCUsername").value=""; $("remoteVNCPassword").value=""; $("remoteVNCCredentialsDialog").showModal(); }
+function promptVNCCredentials(session, rfb) { remoteVNCPendingCredentials={sessionID:session.id,rfb}; $("remoteVNCCredentialsTitle").textContent=`Credentials for ${session.targetName||"VNC target"}`; $("remoteVNCUsername").value=session.vnc?.username||""; $("remoteVNCPassword").value=""; $("remoteVNCCredentialsDialog").showModal(); }
 async function openVNCRemoteSession(session) {
   if (!window.RunPilotNoVNC?.RFB) throw new Error("The embedded noVNC client is still loading. Try again in a moment.");
   const ticket=await api(`api/v1/remote/sessions/${session.id}/transport-ticket`,{method:"POST"}), surface=$("remoteVNC");
@@ -444,8 +458,8 @@ function renderOverview() {
   const host = overview.host || {};
   const memoryUsed = Math.max(0, (host.memoryTotalBytes || 0) - (host.memoryFreeBytes || 0));
   $("overviewMetrics").innerHTML = [
-    utilizationMetric("CPU", host.cpuPercent, host.cpuAveragePercent, "blue"),
     `<div class="metric"><span>Memory</span><strong>${escapeHtml(`${fmtBytes(memoryUsed)} / ${fmtBytes(host.memoryTotalBytes)}`)}</strong>${meter(percent(memoryUsed, host.memoryTotalBytes), "violet")}</div>`,
+    utilizationMetric("CPU", host.cpuPercent, host.cpuAveragePercent, "blue"),
     utilizationMetric("GPU", host.gpuPercent, host.gpuAveragePercent, "pink", host.gpuAvailable),
     ["Tasks", `${overview.runningTasks || 0} running / ${overview.taskCount || 0}`, percent(overview.runningTasks || 0, overview.taskCount || 0), "green"],
   ].map(metric => Array.isArray(metric) ? `<div class="metric"><span>${metric[0]}</span><strong>${escapeHtml(metric[1])}</strong>${meter(metric[2], metric[3])}</div>` : metric).join("");
@@ -763,7 +777,9 @@ function renderDocker() {
   const notice = $("dockerNotice"), ready = dockerRuntime?.available;
   notice.classList.toggle("hidden", !!ready);
   notice.innerHTML = ready ? "" : `<strong>Docker unavailable</strong><span>${escapeHtml(dockerRuntime?.message || "Docker status has not been checked.")}${dockerRuntime?.identity ? ` Running as ${escapeHtml(dockerRuntime.identity)}.` : ""}</span>`;
-  $("dockerProjectGrid").innerHTML = dockerProjects.map(project => dockerProjectCard(project, ready)).join("");
+  const projectColumns = [[], []];
+  dockerProjects.forEach((project, index) => projectColumns[index % 2].push(dockerProjectCard(project, ready)));
+  $("dockerProjectGrid").innerHTML = projectColumns.filter(column => column.length).map(column => `<div class="docker-project-column">${column.join("")}</div>`).join("");
   $("dockerVolumeList").innerHTML = dockerVolumes.map(volume => dockerVolumeRow(volume, ready)).join("");
   $("dockerNetworkList").innerHTML = dockerNetworks.map(network => dockerNetworkRow(network, ready)).join("");
   $("dockerProjectEmpty").classList.toggle("hidden", dockerProjects.length > 0 || !ready);
@@ -794,17 +810,20 @@ async function refreshDockerSnapshot() {
 function dockerNetworkRow(network, ready) {
   const busy=dockerBusy.has(`network:${network.name}`), usage=!network.inUse ? "Unused" : network.runningUse ? "In use by running container" : "Used by stopped container";
   const protectedNetwork=["bridge","host","none"].includes(network.name);
+  const composeManaged=!!network.composeProject;
   const detail=network.composeProject ? `Compose: ${network.composeProject}${network.composeNetwork ? ` / ${network.composeNetwork}` : ""}` : `${network.driver || "unknown driver"} · ${network.scope || "local"}`;
-  return `<article class="docker-volume-row" title="${escapeHtml(detail)}"><strong>${escapeHtml(network.name)}</strong><span class="docker-volume-users" title="${escapeHtml(usage)}${(network.usedBy||[]).length ? ` · ${escapeHtml(network.usedBy.join(", "))}` : ""}"><span class="docker-dot ${network.inUse ? (network.runningUse ? "green" : "yellow") : "gray"}"></span>${escapeHtml(usage)}</span>${protectedNetwork ? "" : `<button class="button danger small" onclick="deleteDockerNetwork('${escapeHtml(network.name)}')" ${!ready || network.inUse || busy ? "disabled" : ""}>Delete</button>`}</article>`;
+  const actions=protectedNetwork || composeManaged ? "" : `<button class="button danger small" onclick="deleteDockerNetwork('${escapeHtml(network.name)}')" ${!ready || network.inUse || busy ? "disabled" : ""}>Delete</button>`;
+  return `<div class="docker-container docker-resource-row" title="${escapeHtml(detail)}"><span class="docker-dot ${network.inUse ? (network.runningUse ? "green" : "yellow") : "gray"}"></span><strong class="docker-container-name" title="${escapeHtml(network.name)}">${escapeHtml(network.name)}</strong><div class="docker-container-actions docker-resource-actions"><span class="docker-resource-action-slot" aria-hidden="true"></span>${actions}</div><span class="docker-resource-status" title="${escapeHtml(usage)}${(network.usedBy||[]).length ? ` · ${escapeHtml(network.usedBy.join(", "))}` : ""}">${escapeHtml(usage)}</span></div>`;
 }
 function dockerVolumeRow(volume, ready) {
   const busy = dockerBusy.has(`volume:${volume.name}`), usage = !volume.inUse ? "Unused" : volume.runningUse ? "In use by running container" : "Used by stopped container";
   const canDelete = ready && !volume.inUse && !busy;
   const deleteTitle = volume.inUse ? "Delete is unavailable while a container references this volume." : !ready ? "Docker is unavailable." : busy ? "Volume operation in progress." : "Delete volume";
   const detail = volume.composeProject ? `Compose: ${volume.composeProject}${volume.composeVolume ? ` / ${volume.composeVolume}` : ""}` : `${volume.driver || "unknown driver"} · ${volume.scope || "local"}`;
-  const users = `<span class="docker-volume-users" title="${escapeHtml(usage)}${(volume.usedBy || []).length ? ` · ${escapeHtml(volume.usedBy.join(", "))}` : ""}"><span class="docker-dot ${volume.inUse ? (volume.runningUse ? "green" : "yellow") : "gray"}"></span>${escapeHtml(usage)}</span>`;
-  return `<article class="docker-volume-row" title="${escapeHtml(detail)}"><strong>${escapeHtml(volume.name)}</strong>${users}<span class="docker-volume-storage" title="Available automatically in Storage">Storage</span><button class="button danger small" title="${escapeHtml(deleteTitle)}" onclick="deleteDockerVolume('${escapeHtml(volume.name)}')" ${canDelete ? "" : "disabled"}>Delete</button></article>`;
+  const deleteAction = volume.inUse ? "" : `<button class="button danger small" title="${escapeHtml(deleteTitle)}" onclick="deleteDockerVolume('${escapeHtml(volume.name)}')" ${canDelete ? "" : "disabled"}>Delete</button>`;
+  return `<div class="docker-container docker-resource-row" title="${escapeHtml(detail)}"><span class="docker-dot ${volume.inUse ? (volume.runningUse ? "green" : "yellow") : "gray"}"></span><strong class="docker-container-name" title="${escapeHtml(volume.name)}">${escapeHtml(volume.name)}</strong><div class="docker-container-actions docker-resource-actions"><button class="button secondary small docker-volume-storage" title="Open this volume in Storage" onclick="openDockerVolumeStorage('${escapeHtml(volume.name)}')">Storage</button>${deleteAction}</div><span class="docker-resource-status" title="${escapeHtml(usage)}${(volume.usedBy || []).length ? ` · ${escapeHtml(volume.usedBy.join(", "))}` : ""}">${escapeHtml(usage)}</span></div>`;
 }
+function openDockerVolumeStorage(name) { setPage("storage"); browseStorage("docker-volumes", name); }
 function dockerProjectCard(project, ready) {
   const busy = dockerBusy.has(project.name), managed = !!project.managed, hasCompose = !!project.composeFileExists;
   const error = dockerProjectErrors.get(project.name);
@@ -826,7 +845,7 @@ function dockerContainerRow(container, ready) {
   const busy=dockerBusy.has(`container:${container.id}`), running=container.state === "running";
   const canAttach=ready && running && !busy && !!systemInfo?.capabilities?.terminal;
   const controls=`<div class="docker-container-actions"><div class="docker-action-group docker-action-lifecycle"><button class="row-icon docker-container-icon" title="Start" aria-label="Start container" onclick="dockerContainerAction('${container.id}','start')" ${ready && !running && !busy ? "" : "disabled"}>▶</button><button class="row-icon docker-container-icon" title="Stop" aria-label="Stop container" onclick="dockerContainerAction('${container.id}','stop')" ${ready && running && !busy ? "" : "disabled"}>■</button></div><div class="docker-action-group docker-action-destructive"><button class="row-icon docker-container-icon" title="Delete stopped container" aria-label="Delete stopped container" onclick="dockerContainerAction('${container.id}','delete')" ${ready && !running && !busy ? "" : "disabled"}>🗑</button></div><div class="docker-action-group docker-action-support"><button class="row-icon docker-container-icon" title="Open terminal" aria-label="Open container terminal" onclick="dockerAttachContainer('${container.id}')" ${canAttach ? "" : "disabled"}>↪</button><button class="row-icon docker-container-icon" title="View logs" aria-label="View logs" onclick="openDockerContainerLog('${container.id}')" ${ready && !busy ? "" : "disabled"}>▤</button></div></div>`;
-  return `<div class="docker-container"><span class="docker-dot ${escapeHtml(container.tone || "gray")}"></span><div class="docker-container-main"><strong>${escapeHtml(container.service || container.name)}</strong>${controls}</div><span>${escapeHtml(container.state || "unknown")}${container.health ? ` · ${escapeHtml(container.health)}` : ""}</span></div>`;
+  return `<div class="docker-container"><span class="docker-dot ${escapeHtml(container.tone || "gray")}"></span><strong class="docker-container-name">${escapeHtml(container.service || container.name)}</strong>${controls}<span class="docker-resource-status">${escapeHtml(container.state || "unknown")}${container.health ? ` · ${escapeHtml(container.health)}` : ""}</span></div>`;
 }
 async function dockerAction(name, action) {
   dockerBusy.add(name); dockerProjectErrors.delete(name); renderDocker();
@@ -996,13 +1015,13 @@ function setPage(page) {
   document.querySelectorAll(".nav").forEach(n => n.classList.toggle("active", n.dataset.page === page));
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
   $(`${page}Page`).classList.add("active");
-  const [title, sub, action] = pageMeta[page];
+  const [title, action] = pageMeta[page];
   $("pageTitle").textContent = title;
-  $("pageSubtitle").textContent = sub;
   $("primaryAction").textContent = action || "";
   $("primaryAction").classList.toggle("hidden", !action);
 	$("dockerVolumeAction").classList.toggle("hidden", page !== "docker");
 	$("dockerNetworkAction").classList.toggle("hidden", page !== "docker");
+	$("rdpSettingsAction").classList.toggle("hidden", page !== "remote");
 	if (page === "software") renderSoftware();
 	if (page === "docker") renderDocker();
 	if (page === "remote") renderRemote();
@@ -1021,6 +1040,7 @@ $("softwareBucketSource").addEventListener("keydown", event => { if (event.key =
 $("newTerminal").addEventListener("click", newTerminal);
 $("dockerVolumeAction").addEventListener("click", openDockerVolumeCreate);
 $("dockerNetworkAction").addEventListener("click", openDockerNetworkCreate);
+$("rdpSettingsAction").addEventListener("click", openGuacdSettings);
 document.querySelectorAll("[data-dismiss]").forEach(button => button.addEventListener("click", () => {
   $(button.dataset.dismiss).close();
 }));
@@ -1048,16 +1068,17 @@ $("remoteFrame").addEventListener("pointerenter", focusRemoteClient);
 $("remoteFrame").addEventListener("pointerdown", focusRemoteClient);
 $("remoteXpraDPIMode").addEventListener("change", updateRemoteXpraSettings);
 $("remoteXpraProfile").addEventListener("change", applyRemoteXpraProfile);
+$("remoteTargetProvider").addEventListener("change", () => { updateRemoteXpraSettings(); updateRemoteTargetDialogCopy(); });
 [$("remoteXpraEncoding"), $("remoteXpraVideo")].forEach(control => control.addEventListener("change", () => { $("remoteXpraProfile").value="custom"; }));
 $("remoteTargetForm").addEventListener("submit", async event => {
   event.preventDefault(); const id=$("remoteTargetId").value, provider=$("remoteTargetProvider").value, isRDP=provider === "rdp", isVNC=provider === "vnc", command=isRDP||isVNC ? undefined : commandFromEditor("remote"); if (!isRDP && !isVNC && !command) return;
   const xpra=$("remoteTargetProvider").value === "xpra" ? {profile:$("remoteXpraProfile").value,encoding:$("remoteXpraEncoding").value,video:$("remoteXpraVideo").checked,dpiMode:$("remoteXpraDPIMode").value,dpi:Number($("remoteXpraDPI").value),launchAfterConnect:$("remoteXpraLaunchAfterConnect").checked,clipboard:$("remoteXpraClipboard").checked,dynamicResize:$("remoteXpraDynamicResize").checked,menu:$("remoteXpraMenu").value,toolbarPosition:$("remoteXpraToolbarPosition").value} : undefined;
   const rdpIdentity=splitRDPUsername($("remoteRDPUsername").value), rdp=isRDP ? {host:$("remoteRDPHost").value.trim(),port:Number($("remoteRDPPort").value),username:rdpIdentity.username,domain:rdpIdentity.domain,securityMode:$("remoteRDPSecurity").value,serverLayout:$("remoteRDPLayout").value,resizeMethod:$("remoteRDPResize").value,certificatePolicy:$("remoteRDPCertificate").value,timeoutSeconds:Number($("remoteRDPTimeout").value),clipboardNormalization:$("remoteRDPClipboard").value,performanceProfile:$("remoteRDPPerformance").value,copy:true,paste:true} : undefined;
-  const vnc=isVNC ? {host:$("remoteVNCHost").value.trim(),port:Number($("remoteVNCPort").value),connectTimeoutSeconds:Number($("remoteVNCTimeout").value)} : undefined;
+  const vnc=isVNC ? {host:$("remoteVNCHost").value.trim(),port:Number($("remoteVNCPort").value),username:$("remoteVNCConfigUsername").value.trim(),connectTimeoutSeconds:Number($("remoteVNCTimeout").value)} : undefined;
   const body={name:$("remoteTargetName").value.trim(),provider,type:isRDP||isVNC ? "desktop" : $("remoteTargetType").value,dbusMode:$("remoteDBusMode").value,command,xpra,rdp,vnc};
   try { await api(id ? `api/v1/remote/targets/${id}` : "api/v1/remote/targets",{method:id?"PUT":"POST",body:JSON.stringify(body)}); $("remoteTargetDialog").close(); await refresh(); } catch(error) { setCommandError("remote",error.message); }
 });
-$("remoteRDPConnectForm").addEventListener("submit", async event => { event.preventDefault(); const target=remotePendingTarget; if (!target) return; const identity=splitRDPUsername($("remoteRDPConnectUsername").value), credentials={username:identity.username,domain:identity.domain,password:$("remoteRDPConnectPassword").value}; remotePendingTarget=null; $("remoteRDPConnectDialog").close(); if (target.sessionID) await openRemoteSession(target.sessionID,credentials); else await beginRemoteSession(target.id,credentials); });
+$("remoteRDPConnectForm").addEventListener("submit", async event => { event.preventDefault(); const target=remotePendingTarget; if (!target) return; const password=$("remoteRDPConnectPassword").value, identity=password ? splitRDPUsername($("remoteRDPConnectUsername").value) : {domain:"",username:""}, credentials={username:identity.username,domain:identity.domain,password}; remotePendingTarget=null; $("remoteRDPConnectDialog").close(); if (target.sessionID) await openRemoteSession(target.sessionID,credentials); else await beginRemoteSession(target.id,credentials); });
 $("remoteVNCCredentialsForm").addEventListener("submit", event => { event.preventDefault(); const pending=remoteVNCPendingCredentials; if (!pending) return; remoteVNCPendingCredentials=null; const credentials={username:$("remoteVNCUsername").value,password:$("remoteVNCPassword").value}; $("remoteVNCUsername").value=""; $("remoteVNCPassword").value=""; $("remoteVNCCredentialsDialog").close(); // noVNC retains this object while it completes the asynchronous RFB authentication handshake.
   pending.rfb.sendCredentials(credentials); });
 $("remoteVNCCredentialsDialog").addEventListener("close",()=>{ const pending=remoteVNCPendingCredentials; remoteVNCPendingCredentials=null; if(pending) pending.rfb.disconnect(); });

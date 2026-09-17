@@ -259,10 +259,12 @@ type RDPRemoteOptions struct {
 
 // VNCRemoteOptions is deliberately limited to the VNC server endpoint. It is
 // captured when a session begins, so a browser client can never choose where
-// its RFB WebSocket transport connects.
+// its RFB WebSocket transport connects. Username is optional; most VNC
+// servers only require a password, but it is prefilled when a server does.
 type VNCRemoteOptions struct {
 	Host                  string `json:"host" yaml:"host"`
 	Port                  int    `json:"port,omitempty" yaml:"port,omitempty"`
+	Username              string `json:"username,omitempty" yaml:"username,omitempty"`
 	ConnectTimeoutSeconds int    `json:"connectTimeoutSeconds,omitempty" yaml:"connectTimeoutSeconds,omitempty"`
 }
 

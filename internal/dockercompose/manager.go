@@ -33,6 +33,7 @@ var (
 	ErrVolumeInUse        = errors.New("Docker volume is referenced by a container")
 	ErrNetworkInUse       = errors.New("Docker network is referenced by a container")
 	ErrProtectedNetwork   = errors.New("default Docker networks cannot be deleted")
+	ErrComposeNetwork     = errors.New("Compose-managed Docker networks cannot be deleted directly")
 	ErrNetworkExists      = errors.New("Docker network already exists")
 	ErrContainerNotFound  = errors.New("Docker container was not found")
 	ErrContainerReadOnly  = errors.New("container is not part of a managed Compose project")
@@ -1003,6 +1004,19 @@ func (m *Manager) DeleteNetwork(ctx context.Context, name string) error {
 	}
 	if !rt.Available {
 		return fmt.Errorf("%w: %s", ErrRuntimeUnavailable, rt.Message)
+	}
+	rowsResult := m.runner.Run(ctx, "docker", "network", "ls", "--format", "json")
+	if rowsResult.Err != nil {
+		return commandError(rowsResult)
+	}
+	rows, err := parseNetworkRows(rowsResult.Output)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row.Name == name && parseLabels(row.Labels)["com.docker.compose.project"] != "" {
+			return ErrComposeNetwork
+		}
 	}
 	usage, err := m.networkUsageMap(ctx)
 	if err != nil {

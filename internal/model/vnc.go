@@ -33,6 +33,7 @@ func NormalizeVNCRemoteOptions(input *VNCRemoteOptions) (VNCRemoteOptions, error
 	if out.Port < 1 || out.Port > 65535 {
 		return VNCRemoteOptions{}, fmt.Errorf("VNC port must be between 1 and 65535")
 	}
+	out.Username = strings.TrimSpace(input.Username)
 	if input.ConnectTimeoutSeconds != 0 {
 		out.ConnectTimeoutSeconds = input.ConnectTimeoutSeconds
 	}

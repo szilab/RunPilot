@@ -18,9 +18,6 @@
           <img class="brand-mark" src="runpilot-logo.png" alt="RunPilot logo">
           <div class="brand-text"><strong>RunPilot</strong><span>Server automation</span></div>
         </div>
-        <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-controls="sidebar" aria-expanded="true" title="Collapse sidebar">
-          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m14 7-5 5 5 5M20 5v14"/></svg><span>Collapse sidebar</span>
-        </button>
       </div>
       <nav>
         <button class="nav active" type="button" data-page="overview" title="Overview"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><rect x="14" y="14" width="6" height="6"/></svg><span class="nav-label">Overview</span></button>
@@ -31,22 +28,25 @@
         <button class="nav" type="button" data-page="remote" title="Remote"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="1"/><path d="M8 21h8M12 17v4"/></svg><span class="nav-label">Remote</span></button>
         <button id="terminalNav" class="nav hidden" type="button" data-page="terminal" title="Terminal"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg><span class="nav-label">Terminal</span></button>
       </nav>
-      <div class="side-foot">
-        <span id="connectionDot" class="dot"></span>
-        <span id="connectionText" class="side-foot-label">Not authenticated</span>
+      <div class="sidebar-bottom">
+        <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-controls="sidebar" aria-expanded="true" aria-label="Collapse sidebar" title="Collapse sidebar">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16m6-11-3 3 3 3"/></svg><span>Collapse sidebar</span>
+        </button>
+        <div class="side-foot" role="status" aria-live="polite">
+          <span id="connectionDot" class="dot"></span>
+          <span id="connectionText" class="side-foot-label">Not authenticated</span>
+        </div>
       </div>
     </aside>
 
     <main>
       <header>
-        <div>
-          <h1 id="pageTitle">Overview</h1>
-          <p id="pageSubtitle">RunPilot service and resource health at a glance.</p>
-        </div>
+        <h1 id="pageTitle">Overview</h1>
         <div class="header-actions">
           <button id="themeToggle" class="button secondary theme-toggle" type="button" aria-pressed="false" title="Switch to dark theme">☾ <span>Dark theme</span></button>
           <button id="dockerNetworkAction" class="button secondary hidden" type="button">Create network</button>
           <button id="dockerVolumeAction" class="button secondary hidden" type="button">Create volume</button>
+          <button id="rdpSettingsAction" class="button secondary hidden" type="button">RDP settings</button>
           <button id="primaryAction" class="button primary hidden">Add task</button>
         </div>
       </header>
@@ -106,16 +106,17 @@
         <div id="remoteOverview" class="remote-overview">
           <section class="docker-section"><div class="section-head"><h2>Providers</h2></div><div id="remoteProviders" class="docker-grid"></div></section>
           <section class="docker-section"><div class="section-head"><h2>Configured targets</h2></div><div id="remoteTargets" class="docker-grid"></div><div id="remoteTargetsEmpty" class="empty hidden"><h2>No remote targets yet</h2><p>Add an application or desktop target to launch through an available provider.</p></div></section>
-          <section class="docker-section"><div class="section-head"><h2>Active sessions</h2></div><div id="remoteSessions" class="docker-grid"></div><div id="remoteSessionsEmpty" class="empty hidden"><h2>No active sessions</h2><p>Open a configured target to create an isolated remote session.</p></div></section>
         </div>
         <div id="remoteSessionView" class="remote-session-view hidden"><div class="remote-session-toolbar"><div><strong id="remoteSessionName">Remote session</strong><span id="remoteSessionMeta" class="meta"></span></div><div class="row-actions"><button id="remoteFullscreen" class="button secondary small">Fullscreen</button><button id="remoteStop" class="button danger small">Stop</button><button id="remoteBack" class="button secondary small">Back</button></div></div><div id="remoteSessionError" class="form-error hidden"></div><div id="remoteSessionNotice" class="notice hidden"></div><div id="remoteFrameShell" class="remote-frame-shell"><div id="remoteLoading" class="remote-loading"><span class="spinner"></span><strong>Connecting to remote session…</strong><span id="remoteLoadingDetail">Preparing the remote client.</span></div><iframe id="remoteFrame" class="remote-frame" title="Remote Xpra session" tabindex="0" allow="clipboard-read; clipboard-write; fullscreen"></iframe><div id="remoteRDP" class="remote-rdp hidden" tabindex="0"></div><div id="remoteVNC" class="remote-vnc hidden" tabindex="0"></div></div></div>
       </section>
 
       <section id="dockerPage" class="page">
         <div id="dockerNotice" class="notice hidden"></div>
-        <section class="docker-section"><div class="section-head"><h2>Compose projects</h2></div><div id="dockerProjectGrid" class="docker-grid"></div><div id="dockerProjectEmpty" class="empty hidden"><h2>No Compose projects found</h2><p>Create a RunPilot-managed project, or start an existing Compose project to see it here.</p></div></section>
-        <section class="docker-section"><div class="section-head"><h2>Volumes</h2></div><div id="dockerVolumeList" class="docker-volume-list"></div><div id="dockerVolumeEmpty" class="empty hidden"><h2>No Docker volumes found</h2><p>Create a named local volume, or refresh after Docker discovers one.</p></div></section>
-        <section class="docker-section"><div class="section-head"><h2>Networks</h2></div><div id="dockerNetworkList" class="docker-volume-list"></div><div id="dockerNetworkEmpty" class="empty hidden"><h2>No Docker networks found</h2><p>Create a named bridge network, or refresh after Docker discovers one.</p></div></section>
+        <section class="docker-section"><div class="section-head"><h2>Compose projects</h2></div><div id="dockerProjectGrid" class="docker-grid docker-project-grid"></div><div id="dockerProjectEmpty" class="empty hidden"><h2>No Compose projects found</h2><p>Create a RunPilot-managed project, or start an existing Compose project to see it here.</p></div></section>
+        <div class="docker-resources-grid">
+          <section class="docker-section"><div class="section-head"><h2>Volumes</h2></div><div id="dockerVolumeList" class="docker-volume-list"></div><div id="dockerVolumeEmpty" class="empty hidden"><h2>No Docker volumes found</h2><p>Create a named local volume, or refresh after Docker discovers one.</p></div></section>
+          <section class="docker-section"><div class="section-head"><h2>Networks</h2></div><div id="dockerNetworkList" class="docker-volume-list"></div><div id="dockerNetworkEmpty" class="empty hidden"><h2>No Docker networks found</h2><p>Create a named bridge network, or refresh after Docker discovers one.</p></div></section>
+        </div>
       </section>
     </main>
   </div>
@@ -187,16 +188,14 @@
     <form method="dialog" id="remoteTargetForm">
       <div class="dialog-head"><div><h2 id="remoteTargetDialogTitle">Add Xpra target</h2><p id="remoteTargetDialogDescription">Launch an application or desktop in an isolated Xpra session.</p></div><button class="icon-btn" type="button" data-dismiss="remoteTargetDialog" aria-label="Close">×</button></div>
       <input type="hidden" id="remoteTargetId">
-      <input type="hidden" id="remoteTargetProvider" value="xpra">
       <div class="form-grid">
-        <label>Name<input id="remoteTargetName" required placeholder="Firefox"></label>
-        <label class="remote-xpra-only">Session type<select id="remoteTargetType"><option value="application">Application</option><option value="desktop">Desktop</option></select></label>
-        <label class="remote-xpra-only">Interpreter<select id="remoteInterpreter"><option value="direct">Direct executable</option></select></label>
-        <label class="span-2 remote-xpra-only">Executable<input id="remotePath" placeholder="firefox or startxfce4"></label>
-        <label class="span-2 remote-xpra-only">Arguments<input id="remoteArgs" placeholder="--private-window"></label>
-        <details id="remoteXpraSettings" class="remote-xpra-advanced span-2 remote-xpra-only">
+        <label>Name<input id="remoteTargetName" required></label>
+        <label>Provider<select id="remoteTargetProvider" aria-label="Remote provider"></select></label>
+        <section id="remoteXpraSettings" class="remote-xpra-settings span-2 remote-xpra-only"><div class="section-head"><div><h3>Xpra</h3><p class="muted">Runs in an isolated session; sound, printing, and file transfer stay disabled.</p></div></div><div class="form-grid remote-xpra-grid"><label class="span-2">Executable<input id="remotePath" placeholder="firefox or startxfce4"></label><label class="span-2">Arguments<input id="remoteArgs" placeholder="--private-window"></label></div><details class="remote-xpra-advanced">
           <summary>Advanced settings</summary>
           <div class="form-grid remote-xpra-grid">
+            <label>Session type<select id="remoteTargetType"><option value="application">Application</option><option value="desktop">Desktop</option></select></label>
+            <label class="hidden">Interpreter<select id="remoteInterpreter"><option value="direct">Direct executable</option></select></label>
             <label>Rendering profile<select id="remoteXpraProfile"><option value="recommended">Recommended</option><option value="automatic">Automatic</option><option value="compatibility">Compatibility / Lossless</option><option value="custom">Custom</option></select></label>
             <label>DPI<select id="remoteXpraDPIMode"><option value="auto">Auto</option><option value="96">96</option><option value="custom">Custom</option></select></label>
             <label id="remoteXpraDPIWrap" class="hidden">Custom DPI<input id="remoteXpraDPI" type="number" min="72" max="240" step="1" value="96"></label>
@@ -213,16 +212,16 @@
             <p class="muted span-2">Isolated creates a private session bus for the remote application. Host session lets it contact desktop services, but single-instance applications can open on the physical desktop instead.</p>
           </div>
           <p class="muted">Sound, printing, and Xpra file transfer stay disabled; use RunPilot Storage for files.</p>
-        </details>
-        <section id="remoteRDPSettings" class="remote-xpra-settings span-2 hidden"><div class="section-head"><div><h3>RDP / Guacamole</h3><p class="muted">Credentials are requested for each connection and never saved.</p></div></div><div class="form-grid remote-xpra-grid"><label>Host<input id="remoteRDPHost" required placeholder="rdp.example" inputmode="url"></label><label>Port<input id="remoteRDPPort" type="number" min="1" max="65535" value="3389"></label><label class="span-2">Username<input id="remoteRDPUsername" autocomplete="username" placeholder="DOMAIN\username"></label><label class="span-2">Server keyboard layout<select id="remoteRDPLayout"><option value="">Server default / US English</option><option value="en-us-qwerty">English US</option><option value="en-gb-qwerty">English UK</option><option value="de-de-qwertz">German</option><option value="de-ch-qwertz">German Swiss</option><option value="fr-fr-azerty">French</option><option value="fr-be-azerty">French Belgian</option><option value="fr-ch-qwertz">French Swiss</option><option value="hu-hu-qwertz">Hungarian</option><option value="it-it-qwerty">Italian</option><option value="es-es-qwerty">Spanish</option><option value="es-latam-qwerty">Latin American</option><option value="sv-se-qwerty">Swedish</option><option value="no-no-qwerty">Norwegian</option><option value="tr-tr-qwerty">Turkish Q</option><option value="pt-br-qwerty">Brazilian PT</option><option value="ja-jp-qwerty">Japanese</option><option value="failsafe">Failsafe Unicode</option></select></label></div><details class="remote-xpra-advanced"><summary>Advanced settings</summary><div class="form-grid remote-xpra-grid"><label>Security<select id="remoteRDPSecurity"><option value="automatic">Automatic</option><option value="nla">NLA</option><option value="nla-ext">NLA Extended</option><option value="tls">TLS</option><option value="rdp">Legacy RDP</option></select></label><label>Resize<select id="remoteRDPResize"><option value="display-update">Dynamic / Display Update</option><option value="reconnect">Reconnect on resize</option><option value="fixed">Fixed</option></select></label><label>Certificate<select id="remoteRDPCertificate"><option value="validate">Validate certificate</option><option value="tofu">Trust on first use</option><option value="ignore">Ignore certificate</option></select></label><label>Connection timeout<input id="remoteRDPTimeout" type="number" min="1" max="120" value="10"></label><label>Clipboard<select id="remoteRDPClipboard"><option value="preserve">Enabled — preserve line endings</option><option value="unix">Enabled — Unix line endings</option><option value="windows">Enabled — Windows line endings</option></select></label><label>Performance<select id="remoteRDPPerformance"><option value="balanced">Balanced</option><option value="quality">Quality</option><option value="low-bandwidth">Low bandwidth</option></select></label></div></details></section>
-        <section id="remoteVNCSettings" class="remote-xpra-settings span-2 hidden"><div class="section-head"><div><h3>VNC / noVNC</h3><p class="muted">The embedded noVNC client requests VNC credentials when the server requires them; they are never saved.</p></div></div><div class="form-grid remote-xpra-grid"><label>Host<input id="remoteVNCHost" required placeholder="vnc.example" inputmode="url"></label><label>Port<input id="remoteVNCPort" type="number" min="1" max="65535" value="5900"></label><label>Connection timeout<input id="remoteVNCTimeout" type="number" min="1" max="120" value="10"></label></div></section>
+        </details></section>
+        <section id="remoteRDPSettings" class="remote-xpra-settings span-2 hidden"><div class="section-head"><div><h3>RDP / Guacamole</h3><p class="muted">Credentials are requested for each connection and never saved.</p></div></div><div class="form-grid remote-xpra-grid"><label>Host<input id="remoteRDPHost" required placeholder="rdp.example" inputmode="url"></label><label>Port<input id="remoteRDPPort" type="number" min="1" max="65535" value="3389"></label><label class="span-2">Username<input id="remoteRDPUsername" autocomplete="username" placeholder="DOMAIN\username"></label></div><details class="remote-xpra-advanced"><summary>Advanced settings</summary><div class="form-grid remote-xpra-grid"><label class="span-2">Server keyboard layout<select id="remoteRDPLayout"><option value="">Server default / US English</option><option value="en-us-qwerty">English US</option><option value="en-gb-qwerty">English UK</option><option value="de-de-qwertz">German</option><option value="de-ch-qwertz">German Swiss</option><option value="fr-fr-azerty">French</option><option value="fr-be-azerty">French Belgian</option><option value="fr-ch-qwertz">French Swiss</option><option value="hu-hu-qwertz">Hungarian</option><option value="it-it-qwerty">Italian</option><option value="es-es-qwerty">Spanish</option><option value="es-latam-qwerty">Latin American</option><option value="sv-se-qwerty">Swedish</option><option value="no-no-qwerty">Norwegian</option><option value="tr-tr-qwerty">Turkish Q</option><option value="pt-br-qwerty">Brazilian PT</option><option value="ja-jp-qwerty">Japanese</option><option value="failsafe">Failsafe Unicode</option></select></label><label>Security<select id="remoteRDPSecurity"><option value="automatic">Automatic</option><option value="nla">NLA</option><option value="nla-ext">NLA Extended</option><option value="tls">TLS</option><option value="rdp">Legacy RDP</option></select></label><label>Resize<select id="remoteRDPResize"><option value="display-update">Dynamic / Display Update</option><option value="reconnect">Reconnect on resize</option><option value="fixed">Fixed</option></select></label><label>Certificate<select id="remoteRDPCertificate"><option value="validate">Validate certificate</option><option value="tofu">Trust on first use</option><option value="ignore">Ignore certificate</option></select></label><label>Connection timeout<input id="remoteRDPTimeout" type="number" min="1" max="120" value="10"></label><label>Clipboard<select id="remoteRDPClipboard"><option value="preserve">Enabled — preserve line endings</option><option value="unix">Enabled — Unix line endings</option><option value="windows">Enabled — Windows line endings</option></select></label><label>Performance<select id="remoteRDPPerformance"><option value="balanced">Balanced</option><option value="quality">Quality</option><option value="low-bandwidth">Low bandwidth</option></select></label></div></details></section>
+        <section id="remoteVNCSettings" class="remote-xpra-settings span-2 hidden"><div class="section-head"><div><h3>VNC / noVNC</h3><p class="muted">The embedded noVNC client requests VNC credentials when the server requires them; they are never saved.</p></div></div><div class="form-grid remote-xpra-grid"><label>Host<input id="remoteVNCHost" required placeholder="vnc.example" inputmode="url"></label><label>Port<input id="remoteVNCPort" type="number" min="1" max="65535" value="5900"></label></div><details class="remote-xpra-advanced"><summary>Advanced settings</summary><div class="form-grid remote-xpra-grid"><label class="span-2">Username (most VNC servers don't need this)<input id="remoteVNCConfigUsername" autocomplete="username"></label><label>Connection timeout<input id="remoteVNCTimeout" type="number" min="1" max="120" value="10"></label></div></details></section>
       </div>
       <div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="remoteTargetDialog">Cancel</button><button class="button primary" value="default">Save target</button></div>
     </form>
   </dialog>
 
   <dialog id="remoteRDPConnectDialog" class="dialog"><form method="dialog" id="remoteRDPConnectForm"><div class="dialog-head"><div><h2 id="remoteRDPConnectTitle">Connect to RDP target</h2><p>Credentials are optional and stay in this browser session only. Leave the password blank for the remote server's interactive login screen.</p></div><button class="icon-btn" type="button" data-dismiss="remoteRDPConnectDialog" aria-label="Close">×</button></div><div class="form-grid"><label class="span-2">Username<input id="remoteRDPConnectUsername" autocomplete="username" placeholder="DOMAIN\username"></label><label class="span-2">Password (optional)<input id="remoteRDPConnectPassword" type="password" autocomplete="current-password"></label></div><div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="remoteRDPConnectDialog">Cancel</button><button class="button primary" value="default">Connect</button></div></form></dialog>
-  <dialog id="remoteVNCCredentialsDialog" class="dialog small"><form method="dialog" id="remoteVNCCredentialsForm"><div class="dialog-head"><div><h2 id="remoteVNCCredentialsTitle">VNC credentials</h2><p>Required by this VNC server. They are passed to the server through this session only and are never saved.</p></div><button class="icon-btn" type="button" data-dismiss="remoteVNCCredentialsDialog" aria-label="Close">×</button></div><div class="form-grid"><label class="span-2">Username (if required)<input id="remoteVNCUsername" autocomplete="username"></label><label class="span-2">Password<input id="remoteVNCPassword" type="password" autocomplete="current-password"></label></div><div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="remoteVNCCredentialsDialog">Cancel</button><button class="button primary" value="default">Connect</button></div></form></dialog>
+  <dialog id="remoteVNCCredentialsDialog" class="dialog small"><form method="dialog" id="remoteVNCCredentialsForm"><div class="dialog-head"><div><h2 id="remoteVNCCredentialsTitle">VNC credentials</h2><p>Required by this VNC server. They are passed to the server through this session only and are never saved.</p></div><button class="icon-btn" type="button" data-dismiss="remoteVNCCredentialsDialog" aria-label="Close">×</button></div><div class="form-grid"><input type="hidden" id="remoteVNCUsername"><label class="span-2">Password<input id="remoteVNCPassword" type="password" autocomplete="current-password"></label></div><div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="remoteVNCCredentialsDialog">Cancel</button><button class="button primary" value="default">Connect</button></div></form></dialog>
 
   <dialog id="jobDialog" class="dialog">
     <form method="dialog" id="jobForm">

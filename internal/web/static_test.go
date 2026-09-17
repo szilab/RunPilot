@@ -14,6 +14,7 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	for _, want := range []string{
 		`data-page="overview"`,
 		`id="sidebarToggle"`,
+		`<rect x="3" y="4" width="18" height="16" rx="2"/>`,
 		`class="nav-icon"`,
 		`class="nav-label"`,
 		`id="overviewPage"`,
@@ -50,6 +51,9 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		`data-task-kind="continuous"`,
 		`class="row task-choice"`,
 		`id="remoteXpraSettings"`,
+		`id="remoteTargetProvider"`,
+		`id="rdpSettingsAction"`,
+		`class="docker-resources-grid"`,
 		`id="remoteXpraProfile"`,
 		`id="remoteXpraDPIMode"`,
 		`id="remoteXpraLaunchAfterConnect"`,
@@ -83,9 +87,19 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(app)
-	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "api/v1/software/providers", "/buckets", "api/v1/overview", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "Scoop root on Windows", "dockerProjectErrors", "Compose operation failed", "const canUp = ready && hasCompose && !busy;", "const canDelete = ready && !volume.inUse && !busy", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function openNewTextFile", `$("textEditorContent").readOnly=!canEdit`, "function initializeSidebar", "sidebarStorageKey", "function remoteXpraDefaults", "function focusRemoteClient", `class="row"`} {
+	for _, removed := range []string{`id="pageSubtitle"`, `Active sessions`, `id="remoteSessions"`, `remote-provider-add`} {
+		if strings.Contains(page+script, removed) {
+			t.Fatalf("UI still contains obsolete presentation %q", removed)
+		}
+	}
+	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "api/v1/software/providers", "/buckets", "api/v1/overview", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "dockerProjectErrors", "Compose operation failed", "const projectColumns = [[], []];", "docker-project-column", "const canUp = ready && hasCompose && !busy;", "const canDelete = ready && !volume.inUse && !busy", "const deleteAction = volume.inUse ? \"\"", "const composeManaged=!!network.composeProject", "docker-resource-action-slot", "docker-resource-row", "function openDockerVolumeStorage", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function initializeSidebar", "sidebarStorageKey", `rdpSettingsAction").classList.toggle("hidden", page !== "remote")`, "function remoteXpraDefaults", "function populateRemoteProviderSelect", "activeByTarget", "function focusRemoteClient", `class="row"`} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js does not contain %q", want)
+		}
+	}
+	for _, want := range []string{`remote: ["Remote Access", "Add target"]`, `$("sidebarToggle").setAttribute("aria-label", label)`, `onclick="openRemoteSession('${session.id}')"`} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("UI polish behavior is missing %q", want)
 		}
 	}
 	if !strings.Contains(script, "function applyTheme") {
@@ -111,6 +125,11 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	}
 	if !strings.Contains(string(styles), ".shell.sidebar-collapsed") || !strings.Contains(string(styles), "main { padding: 17px 21px 24px;") {
 		t.Fatal("sidebar collapse or reduced main padding styles are missing")
+	}
+	for _, want := range []string{".docker-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start;", ".docker-project-column { display:grid; align-content:start; gap:12px;", ".docker-resources-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr));", ".docker-container { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto minmax(150px, .7fr);", ".docker-resource-row { min-height:42px;", ".nav-label { overflow:hidden; text-overflow:ellipsis; }", ".sidebar-toggle { display:flex; align-items:center; gap:12px; width:100%; height:42px; min-height:42px; overflow:hidden;", ".docker-resource-actions { display:grid; grid-template-columns:108px 78px;", "#remoteTargets, #remoteProviders { grid-template-columns:repeat(3,minmax(0,1fr)); }", ".remote-card-status, .remote-provider-status { display:flex;", ".remote-provider-card { display:grid; grid-template-columns:minmax(0,1fr) auto;", ".remote-target-session { display:flex;"} {
+		if !strings.Contains(string(styles), want) {
+			t.Fatalf("compact responsive UI treatment is missing %q", want)
+		}
 	}
 	if strings.Contains(script, "Helyi fájlrendszer kezelése.") {
 		t.Fatal("app.js still exposes the obsolete storage subtitle")
@@ -230,8 +249,8 @@ func TestRemoteTargetDialogIsProviderSpecific(t *testing.T) {
 	}
 	page := string(index)
 	for _, want := range []string{
-		`id="remoteTargetProvider" value="xpra"`,
-		`id="remoteXpraSettings" class="remote-xpra-advanced span-2 remote-xpra-only"`,
+		`id="remoteTargetProvider" aria-label="Remote provider"`,
+		`id="remoteXpraSettings" class="remote-xpra-settings span-2 remote-xpra-only"`,
 		`<summary>Advanced settings</summary>`,
 		`id="remoteRDPUsername" autocomplete="username" placeholder="DOMAIN\username"`,
 		`id="remoteRDPLayout"`,
@@ -256,7 +275,7 @@ func TestRemoteTargetDialogIsProviderSpecific(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(app)
-	for _, want := range []string{"function splitRDPUsername", "function formatRDPUsername", "openRemoteTarget(null,'", "isRDP||isVNC ? \"desktop\"", "remoteVNCCredentialsForm"} {
+	for _, want := range []string{"function splitRDPUsername", "function formatRDPUsername", "openRemoteTarget()", "isRDP||isVNC ? \"desktop\"", "remoteVNCCredentialsForm"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("remote target script is missing %q", want)
 		}
