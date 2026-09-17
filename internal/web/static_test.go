@@ -200,8 +200,8 @@ func TestRemoteProviderCardsShowAvailabilityAndHints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(index), `id="remoteProviders" class="remote-provider-grid"`) {
-		t.Fatal("remote providers do not use the compact card grid")
+	if !strings.Contains(string(index), `id="remoteProviders" class="docker-grid"`) {
+		t.Fatal("remote providers do not use the Docker card grid")
 	}
 	app, err := staticFS.ReadFile("static/app.js")
 	if err != nil {
@@ -216,7 +216,7 @@ func TestRemoteProviderCardsShowAvailabilityAndHints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{".remote-provider-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr));", ".provider-info::after", "@media (max-width: 1100px)"} {
+	for _, want := range []string{".docker-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr));", ".provider-info::after", "@media (max-width: 1100px)"} {
 		if !strings.Contains(string(styles), want) {
 			t.Fatalf("remote provider card styles are missing %q", want)
 		}
@@ -237,6 +237,9 @@ func TestRemoteTargetDialogIsProviderSpecific(t *testing.T) {
 		`id="remoteRDPLayout"`,
 		`hu-hu-qwertz`,
 		`id="remoteRDPConnectUsername" autocomplete="username" placeholder="DOMAIN\username"`,
+		`id="remoteVNCSettings"`,
+		`id="remoteVNCHost"`,
+		`id="remoteVNCCredentialsDialog"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("provider-specific remote target UI is missing %q", want)
@@ -253,7 +256,7 @@ func TestRemoteTargetDialogIsProviderSpecific(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(app)
-	for _, want := range []string{"function splitRDPUsername", "function formatRDPUsername", "openRemoteTarget(null,'", "type:isRDP ? \"desktop\""} {
+	for _, want := range []string{"function splitRDPUsername", "function formatRDPUsername", "openRemoteTarget(null,'", "isRDP||isVNC ? \"desktop\"", "remoteVNCCredentialsForm"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("remote target script is missing %q", want)
 		}
@@ -288,6 +291,41 @@ func TestGuacamoleAssetAndRDPUIAreEmbedded(t *testing.T) {
 		if !strings.Contains(string(app), want) {
 			t.Fatalf("guacd dialog behavior missing %q", want)
 		}
+	}
+}
+
+func TestNoVNCAssetAndUIAreEmbedded(t *testing.T) {
+	asset, err := staticFS.ReadFile("static/vendor/novnc/core/rfb.js")
+	if err != nil || !strings.Contains(string(asset), "noVNC: HTML5 VNC client") {
+		t.Fatalf("noVNC asset missing: %v", err)
+	}
+	pako, err := staticFS.ReadFile("static/vendor/novnc/vendor/pako/lib/zlib/inflate.js")
+	if err != nil || !strings.Contains(string(pako), "inflate_fast") {
+		t.Fatalf("noVNC pako dependency missing: %v", err)
+	}
+	cursor, err := staticFS.ReadFile("static/vendor/novnc/core/util/cursor.js")
+	if err != nil || !strings.Contains(string(cursor), "scaledHotx") || !strings.Contains(string(cursor), "ctx.drawImage(this._sourceCanvas") {
+		t.Fatalf("noVNC cursor scaling support missing: %v", err)
+	}
+	license, err := staticFS.ReadFile("static/vendor/novnc/LICENSE.txt")
+	if err != nil || !strings.Contains(string(license), "MPL 2.0") {
+		t.Fatalf("noVNC license missing: %v", err)
+	}
+	page, err := staticFS.ReadFile("static/index.html")
+	if err != nil || !strings.Contains(string(page), `src="novnc.js"`) || !strings.Contains(string(page), `id="remoteVNC"`) {
+		t.Fatal("noVNC UI is not embedded")
+	}
+	app, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"function openVNCRemoteSession", "remoteVNCTransportURL", "credentialsrequired", "sendCredentials"} {
+		if !strings.Contains(string(app), want) {
+			t.Fatalf("noVNC UI behavior missing %q", want)
+		}
+	}
+	if strings.Contains(string(app), "pending.rfb.sendCredentials(credentials); credentials.password") {
+		t.Fatal("noVNC credentials are cleared before its asynchronous authentication handshake")
 	}
 }
 

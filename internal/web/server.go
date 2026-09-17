@@ -31,20 +31,20 @@ import (
 var staticFS embed.FS
 
 type Server struct {
-	ctrl             *core.Controller
-	basePath         string
-	tickets          map[string]downloadTicket
-	ticketMu         sync.Mutex
-	terminal         *terminal.Manager
-	terminalTickets  map[string]terminalTicket
-	terminalTicketMu sync.Mutex
-	remoteTickets    map[string]remoteClientTicket
-	remoteTicketMu   sync.Mutex
-	rdpTickets       map[string]remoteTransportTicket
-	rdpTicketMu      sync.Mutex
-	rdpCredentials   map[string]rdpCredentials
-	rdpCredentialMu  sync.Mutex
-	docker           *dockercompose.Manager
+	ctrl              *core.Controller
+	basePath          string
+	tickets           map[string]downloadTicket
+	ticketMu          sync.Mutex
+	terminal          *terminal.Manager
+	terminalTickets   map[string]terminalTicket
+	terminalTicketMu  sync.Mutex
+	remoteTickets     map[string]remoteClientTicket
+	remoteTicketMu    sync.Mutex
+	transportTickets  map[string]remoteTransportTicket
+	transportTicketMu sync.Mutex
+	rdpCredentials    map[string]rdpCredentials
+	rdpCredentialMu   sync.Mutex
+	docker            *dockercompose.Manager
 }
 type terminalTicket struct {
 	Shell        string
@@ -76,7 +76,7 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, terminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), terminalTickets: map[string]terminalTicket{}, remoteTickets: map[string]remoteClientTicket{}, rdpTickets: map[string]remoteTransportTicket{}, rdpCredentials: map[string]rdpCredentials{}, docker: ctrl.Docker()}, nil
+	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, terminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), terminalTickets: map[string]terminalTicket{}, remoteTickets: map[string]remoteClientTicket{}, transportTickets: map[string]remoteTransportTicket{}, rdpCredentials: map[string]rdpCredentials{}, docker: ctrl.Docker()}, nil
 }
 
 func (s *Server) BasePath() string { return s.basePath }

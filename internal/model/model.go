@@ -207,6 +207,10 @@ type RemoteTarget struct {
 	// RDP contains the configured, non-secret RDP endpoint settings. Passwords
 	// are intentionally never part of a RemoteTarget.
 	RDP *RDPRemoteOptions `json:"rdp,omitempty" yaml:"rdp,omitempty"`
+	// VNC contains the configured, non-secret VNC endpoint settings. VNC
+	// authentication is performed by the embedded noVNC client and is never
+	// persisted in a target.
+	VNC *VNCRemoteOptions `json:"vnc,omitempty" yaml:"vnc,omitempty"`
 }
 
 type RDPSecurityMode string
@@ -251,6 +255,15 @@ type RDPRemoteOptions struct {
 	PerformanceProfile     string               `json:"performanceProfile,omitempty" yaml:"performanceProfile,omitempty"`
 	TimeoutSeconds         int                  `json:"timeoutSeconds,omitempty" yaml:"timeoutSeconds,omitempty"`
 	TimeZone               string               `json:"timeZone,omitempty" yaml:"timeZone,omitempty"`
+}
+
+// VNCRemoteOptions is deliberately limited to the VNC server endpoint. It is
+// captured when a session begins, so a browser client can never choose where
+// its RFB WebSocket transport connects.
+type VNCRemoteOptions struct {
+	Host                  string `json:"host" yaml:"host"`
+	Port                  int    `json:"port,omitempty" yaml:"port,omitempty"`
+	ConnectTimeoutSeconds int    `json:"connectTimeoutSeconds,omitempty" yaml:"connectTimeoutSeconds,omitempty"`
 }
 
 type XpraProfile string
@@ -351,6 +364,9 @@ type RemoteSession struct {
 	// RDP is an effective, non-secret endpoint snapshot. It remains fixed for
 	// the session lifetime; in particular, it contains no password.
 	RDP *RDPRemoteOptions `json:"rdp,omitempty"`
+	// VNC is an effective, non-secret endpoint snapshot. It remains fixed for
+	// the session lifetime; VNC credentials are never included.
+	VNC *VNCRemoteOptions `json:"vnc,omitempty"`
 }
 
 // SoftwareConfig contains the external providers RunPilot manages for its

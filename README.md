@@ -30,7 +30,7 @@ RunPilot should integrate specialist tools such as Robocopy, Restic or future pa
 - YAML configuration under `%ProgramData%\RunPilot`
 - Software Management through a RunPilot-owned isolated Scoop provider
 - Interactive Terminal tabs backed by a Linux PTY or Windows ConPTY
-- Remote Access targets and sessions through Xpra and embedded-browser RDP providers
+- Remote Access targets and sessions through Xpra, embedded-browser RDP, and VNC/noVNC providers
 
 ## Product direction
 
@@ -204,6 +204,21 @@ host is resolved by guacd; when guacd is in Docker, `127.0.0.1` means that
 container. Use a host gateway name such as `host.docker.internal` when needed.
 For Hungarian RDP servers choose **Hungarian** in the target keyboard layout;
 this sends `server-layout=hu-hu-qwertz`.
+
+### VNC / noVNC
+
+VNC is a built-in, desktop-only provider on Linux and Windows. It embeds the
+noVNC 1.7.0 browser client and needs neither `websockify`, a native VNC client,
+nor another RunPilot-managed daemon. Configure the VNC host, port, and connect
+timeout on a `vnc` target. When the VNC server requires authentication, noVNC
+asks in the browser; those credentials are not saved in YAML, browser storage,
+session views, diagnostics, or logs.
+
+The browser opens a short-lived, single-use, session-scoped WebSocket ticket.
+RunPilot bridges its binary RFB frames to TCP by calling the Remote provider's
+captured `Runtime.Dial()` target. The WebSocket has no host, port, or upstream
+destination parameters, so it cannot be used as a generic TCP proxy. Unlike
+RDP, VNC does not use guacd.
 
 ## Windows build
 

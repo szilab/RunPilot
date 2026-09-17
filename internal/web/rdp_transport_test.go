@@ -190,7 +190,7 @@ func TestForwardBrowserInstructionsImmediatelyForwardsRuntimeInstructions(t *tes
 	for _, want := range []guacd.Instruction{
 		{Opcode: "sync", Args: []string{"12345"}},
 		{Opcode: "size", Args: []string{"1280", "800", "96"}},
-		{Opcode: "nop"},
+		{Opcode: "nop", Args: []string{}},
 		{Opcode: "mouse", Args: []string{"10", "20", "0"}},
 	} {
 		if got, err := guacd.DecodeInstruction(reader); err != nil || !reflect.DeepEqual(got, want) {

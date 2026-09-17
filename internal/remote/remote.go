@@ -31,6 +31,7 @@ type ClientKind string
 const (
 	ClientXpraHTML5 ClientKind = "xpra-html5"
 	ClientGuacamole ClientKind = "guacamole"
+	ClientNoVNC     ClientKind = "novnc"
 )
 
 // ClientDescriptor tells the web layer how to render a provider client. It
@@ -250,9 +251,16 @@ func (s *Service) Start(ctx context.Context, target model.RemoteTarget) (model.R
 		}
 		target.RDP = &options
 	}
+	if target.Provider == "vnc" {
+		options, err := model.NormalizeVNCRemoteOptions(target.VNC)
+		if err != nil {
+			return model.RemoteSession{}, err
+		}
+		target.VNC = &options
+	}
 	id := config.NewID("remote")
 	now := time.Now().UTC()
-	item := &session{view: model.RemoteSession{ID: id, Provider: target.Provider, TargetID: target.ID, TargetName: target.Name, Type: target.Type, State: model.RemoteSessionStarting, CreatedAt: now, Xpra: target.Xpra, RDP: target.RDP}, connections: map[net.Conn]struct{}{}}
+	item := &session{view: model.RemoteSession{ID: id, Provider: target.Provider, TargetID: target.ID, TargetName: target.Name, Type: target.Type, State: model.RemoteSessionStarting, CreatedAt: now, Xpra: target.Xpra, RDP: target.RDP, VNC: target.VNC}, connections: map[net.Conn]struct{}{}}
 	s.mu.Lock()
 	s.sessions[id] = item
 	s.mu.Unlock()

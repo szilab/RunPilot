@@ -20,7 +20,7 @@ import (
 )
 
 // A ticket is short-lived and single-use. It authorizes only the already
-// snapshotted session, never a client-selected guacd or RDP destination.
+// snapshotted session, never a client-selected upstream destination.
 func (s *Server) handleRemoteTransportTicket(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	client, err := s.ctrl.Remote().Client(id)
@@ -28,8 +28,8 @@ func (s *Server) handleRemoteTransportTicket(w http.ResponseWriter, r *http.Requ
 		remoteError(w, err)
 		return
 	}
-	if client.Kind != remote.ClientGuacamole {
-		writeError(w, http.StatusConflict, errors.New("remote session does not use Guacamole"))
+	if client.Kind != remote.ClientGuacamole && client.Kind != remote.ClientNoVNC {
+		writeError(w, http.StatusConflict, errors.New("remote session does not use a browser transport"))
 		return
 	}
 	ticket, err := secureTicket()
@@ -37,18 +37,34 @@ func (s *Server) handleRemoteTransportTicket(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.rdpTicketMu.Lock()
-	s.rdpTickets[ticket] = remoteTransportTicket{SessionID: id, Expires: time.Now().Add(time.Minute)}
-	s.rdpTicketMu.Unlock()
+	s.transportTicketMu.Lock()
+	s.transportTickets[ticket] = remoteTransportTicket{SessionID: id, Expires: time.Now().Add(time.Minute)}
+	s.transportTicketMu.Unlock()
 	writeJSON(w, http.StatusCreated, map[string]string{"ticket": ticket})
 }
 
 func (s *Server) handleRemoteTransport(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if !s.consumeRDPTransportTicket(r.URL.Query().Get("ticket"), id) {
+	if !s.consumeRemoteTransportTicket(r.URL.Query().Get("ticket"), id) {
 		http.Error(w, "remote transport authorization required", http.StatusUnauthorized)
 		return
 	}
+	client, err := s.ctrl.Remote().Client(id)
+	if err != nil {
+		remoteError(w, err)
+		return
+	}
+	switch client.Kind {
+	case remote.ClientGuacamole:
+		s.handleRDPRemoteTransport(w, r, id)
+	case remote.ClientNoVNC:
+		s.handleVNCRemoteTransport(w, r, id)
+	default:
+		writeError(w, http.StatusConflict, errors.New("remote session does not use a browser transport"))
+	}
+}
+
+func (s *Server) handleRDPRemoteTransport(w http.ResponseWriter, r *http.Request, id string) {
 	// These markers distinguish an Azure/front-proxy WebSocket failure from a
 	// guacd failure. If neither marker is recorded, the request never reached
 	// RunPilot. They intentionally contain no ticket or credential data.
@@ -343,12 +359,12 @@ func rdpSetupDiagnostics(id, host string, port int, options model.RDPRemoteOptio
 	return fmt.Sprintf("RDP session %s\nguacd endpoint: %s\ntarget: %s:%d\ncredentials: %s\nsecurity: %s\nserver-layout: %s", id, net.JoinHostPort(host, strconv.Itoa(port)), options.Host, options.Port, credentialState, options.SecurityMode, layout)
 }
 
-func (s *Server) consumeRDPTransportTicket(ticket, id string) bool {
-	s.rdpTicketMu.Lock()
-	defer s.rdpTicketMu.Unlock()
-	value, ok := s.rdpTickets[ticket]
+func (s *Server) consumeRemoteTransportTicket(ticket, id string) bool {
+	s.transportTicketMu.Lock()
+	defer s.transportTicketMu.Unlock()
+	value, ok := s.transportTickets[ticket]
 	if ok {
-		delete(s.rdpTickets, ticket)
+		delete(s.transportTickets, ticket)
 	}
 	return ok && value.SessionID == id && time.Now().Before(value.Expires)
 }

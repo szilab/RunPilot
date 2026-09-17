@@ -2,14 +2,17 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/szilab/RunPilot/internal/core"
 	"github.com/szilab/RunPilot/internal/model"
 )
@@ -178,6 +181,99 @@ func TestRDPRemoteTargetHasNoCommandOrPasswordAndIssuesTransportTicket(t *testin
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), "ticket") {
 		t.Fatalf("RDP ticket=%d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestVNCTransportIsSessionScopedAndBridgesBinaryRFB(t *testing.T) {
+	ctrl, err := core.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	received := make(chan []byte, 1)
+	go func() {
+		conn, err := upstream.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = conn.Write([]byte("RFB 003.008\n"))
+		buffer := make([]byte, 32)
+		count, _ := conn.Read(buffer)
+		received <- append([]byte(nil), buffer[:count]...)
+		_, _ = conn.Write([]byte("server-response"))
+	}()
+	server, err := New(ctrl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := ctrl.Snapshot().Server.Token
+	port := upstream.Addr().(*net.TCPAddr).Port
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/remote/targets", bytes.NewBufferString(`{"name":"Local VNC","provider":"vnc","type":"desktop","vnc":{"host":"127.0.0.1","port":`+strconv.Itoa(port)+`}}`))
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create VNC=%d %s", response.Code, response.Body.String())
+	}
+	var target model.RemoteTarget
+	if err := json.NewDecoder(response.Body).Decode(&target); err != nil {
+		t.Fatal(err)
+	}
+	if target.Command.Path != "" || target.VNC == nil || target.VNC.Port != port {
+		t.Fatalf("VNC target=%#v", target)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/remote/targets/"+target.ID+"/sessions", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("start VNC=%d %s", response.Code, response.Body.String())
+	}
+	var session model.RemoteSession
+	if err := json.NewDecoder(response.Body).Decode(&session); err != nil {
+		t.Fatal(err)
+	}
+	if session.VNC == nil || session.VNC.Host != "127.0.0.1" || strings.Contains(response.Body.String(), "password") {
+		t.Fatalf("unsafe VNC session response=%s", response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/remote/sessions/"+session.ID+"/transport-ticket", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("VNC ticket=%d %s", response.Code, response.Body.String())
+	}
+	var ticket struct{ Ticket string }
+	if err := json.NewDecoder(response.Body).Decode(&ticket); err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/api/v1/remote/sessions/" + session.ID + "/transport?ticket=" + ticket.Ticket
+	ws, _, err := websocket.Dial(context.Background(), wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.CloseNow()
+	if err := ws.Write(context.Background(), websocket.MessageBinary, []byte("client-request")); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-received; !bytes.Equal(got, []byte("client-request")) {
+		t.Fatalf("upstream received %q", got)
+	}
+	messageType, data, err := ws.Read(context.Background())
+	if err != nil || messageType != websocket.MessageBinary || !bytes.Equal(data, []byte("RFB 003.008\n")) {
+		t.Fatalf("RFB greeting type=%v data=%q err=%v", messageType, data, err)
+	}
+	messageType, data, err = ws.Read(context.Background())
+	if err != nil || messageType != websocket.MessageBinary || !bytes.Equal(data, []byte("server-response")) {
+		t.Fatalf("RFB response type=%v data=%q err=%v", messageType, data, err)
 	}
 }
 

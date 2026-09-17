@@ -17,6 +17,7 @@ import (
 	"github.com/szilab/RunPilot/internal/processmgr"
 	"github.com/szilab/RunPilot/internal/remote"
 	"github.com/szilab/RunPilot/internal/remote/rdp"
+	"github.com/szilab/RunPilot/internal/remote/vnc"
 	"github.com/szilab/RunPilot/internal/remote/xpra"
 	"github.com/szilab/RunPilot/internal/scheduler"
 	"github.com/szilab/RunPilot/internal/software"
@@ -59,7 +60,7 @@ func Open(dataDir string) (*Controller, error) {
 		software:  software.NewManager(dataDir),
 		docker:    dockercompose.NewManager(dataDir),
 	}
-	c.remote = remote.New(dataDir, xpra.New(), rdp.New(func() model.GuacdConfig { return c.Snapshot().Remote.Guacd }))
+	c.remote = remote.New(dataDir, xpra.New(), rdp.New(func() model.GuacdConfig { return c.Snapshot().Remote.Guacd }), vnc.New())
 	if platform.CurrentCapabilities().DockerCompose {
 		c.storage = storage.NewRegistry(c.docker)
 	} else {
@@ -136,6 +137,11 @@ func (c *Controller) RemoteTargets() []model.RemoteTarget {
 			if err == nil {
 				targets[i].RDP = &options
 			}
+		case "vnc":
+			options, err := model.NormalizeVNCRemoteOptions(targets[i].VNC)
+			if err == nil {
+				targets[i].VNC = &options
+			}
 		}
 	}
 	return targets
@@ -186,6 +192,7 @@ func (c *Controller) UpsertRemoteTarget(target model.RemoteTarget) (model.Remote
 		}
 		target.Xpra = &options
 		target.RDP = nil
+		target.VNC = nil
 		if err := model.ValidateCommand(target.Command); err != nil {
 			return target, err
 		}
@@ -199,6 +206,21 @@ func (c *Controller) UpsertRemoteTarget(target model.RemoteTarget) (model.Remote
 		}
 		target.RDP = &options
 		target.Xpra = nil
+		target.VNC = nil
+		target.Command = model.CommandSpec{}
+		target.DBusMode = ""
+		target.ForwardDBus = false
+	case "vnc":
+		if target.Type != model.RemoteTargetDesktop {
+			return target, fmt.Errorf("VNC supports desktop sessions only")
+		}
+		options, err := model.NormalizeVNCRemoteOptions(target.VNC)
+		if err != nil {
+			return target, err
+		}
+		target.VNC = &options
+		target.Xpra = nil
+		target.RDP = nil
 		target.Command = model.CommandSpec{}
 		target.DBusMode = ""
 		target.ForwardDBus = false

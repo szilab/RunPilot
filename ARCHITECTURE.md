@@ -129,10 +129,19 @@ Remote Access is a capability with provider adapters. It owns persistent,
 administrator-configured Remote targets and ephemeral runtime sessions; it is
 not a generic command API and does not implement a display protocol. Targets
 reuse `CommandSpec` for command arguments, working directory, and environment.
-The current Xpra provider supports Linux application (`xpra start`) and desktop
-(`xpra start-desktop`) sessions. A provider advertises availability and explicit
-capabilities so a later VNC/noVNC, RDP/Guacamole, or Windows-oriented provider
-does not require redesigning the Remote API or UI.
+The Xpra provider supports Linux application (`xpra start`) and desktop (`xpra
+start-desktop`) sessions. Providers advertise availability and explicit
+capabilities while provider extensions remain typed target configuration.
+
+VNC is a desktop-only provider on Linux and Windows using the embedded noVNC
+1.7.0 browser client. It owns no external daemon and does not use websockify,
+guacd, or a native VNC client. Session creation normalizes and snapshots the
+VNC host, port, and connection timeout. A one-time, session-scoped WebSocket
+ticket authorizes binary RFB frames only; RunPilot calls that session's
+`Runtime.Dial()` closure to reach the captured TCP destination. The browser
+cannot supply or override a hostname, port, or upstream destination, so this
+bridge is not a generic TCP proxy. VNC credentials are supplied to noVNC only
+when the VNC server asks and are never persisted or logged.
 
 RDP is a desktop-only provider on Linux and Windows backed by Apache Guacamole
 `guacd`. The embedded static UI contains the official `guacamole-common-js`
