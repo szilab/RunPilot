@@ -566,6 +566,7 @@ func (s *Server) handleTerminalConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.CloseNow()
+	conn.SetReadLimit(websocketsecure.MaxEncryptedMessageSize)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	ticket, ok := s.consumeTerminalTicket(r.URL.Query().Get("ticket"))

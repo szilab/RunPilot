@@ -88,6 +88,7 @@ func (s *Server) handleRDPRemoteTransport(w http.ResponseWriter, r *http.Request
 		s.ctrl.Remote().AddDiagnostic(id, "browser tunnel upgrade failed: "+strings.TrimSpace(err.Error()))
 		return
 	}
+	ws.SetReadLimit(websocketsecure.MaxEncryptedMessageSize)
 	s.ctrl.Remote().AddDiagnostic(id, "browser tunnel upgraded")
 	secure, err := websocketsecure.ServerHandshake(r.Context(), ws, s.ctrl.Snapshot().Server.WebSocketPayloadMode)
 	if err != nil {

@@ -27,6 +27,7 @@ func (s *Server) handleVNCRemoteTransport(w http.ResponseWriter, r *http.Request
 		s.ctrl.Remote().AddDiagnostic(id, "noVNC browser tunnel upgrade failed: "+strings.TrimSpace(err.Error()))
 		return
 	}
+	ws.SetReadLimit(websocketsecure.MaxEncryptedMessageSize)
 	defer func() { _ = ws.Close(websocket.StatusNormalClosure, "") }()
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()

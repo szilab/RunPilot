@@ -12,25 +12,43 @@
 
   class SecureWebSocket {
     constructor(url, mode="disabled", protocols) {
-      this.url=url; this.mode=mode; this.protocols=protocols; this.socket=null; this.readyState=WebSocket.CONNECTING; this.binaryType="arraybuffer"; this.sendSequence=0n; this.receiveSequence=0n; this.sendChain=Promise.resolve();
+      this.url=url; this.mode=mode; this.protocols=protocols; this.socket=null; this._binaryType="arraybuffer"; this.sendSequence=0n; this.receiveSequence=0n; this.sendChain=Promise.resolve(); this.receiveChain=Promise.resolve(); this._failed=false; this._stateOverride=null;
       this.onopen=null; this.onmessage=null; this.onerror=null; this.onclose=null;
       this._start();
     }
+    get protocol() { return this.socket?.protocol || ""; }
+    get extensions() { return this.socket?.extensions || ""; }
+    get bufferedAmount() { return this.socket?.bufferedAmount || 0; }
+    get binaryType() { return this.socket?.binaryType || this._binaryType; }
+    set binaryType(value) { this._binaryType=value; if (this.socket) this.socket.binaryType=value; }
+    get readyState() { return this._stateOverride ?? this.socket?.readyState ?? WebSocket.CONNECTING; }
     async _start() {
       try {
         if (this.mode === "disabled") {
-          const socket=new WebSocket(this.url,this.protocols); this.socket=socket; socket.binaryType=this.binaryType;
-          socket.onopen=()=>{ this.readyState=WebSocket.OPEN; this.onopen?.(); }; socket.onmessage=event=>this.onmessage?.(event); socket.onerror=event=>this.onerror?.(event); socket.onclose=event=>{ this.readyState=WebSocket.CLOSED; this.onclose?.(event); }; return;
+          const socket=new WebSocket(this.url,this.protocols); this.socket=socket; socket.binaryType=this._binaryType;
+          socket.onopen=()=>this.onopen?.(); socket.onmessage=event=>this.onmessage?.(event); socket.onerror=event=>this.onerror?.(event); socket.onclose=event=>this.onclose?.(event); return;
         }
-        const keyPair=await crypto.subtle.generateKey({name:"ECDH",namedCurve:"P-256"},true,["deriveBits"]);
+        const keyPair=await crypto.subtle.generateKey({name:"ECDH",namedCurve:"P-256"},false,["deriveBits"]);
         const publicKey=new Uint8Array(await crypto.subtle.exportKey("raw",keyPair.publicKey));
         const clientRandom=randomBytes(32), hello=concat(MAGIC,new Uint8Array([VERSION,1]),publicKey,clientRandom);
-        const socket=new WebSocket(this.url,this.protocols); this.socket=socket; socket.binaryType="arraybuffer";
-        socket.onopen=async()=>{ try { socket.send(hello); const event=await new Promise((resolve,reject)=>{ socket.addEventListener("message",resolve,{once:true}); socket.addEventListener("error",reject,{once:true}); }); const serverHello=new Uint8Array(event.data instanceof ArrayBuffer ? event.data : await event.data.arrayBuffer()); await this._finish(keyPair.privateKey,clientRandom,serverHello); this.readyState=WebSocket.OPEN; this.onopen?.(); } catch (error) { this._fail(error); } };
+        const socket=new WebSocket(this.url,this.protocols); this.socket=socket; socket.binaryType=this._binaryType;
+        socket.onopen=async()=>{ try { socket.send(hello); const serverHello=await this._waitForServerHello(socket); await this._finish(keyPair.privateKey,clientRandom,serverHello); this.onopen?.(); } catch (error) { this._fail(error); } };
         socket.onmessage=event=>{ if(this.readyState!==WebSocket.OPEN)return; this._receive(event); };
         socket.onerror=event=>this.onerror?.(event);
         socket.onclose=event=>{ this.readyState=WebSocket.CLOSED; this.onclose?.(event); };
       } catch (error) { this._fail(error); }
+    }
+    _waitForServerHello(socket) {
+      return new Promise((resolve,reject)=>{
+        let settled=false;
+        const timer=setTimeout(()=>finish(reject,new Error("secure WebSocket handshake timed out")),10000);
+        const cleanup=()=>{ clearTimeout(timer); socket.removeEventListener("message",onMessage); socket.removeEventListener("error",onError); socket.removeEventListener("close",onClose); };
+        const finish=(callback,value)=>{ if(settled)return; settled=true; cleanup(); callback(value); };
+        const onMessage=async event=>{ try { const data=event.data instanceof ArrayBuffer ? event.data : await event.data.arrayBuffer(); finish(resolve,new Uint8Array(data)); } catch (error) { finish(reject,error); } };
+        const onError=()=>finish(reject,new Error("secure WebSocket handshake failed"));
+        const onClose=()=>finish(reject,new Error("secure WebSocket closed during handshake"));
+        socket.addEventListener("message",onMessage); socket.addEventListener("error",onError); socket.addEventListener("close",onClose);
+      });
     }
     async _finish(privateKey, clientRandom, data) {
       if(data.length!==103 || !equal(data.slice(0,4),MAGIC) || data[4]!==VERSION || data[5]!==2) throw new Error("invalid secure WebSocket server hello");
@@ -44,15 +62,24 @@
     }
     send(data) {
       if(this.readyState!==WebSocket.OPEN) throw new Error("secure WebSocket is not open");
+      if (this.mode === "disabled") { this.socket.send(data); return; }
       const bytes=typeof data === "string" ? textEncoder.encode(data) : new Uint8Array(data), kind=typeof data === "string" ? 1 : 2, header=concat(TAG,new Uint8Array([VERSION,kind]),u64(this.sendSequence));
       const sequence=this.sendSequence++;
-      this.sendChain=this.sendChain.then(()=>crypto.subtle.encrypt({name:"AES-GCM",iv:nonce(this.writeNonce,sequence),additionalData:header},this.writeKey,bytes)).then(cipher=>{ if(this.readyState===WebSocket.OPEN)this.socket.send(concat(header,new Uint8Array(cipher))); });
+      this.sendChain=this.sendChain.catch(()=>{}).then(()=>crypto.subtle.encrypt({name:"AES-GCM",iv:nonce(this.writeNonce,sequence),additionalData:header},this.writeKey,bytes)).then(cipher=>{ if(this.readyState===WebSocket.OPEN)this.socket.send(concat(header,new Uint8Array(cipher))); }).catch(error=>this._fail(error));
     }
     close(code, reason) { this.socket?.close(code,reason); }
     _receive(event) {
-      Promise.resolve(event.data.arrayBuffer?.() ?? event.data).then(async raw=>{ const data=new Uint8Array(raw); if(data.length<30 || !equal(data.slice(0,4),TAG) || data[4]!==VERSION) throw new Error("invalid encrypted WebSocket envelope"); const view=new DataView(data.buffer,data.byteOffset,data.byteLength), sequence=view.getBigUint64(6); if(sequence!==this.receiveSequence) throw new Error("invalid encrypted WebSocket sequence"); const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:nonce(this.readNonce,sequence),additionalData:data.slice(0,14)},this.readKey,data.slice(14)); this.receiveSequence++; const kind=data[5]===1?"text":"binary"; this.onmessage?.({data:kind==="text"?textDecoder.decode(plain):plain.buffer}); }).catch(error=>this._fail(error));
+      this.receiveChain=this.receiveChain.then(()=>this._decrypt(event)).catch(error=>this._fail(error));
     }
-    _fail(error) { this.readyState=WebSocket.CLOSED; this.onerror?.(error); this.socket?.close(1008,"secure WebSocket negotiation failed"); }
+    async _decrypt(event) {
+      if (this._failed) return;
+      const raw=event.data instanceof ArrayBuffer ? event.data : await event.data.arrayBuffer();
+      const data=new Uint8Array(raw); if(data.length<30 || !equal(data.slice(0,4),TAG) || data[4]!==VERSION) throw new Error("invalid encrypted WebSocket envelope");
+      const view=new DataView(data.buffer,data.byteOffset,data.byteLength), sequence=view.getBigUint64(6); if(sequence!==this.receiveSequence) throw new Error("invalid encrypted WebSocket sequence");
+      const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:nonce(this.readNonce,sequence),additionalData:data.slice(0,14)},this.readKey,data.slice(14));
+      this.receiveSequence++; const kind=data[5]===1?"text":"binary"; this.onmessage?.({data:kind==="text"?textDecoder.decode(plain):plain.buffer});
+    }
+    _fail(error) { if(this._failed)return; this._failed=true; this._stateOverride=WebSocket.CLOSED; this.onerror?.(error); this.socket?.close(1008,"secure WebSocket negotiation failed"); }
   }
   window.RunPilotSecureWebSocket=SecureWebSocket;
 })();

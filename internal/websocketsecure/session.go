@@ -12,19 +12,24 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"time"
 
 	"github.com/coder/websocket"
 	"golang.org/x/crypto/hkdf"
 )
 
 const (
-	Version       byte = 1
-	ModeDisabled       = "disabled"
-	ModeOptional       = "optional"
-	ModeRequired       = "required"
-	messageBinary      = websocket.MessageBinary
-	messageText        = websocket.MessageText
-	maxSequence        = ^uint64(0)
+	Version                 byte  = 1
+	ModeDisabled                  = "disabled"
+	ModeOptional                  = "optional"
+	ModeRequired                  = "required"
+	messageBinary                 = websocket.MessageBinary
+	messageText                   = websocket.MessageText
+	maxSequence                   = ^uint64(0)
+	MaxPlaintextMessageSize int64 = 1 << 20
+	EnvelopeOverhead        int64 = 30
+	MaxEncryptedMessageSize       = MaxPlaintextMessageSize + EnvelopeOverhead
+	HandshakeTimeout              = 10 * time.Second
 )
 
 var (
@@ -67,11 +72,13 @@ func NormalizeMode(mode string) string {
 // ServerHandshake negotiates one fresh session for one WebSocket connection.
 // In optional mode a non-handshake first frame is retained and exposed by Read.
 func ServerHandshake(ctx context.Context, raw rawConn, mode string) (*Conn, error) {
+	handshakeCtx, cancel := context.WithTimeout(ctx, HandshakeTimeout)
+	defer cancel()
 	mode = NormalizeMode(mode)
 	if mode == ModeDisabled {
 		return &Conn{raw: raw, plain: true}, nil
 	}
-	kind, data, err := raw.Read(ctx)
+	kind, data, err := raw.Read(handshakeCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +103,7 @@ func ServerHandshake(ctx context.Context, raw rawConn, mode string) (*Conn, erro
 	if _, err := io.ReadFull(rand.Reader, serverRandom); err != nil {
 		return nil, fmt.Errorf("generate server challenge: %w", err)
 	}
-	if err := raw.Write(ctx, messageBinary, serverHello(serverKey.PublicKey().Bytes(), serverRandom)); err != nil {
+	if err := raw.Write(handshakeCtx, messageBinary, serverHello(serverKey.PublicKey().Bytes(), serverRandom)); err != nil {
 		return nil, err
 	}
 	shared, err := serverKey.ECDH(clientPublic)
