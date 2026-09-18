@@ -3,24 +3,30 @@ let token = localStorage.getItem("runpilot.token") || "";
 let currentPage = "overview";
 let processes = [];
 let jobs = [];
+let taskFilter = "all";
 let storage = [], storageLocation = null, storagePath = "";
 let softwareProviders = [], softwareProviderID = "", softwarePackages = [], softwareUpdates = [], softwareSearchResults = [], softwareBuckets = [], softwareTab = "installed", softwareBusy = false, softwareBusyLabel = "", softwareLoading = false, softwareLoadingKey = "", softwareLoadedKey = "", softwareLoadSequence = 0, softwareRootDrafts = {};
-let storageClipboard = null, editingTextPath = null, storageShowHidden = false;
+let storageClipboard = null, editingTextPath = null, storageShowHidden = false, storagePathCapabilities = null;
 let overview = null;
-let logTimer = null;
+let systemInfo = null, terminalInfo = null, terminalTabs = [], activeTerminalID = "";
+let dockerRuntime = null, dockerProjects = [], dockerVolumes = [], dockerNetworks = [], dockerBusy = new Set(), dockerPendingContainerStates = new Map(), dockerProjectErrors = new Map(), dockerEditing = null, dockerAttachTerminal = null;
+let remoteProviders = [], remoteTargets = [], remoteSessions = [], remoteSessionID = "", remoteStartingTargets = new Set(), remoteRDPInteraction = null, remoteVNCInteraction = null, remotePendingTarget = null, remoteVNCPendingCredentials = null;
+let logTimer = null, toastTimer = null;
 let logSource = null;
 let refreshTimer = null;
 let refreshing = false;
+let connectionTimer = null, connectionOnline = false, connectionChecked = false, connectionWasLost = false, reloadingAfterReconnect = false;
 const themeStorageKey = "runpilot.theme";
+const sidebarStorageKey = "runpilot.sidebar-collapsed";
 
 const pageMeta = {
-  overview: ["Overview", "RunPilot service and resource health at a glance.", null],
-  processes: ["Processes", "Long-running applications supervised by the RunPilot service.", "Add process"],
-  jobs: ["Scheduler", "One-shot commands launched on an interval, daily time or cron expression.", "Add job"],
-  backups: ["Backups", "Scheduled filesystem backups powered by Windows built-in tools.", "Add backup"],
-  storage: ["Storage", "Helyi fájlrendszer kezelése.", "Tároló hozzáadása"],
-  software: ["Software", "Install and maintain portable applications in a RunPilot-managed Scoop root.", null],
-  history: ["History", "Recent process exits and job executions with exit code and captured output.", null],
+  overview: ["Overview", null],
+  storage: ["Storage", null],
+  tasks: ["Tasks", "Add task"],
+  software: ["Software", null],
+  terminal: ["Terminal", null],
+  docker: ["Docker", "Create project"],
+  remote: ["Remote Access", "Add target"],
 };
 
 async function api(path, options = {}) {
@@ -29,13 +35,14 @@ async function api(path, options = {}) {
   if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const res = await fetch(path, {...options, headers});
   if (res.status === 401) {
-    setConnected(false);
-    throw new Error("Unauthorized");
+    const error = new Error("Unauthorized"); error.serverReachable = true;
+    throw error;
   }
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
     try { message = (await res.json()).error || message; } catch {}
-    throw new Error(message);
+    const error = new Error(message); error.serverReachable = true;
+    throw error;
   }
   if (res.status === 204) return null;
   const ct = res.headers.get("content-type") || "";
@@ -43,8 +50,21 @@ async function api(path, options = {}) {
 }
 
 function setConnected(ok) {
+  if (!ok && (connectionOnline || connectionChecked)) connectionWasLost = true;
+  connectionChecked = true;
+  const restored = ok && connectionWasLost;
+  connectionOnline = ok;
   $("connectionDot").classList.toggle("ok", ok);
-  $("connectionText").textContent = ok ? "Connected" : "Offline";
+  const mode = systemInfo?.websocketPayloadMode || "disabled";
+  const encryptionStatus = mode === "required" ? "Encrypted" : "Normal";
+  $("connectionWarning").classList.toggle("hidden", location.protocol !== "http:");
+  $("connectionText").textContent = ok ? `Connected · ${encryptionStatus}` : "Offline";
+  $("connectionDot").title = ok ? encryptionStatus : "RunPilot is offline";
+  $("connectionText").title = ok ? encryptionStatus : "RunPilot is offline";
+  if (restored && !reloadingAfterReconnect) {
+    reloadingAfterReconnect = true;
+    window.location.reload();
+  }
 }
 
 function applyTheme(theme) {
@@ -65,12 +85,34 @@ function initializeTheme() {
   });
 }
 
-function toast(message) {
-  const el = $("toast");
-  el.textContent = message;
-  el.classList.remove("hidden");
-  setTimeout(() => el.classList.add("hidden"), 2600);
+function setSidebarCollapsed(collapsed) {
+  const shell=document.querySelector(".shell"), changing=shell.classList.contains("sidebar-collapsed")!==collapsed;
+  if (changing) remoteRDPInteraction?.layoutTransitionStarted?.();
+  shell.classList.toggle("sidebar-collapsed", collapsed);
+  $("sidebarToggle").setAttribute("aria-expanded", String(!collapsed));
+  const label = collapsed ? "Expand sidebar" : "Collapse sidebar";
+  $("sidebarToggle").title = label;
+  $("sidebarToggle").setAttribute("aria-label", label);
+  localStorage.setItem(sidebarStorageKey, String(collapsed));
 }
+
+function initializeSidebar() {
+  setSidebarCollapsed(localStorage.getItem(sidebarStorageKey) === "true");
+  $("sidebarToggle").addEventListener("click", () => setSidebarCollapsed(!document.querySelector(".shell").classList.contains("sidebar-collapsed")));
+}
+
+function toast(message, level = "info") {
+  const el = $("toast");
+  clearTimeout(toastTimer);
+  el.replaceChildren();
+  const content=document.createElement("div"), title=document.createElement("strong"), detail=document.createElement("span"), close=document.createElement("button");
+  title.textContent=level === "error" ? "Error" : "Notice"; detail.textContent=message;
+  content.append(title,detail);
+  close.type="button"; close.className="toast-close"; close.textContent="×"; close.setAttribute("aria-label","Dismiss notification"); close.addEventListener("click",()=>el.classList.add("hidden"));
+  el.append(content,close); el.classList.toggle("toast-error",level === "error"); el.setAttribute("role",level === "error" ? "alert" : "status"); el.classList.remove("hidden");
+  toastTimer=setTimeout(()=>el.classList.add("hidden"),level === "error" ? 10000 : 4000);
+}
+function toastError(message) { toast(message,"error"); }
 
 function splitArgs(text) {
   const out = [];
@@ -131,6 +173,7 @@ function populateCommandEditor(prefix, command = {}) {
   });
   updateEnvironmentEmpty(prefix);
   setCommandError(prefix);
+	if (systemInfo?.capabilities) configurePlatformAwareFields(systemInfo.capabilities);
 }
 
 function commandFromEditor(prefix) {
@@ -150,7 +193,7 @@ function commandFromEditor(prefix) {
     }
     const canonicalName = name.toUpperCase();
     if (names.has(canonicalName)) {
-      setCommandError(prefix, `Environment variables "${names.get(canonicalName)}" and "${name}" conflict on Windows.`);
+      setCommandError(prefix, `Environment variables "${names.get(canonicalName)}" and "${name}" conflict on case-insensitive platforms.`);
       return null;
     }
     names.set(canonicalName, name);
@@ -233,12 +276,13 @@ async function refresh() {
   if (refreshing || !token) return;
   refreshing = true;
   try {
-    const [p, j, h, o, st, sw] = await Promise.all([
+    const [p, j, o, st, sw, docker, remote] = await Promise.all([
       api("api/v1/processes"),
       api("api/v1/jobs"),
-      api("api/v1/runs?lines=100"),
       api("api/v1/overview"), api("api/v1/storage"),
-      currentPage === "software" ? api("api/v1/software/providers") : Promise.resolve(null)
+      currentPage === "software" ? api("api/v1/software/providers") : Promise.resolve(null),
+      currentPage === "docker" ? Promise.all([api("api/v1/docker/projects"), api("api/v1/docker/volumes"), api("api/v1/docker/networks")]) : Promise.resolve(null),
+      currentPage === "remote" ? Promise.all([api("api/v1/remote/providers"), api("api/v1/remote/targets"), api("api/v1/remote/sessions")]) : Promise.resolve(null)
     ]);
     processes = p;
     jobs = j;
@@ -255,15 +299,15 @@ async function refresh() {
       }
     }
     renderOverview();
-    renderProcesses();
-    renderJobs();
-    renderHistory(h);
+    renderTasks();
     renderStorage();
     if (currentPage === "software") renderSoftware();
+    if (docker) applyDockerSnapshot(docker);
+    if (remote) { [remoteProviders, remoteTargets, remoteSessions] = remote; renderRemote(); }
     setConnected(true);
   } catch (e) {
     softwareLoading = false; softwareLoadingKey = "";
-    setConnected(false);
+    setConnected(!!e.serverReachable);
     if (e.message === "Unauthorized") $("loginDialog").showModal();
     else toast(e.message);
     if (currentPage === "software") renderSoftware();
@@ -272,16 +316,157 @@ async function refresh() {
   }
 }
 
+function remoteStatus(state) { return state === "available" ? "running" : state === "not-installed" || state === "unsupported" ? "stopped" : "failure"; }
+function guacdValue() { return {host:$("guacdHost").value.trim(),port:Number($("guacdPort").value),tls:$("guacdTLS").checked,connectTimeoutSeconds:Number($("guacdTimeout").value)}; }
+function setGuacdError(message="") { $("guacdSettingsError").textContent=message; $("guacdSettingsError").classList.toggle("hidden",!message); }
+function setGuacdStatus(message="", error=false) { const node=$("guacdSettingsStatus"); node.textContent=message; node.classList.toggle("hidden",!message); node.classList.toggle("form-error",error); }
+function validateGuacdForm(value) { if(!value.host) return "guacd host is required"; if(!Number.isInteger(value.port)||value.port<1||value.port>65535) return "guacd port must be between 1 and 65535"; if(!Number.isInteger(value.connectTimeoutSeconds)||value.connectTimeoutSeconds<1||value.connectTimeoutSeconds>60) return "guacd connect timeout must be between 1 and 60 seconds"; return ""; }
+async function openGuacdSettings() { setGuacdError(); setGuacdStatus(); try { const value=await api("api/v1/remote/guacd"); $("guacdHost").value=value.host||"127.0.0.1"; $("guacdPort").value=value.port||4822; $("guacdTLS").checked=!!value.tls; $("guacdTimeout").value=value.connectTimeoutSeconds||5; $("guacdSettingsDialog").showModal(); } catch(e) { toastError(e.message); } }
+function remoteProviderHint(provider) { return provider.state === "available" ? "" : provider.installHint || provider.message || "This provider is not currently available."; }
+function remoteProviderCard(provider) { const hint=remoteProviderHint(provider), metadata=[provider.platform,provider.version].filter(Boolean).join(" · "), rdp=provider.id==="rdp", summary=provider.message ? `<div class="meta">${escapeHtml(provider.message)}</div>` : (metadata ? `<div class="meta">${escapeHtml(metadata)}</div>` : ""); return `<article class="docker-card remote-provider-card"><div class="docker-card-head"><div><h2>${escapeHtml(provider.name)}</h2>${summary}</div><div class="remote-provider-status"><span class="status ${remoteStatus(provider.state)}">${escapeHtml(provider.state)}</span>${hint&&!rdp ? `<span class="provider-info" tabindex="0" role="img" aria-label="Provider installation hint" data-tooltip="${escapeHtml(hint)}">ⓘ</span>` : ""}</div></div></article>`; }
+function remoteTargetCard(target, sessions) {
+  const starting = remoteStartingTargets.has(target.id);
+  const endpoint = target.provider === "rdp" ? target.rdp : target.provider === "vnc" ? target.vnc : null;
+  const detail = endpoint ? `${endpoint.host || ""}${endpoint.port ? `:${endpoint.port}` : ""}` : `${target.type} · ${target.command?.path || ""}`;
+  const session = sessions[0];
+  const statusState = session ? session.state : "idle";
+  const sessionDetails = sessions.map(session => `<div class="remote-target-session"><span class="meta">Started ${escapeHtml(fmtDate(session.startedAt || session.createdAt))}</span>${session.message ? `<span class="meta" title="${escapeHtml(session.message)}">${escapeHtml(session.message)}</span>` : ""}${session.failure ? `<span class="form-error">${escapeHtml(session.failure)}</span>` : ""}</div>`).join("");
+  const diagnoseButton = session ? `<button class="button secondary small" onclick="openRemoteDiagnostics('${session.id}')">Diagnostics</button>` : `<button class="button secondary small" disabled>Diagnostics</button>`;
+  const openButton = session ? `<button class="button primary small remote-open-button" ${session.state === "running" ? "" : "disabled"} onclick="openRemoteSession('${session.id}')">Open</button>` : `<button class="button primary small remote-open-button" ${!starting ? "" : "disabled"} aria-busy="${starting}" onclick="startRemoteSession('${target.id}')">${starting ? '<span class="spinner remote-button-spinner" aria-hidden="true"></span>Starting…' : "Open"}</button>`;
+  return `<article class="docker-card remote-card"><div class="docker-card-head"><div><h2>${escapeHtml(target.name)}</h2><div class="meta">${escapeHtml(detail)}</div></div><div class="remote-card-status"><span class="status ${escapeHtml(statusState)}">${escapeHtml(statusState)}</span><span class="status ${escapeHtml(target.provider === "xpra" ? "installed" : "running")}">${escapeHtml(target.provider)}</span></div></div>${sessionDetails}<div class="row-actions"><button class="button danger small" onclick="deleteRemoteTarget('${target.id}')">Delete</button>${diagnoseButton}<button class="button secondary small" onclick="editRemoteTarget('${target.id}')">Edit</button>${openButton}</div></article>`;
+}
+function renderRemote() {
+  if (!$("remoteProviders")) return;
+  $("remoteProviders").innerHTML = remoteProviders.map(remoteProviderCard).join("") || `<div class="empty compact"><h2>No providers registered</h2></div>`;
+  const activeByTarget = new Map();
+  remoteSessions.filter(session => ["starting", "running", "stopping"].includes(session.state)).forEach(session => { const sessions=activeByTarget.get(session.targetId) || []; sessions.push(session); activeByTarget.set(session.targetId, sessions); });
+  $("remoteTargets").innerHTML = remoteTargets.map(target => remoteTargetCard(target, activeByTarget.get(target.id) || [])).join("");
+  $("remoteTargetsEmpty").classList.toggle("hidden", remoteTargets.length > 0);
+  if (remoteSessionID && !remoteSessions.some(session => session.id === remoteSessionID)) {
+    closeRemoteSession();
+    toast("The remote session is no longer available.");
+    return;
+  }
+  if (remoteSessionID) renderRemoteSession();
+}
+function remoteXpraDefaults() { return remoteProviders.find(provider => provider.id === "xpra")?.xpraDefaults || {}; }
+function setRemoteXpraSettings(options = remoteXpraDefaults()) { $("remoteXpraProfile").value=options.profile || "recommended"; $("remoteXpraEncoding").value=options.encoding || "webp"; $("remoteXpraVideo").checked=!!options.video; $("remoteXpraDPIMode").value=options.dpiMode || "auto"; $("remoteXpraDPI").value=options.dpi || 96; $("remoteXpraLaunchAfterConnect").checked=options.launchAfterConnect !== false; $("remoteXpraClipboard").checked=options.clipboard !== false; $("remoteXpraDynamicResize").checked=options.dynamicResize !== false; $("remoteXpraMenu").value=options.menu || "autohide"; $("remoteXpraToolbarPosition").value=options.toolbarPosition || "top-left"; updateRemoteXpraSettings(); }
+function updateRemoteXpraSettings() { const provider=$("remoteTargetProvider").value, xpra=provider === "xpra", rdp=provider === "rdp", vnc=provider === "vnc", customDPI=$("remoteXpraDPIMode").value === "custom"; $("remoteXpraSettings").classList.toggle("hidden",!xpra); $("remoteRDPSettings").classList.toggle("hidden",!rdp); $("remoteVNCSettings").classList.toggle("hidden",!vnc); document.querySelectorAll(".remote-xpra-only").forEach(node=>node.classList.toggle("hidden",!xpra)); $("remoteXpraDPIWrap").classList.toggle("hidden",!xpra || !customDPI); $("remoteXpraDPI").required=xpra && customDPI; $("remotePath").required=xpra; $("remoteRDPHost").required=rdp; $("remoteVNCHost").required=vnc; if (!xpra) $("remoteTargetType").value="desktop"; }
+function applyRemoteXpraProfile() { const profile=$("remoteXpraProfile").value; const values={recommended:["webp",false],automatic:["auto",true],compatibility:["rgb",false]}; if (values[profile]) { $("remoteXpraEncoding").value=values[profile][0]; $("remoteXpraVideo").checked=values[profile][1]; } }
+function splitRDPUsername(value) { const text=(value||"").trim(), separator=text.indexOf("\\"); return separator > 0 ? {domain:text.slice(0,separator),username:text.slice(separator+1)} : {domain:"",username:text}; }
+function formatRDPUsername(username, domain) { return domain ? `${domain}\\${username}` : username||""; }
+function populateRemoteProviderSelect(selected, editing) { const select=$("remoteTargetProvider"), providers=remoteProviders.length ? remoteProviders : [{id:selected||"xpra",name:selected||"Xpra",state:"available"}]; select.innerHTML=providers.map(provider => `<option value="${escapeHtml(provider.id)}" ${provider.state === "available" || provider.id === selected ? "" : "disabled"}>${escapeHtml(provider.name)}</option>`).join(""); select.value=selected || providers.find(provider => provider.state === "available")?.id || providers[0].id; select.disabled=editing; }
+function updateRemoteTargetDialogCopy(editing=!!$("remoteTargetId").value) { const provider=$("remoteTargetProvider").value, label=provider === "rdp" ? "RDP" : provider === "vnc" ? "VNC" : "Xpra"; $("remoteTargetDialogTitle").textContent=editing ? `Edit ${label} target` : "Add remote target"; $("remoteTargetDialogDescription").textContent=provider === "rdp" ? "Save a desktop endpoint; credentials are requested each time you connect." : provider === "vnc" ? "Save a VNC desktop endpoint. noVNC requests credentials only when the VNC server requires them." : "Launch an application or desktop in an isolated Xpra session."; }
+function openRemoteTarget(existing = null, providerID = "xpra") { const provider=existing?.provider||providerID; $("remoteTargetForm").reset(); populateRemoteProviderSelect(provider, !!existing); $("remoteTargetId").value=existing?.id||""; $("remoteTargetName").value=existing?.name||""; $("remoteTargetType").value=existing?.type||"application"; $("remoteDBusMode").value=existing?.dbusMode || (existing?.forwardDbus ? "host-session" : "isolated"); setRemoteXpraSettings(existing?.xpra || remoteXpraDefaults()); const rdp=existing?.rdp||{}, vnc=existing?.vnc||{}; $("remoteRDPHost").value=rdp.host||""; $("remoteRDPPort").value=rdp.port||3389; $("remoteRDPUsername").value=formatRDPUsername(rdp.username,rdp.domain); $("remoteRDPSecurity").value=rdp.securityMode||"automatic"; $("remoteRDPLayout").value=rdp.serverLayout||""; $("remoteRDPResize").value=rdp.resizeMethod||"display-update"; $("remoteRDPCertificate").value=rdp.certificatePolicy||"validate"; $("remoteRDPTimeout").value=rdp.timeoutSeconds||10; $("remoteRDPClipboard").value=rdp.clipboardNormalization||"preserve"; $("remoteRDPPerformance").value=rdp.performanceProfile||"balanced"; $("remoteVNCHost").value=vnc.host||""; $("remoteVNCPort").value=vnc.port||5900; $("remoteVNCConfigUsername").value=vnc.username||""; $("remoteVNCTimeout").value=vnc.connectTimeoutSeconds||10; populateCommandEditor("remote",existing?.command||{interpreter:"direct"}); updateRemoteXpraSettings(); updateRemoteTargetDialogCopy(!!existing); $("remoteTargetDialog").showModal(); }
+function editRemoteTarget(id) { openRemoteTarget(remoteTargets.find(target => target.id === id)); }
+async function deleteRemoteTarget(id) { if (!confirm("Delete this remote target?")) return; try { await api(`api/v1/remote/targets/${id}`,{method:"DELETE"}); await refresh(); } catch (e) { toast(e.message); } }
+function promptRDPConnection(target) { remotePendingTarget=target; $("remoteRDPConnectTitle").textContent=`Connect to ${target.name||"RDP target"}`; $("remoteRDPConnectUsername").value=formatRDPUsername(target.rdp?.username,target.rdp?.domain); $("remoteRDPConnectPassword").value=""; $("remoteRDPConnectDialog").showModal(); }
+async function startRemoteSession(id) { const target=remoteTargets.find(item=>item.id===id); if (target?.provider === "rdp") { promptRDPConnection(target); return; } await beginRemoteSession(id); }
+async function beginRemoteSession(id, credentials=null) { if (remoteStartingTargets.has(id)) return; remoteStartingTargets.add(id); renderRemote(); try { const session=await api(`api/v1/remote/targets/${id}/sessions`,{method:"POST",body:credentials ? JSON.stringify(credentials) : undefined}); if (credentials) credentials.password=""; await refresh(); await openRemoteSession(session.id,credentials); } catch (e) { toastError(e.message); await refresh(); } finally { remoteStartingTargets.delete(id); if (currentPage === "remote") renderRemote(); } }
+async function stopRemoteSession(id) {
+  // Close the local client first so its session-bound tunnel is released before
+  // returning to the Remote overview.
+  const closingCurrentSession = remoteSessionID === id;
+  if (closingCurrentSession) closeRemoteSession();
+  try {
+    await api(`api/v1/remote/sessions/${id}`, {method: "DELETE"});
+    await refresh();
+  } catch (e) {
+    toastError(e.message);
+  }
+}
+async function openRemoteDiagnostics(id) { const session=remoteSessions.find(item=>item.id===id); openLog(`${session?.targetName || "Remote session"} diagnostics`, async () => { const details=await api(`api/v1/remote/sessions/${id}/diagnostics`); return details.log || details.session.message || "No Xpra diagnostics were captured."; }); }
+function focusRemoteClient() {
+  if (!remoteSessionID) return;
+  const client = remoteRDPInteraction ? $("remoteRDP") : remoteVNCInteraction ? $("remoteVNC") : $("remoteFrame");
+  client.focus({preventScroll: true});
+}
+async function openRemoteSession(id, credentials=null) { const session=remoteSessions.find(item=>item.id===id); if (session?.provider === "rdp" && !credentials) { promptRDPConnection({name:session.targetName,rdp:session.rdp,sessionID:id}); return; } remoteSessionID=id; setPage("remote",false); $("remoteSessionError").classList.add("hidden"); $("remoteLoading").classList.remove("hidden"); renderRemoteSession(); try { if (session?.provider === "rdp") await openRDPRemoteSession(session,credentials); else if (session?.provider === "vnc") await openVNCRemoteSession(session); else { const ticket=await api(`api/v1/remote/sessions/${id}/client-ticket`,{method:"POST"}); const frame=$("remoteFrame"); $("remoteRDP").classList.add("hidden"); $("remoteVNC").classList.add("hidden"); frame.classList.remove("hidden"); frame.src=`api/v1/remote/sessions/${encodeURIComponent(id)}/client/?ticket=${encodeURIComponent(ticket.ticket)}`; } history.replaceState(null,"",`?remoteSession=${encodeURIComponent(id)}`); } catch(e) { closeRemoteSession(); toastError(`Remote session unavailable: ${e.message}`); } }
+function renderRemoteSession() { const session=remoteSessions.find(item=>item.id===remoteSessionID); document.querySelector("main").classList.add("remote-active"); $("remoteOverview").classList.add("hidden"); $("remoteSessionView").classList.remove("hidden"); $("remoteSessionName").textContent=session?.targetName||"Remote session"; $("remoteSessionMeta").textContent=session ? `${session.state} · ${fmtDate(session.startedAt || session.createdAt)}` : "Loading session…"; $("remoteStop").disabled=!session || !["starting","running","stopping"].includes(session.state); $("remoteSessionNotice").textContent=session?.message || ""; $("remoteSessionNotice").classList.toggle("hidden", !session?.message); }
+function closeRemoteSession() {
+  const rdpInteraction = remoteRDPInteraction, vncInteraction = remoteVNCInteraction;
+  remoteSessionID = "";
+  remoteRDPInteraction = null;
+  remoteVNCInteraction = null;
+  remoteVNCPendingCredentials = null;
+  if ($("remoteVNCCredentialsDialog").open) $("remoteVNCCredentialsDialog").close();
+  // Restore navigation before asking the embedded client to tear down. Its
+  // session may already be gone when the remote side or Stop button ended it.
+  document.querySelector("main").classList.remove("remote-active");
+  $("remoteFrame").src = "about:blank";
+  $("remoteFrame").classList.remove("hidden");
+  $("remoteRDP").classList.remove("rdp-active");
+  $("remoteRDP").classList.add("hidden");
+  $("remoteVNC").replaceChildren();
+  $("remoteVNC").classList.remove("vnc-active");
+  $("remoteVNC").classList.add("hidden");
+  $("remoteLoading").classList.add("hidden");
+  $("remoteSessionNotice").classList.add("hidden");
+  $("remoteOverview").classList.remove("hidden");
+  $("remoteSessionView").classList.add("hidden");
+  history.replaceState(null, "", location.pathname);
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  try {
+    rdpInteraction?.shutdown();
+    vncInteraction?.shutdown();
+  } catch (error) {
+    console.warn("RDP client shutdown completed after a transport error.", error);
+  }
+}
+
+// WebSocketTunnel appends the argument passed to client.connect() after "?".
+// Keep its endpoint query-free and supply the one-time ticket there; otherwise
+// Guacamole creates a malformed URL ending in "?undefined".
+function remoteTransportURL(id) { const url=new URL(`api/v1/remote/sessions/${encodeURIComponent(id)}/transport`,document.baseURI); url.protocol=url.protocol === "https:" ? "wss:" : "ws:"; return url.toString(); }
+function remoteTransportParams(ticket, options) { return RunPilotRDPSize.transportParams(ticket,options); }
+function nextAnimationFrame() { return new Promise(resolve=>requestAnimationFrame(resolve)); }
+function currentRDPSurfaceSize(container) { const width=Math.round(container.clientWidth), height=Math.round(container.clientHeight); return width>0&&height>0 ? {width,height} : null; }
+async function initialRDPSurfaceSize(container) { const measured=await RunPilotRDPSize.measureAfterLayout(nextAnimationFrame,()=>currentRDPSurfaceSize(container)); const resolved=RunPilotRDPSize.resolveInitialSize(measured); if(resolved.fallback) console.warn("initial RDP surface unavailable; using fallback 640x480"); else console.debug(`initial RDP surface size: ${resolved.width}x${resolved.height}`); return resolved; }
+function guacamoleTunnelError(status) { const code=Number(status?.code), message=String(status?.message||""); if(message.includes("Could not establish tunnel to guacd")) { const detail=message.replace(/^512\s+/,"").trim(); return `${detail}. Check Remote session diagnostics.${Number.isFinite(code) ? ` (${code})` : ""}`; } const descriptions={512:"Guacamole server error",513:"Guacamole server is busy",514:"The upstream RDP connection timed out",515:"The upstream RDP connection failed",516:"The requested RDP resource was not found",517:"The RDP resource is in conflict",518:"The RDP resource was closed",519:"Guacamole could not find the upstream RDP service",520:"The upstream RDP service is unavailable",521:"The Guacamole session is in conflict",522:"The Guacamole session timed out",523:"The Guacamole session was closed",768:"Invalid Guacamole tunnel request",769:"Guacamole tunnel authorization failed",771:"Guacamole tunnel access was denied",776:"The Guacamole client timed out",781:"The Guacamole client was too slow",783:"Unsupported Guacamole client message",797:"Too many Guacamole clients"}; if(Number.isFinite(code) && descriptions[code]) return `${descriptions[code]}. Check Remote session diagnostics. (${code})`; return `RDP session ended: ${message||"connection closed"}${Number.isFinite(code) ? ` (${code})` : ""}`; }
+function guacamoleClientError(status) { const code=Number(status?.code), message=String(status?.message||"").trim(); return `Guacamole client/RDP error: ${message||"remote desktop connection failed"}${Number.isFinite(code) ? ` (${code})` : ""}. Check Remote session diagnostics.`; }
+function guacamoleStateName(states,state) { return Object.keys(states||{}).find(name=>states[name]===state)||`unknown (${state})`; }
+function instrumentGuacamoleResizeMessages(tunnel) { const previous=tunnel.sendMessage; tunnel.sendMessage=function(opcode,...args) { if(opcode==="size") console.debug(`Guacamole client emitted size ${args[0]}x${args[1]}`); return previous.call(tunnel,opcode,...args); }; return ()=>{tunnel.sendMessage=previous}; }
+async function openRDPRemoteSession(session, credentials) {
+  const ticket=await api(`api/v1/remote/sessions/${session.id}/transport-ticket`,{method:"POST"}), surface=$("remoteRDP"), frameShell=$("remoteFrameShell");
+  $("remoteFrame").src="about:blank"; $("remoteFrame").classList.add("hidden"); surface.classList.remove("hidden"); surface.classList.add("rdp-active"); surface.replaceChildren();
+  const initialSize=await initialRDPSurfaceSize(frameShell), transportParams=remoteTransportParams(ticket.ticket,{width:initialSize.width,height:initialSize.height,dpi:window.devicePixelRatio > 1 ? 120 : 96,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||""});
+  const tunnel=new Guacamole.WebSocketTunnel(remoteTransportURL(session.id)), stopResizeInstrumentation=instrumentGuacamoleResizeMessages(tunnel); const client=new Guacamole.Client(tunnel), display=client.getDisplay(); surface.append(display.getElement());
+  const sizing=RunPilotRDPSize.createController({resizeMethod:session.rdp?.resizeMethod||"display-update",initialSize,getSurfaceSize:()=>currentRDPSurfaceSize(frameShell),sendRemoteSize:size=>{ console.debug(`remote RDP resize requested ${size.width}x${size.height}`); client.sendSize(size.width,size.height); },fitLocal:(available,remote)=>{ const scale=RunPilotRDPSize.fitScale(available,remote); if(scale!==null) display.scale(scale); }}), previousDisplayResize=display.onresize;
+  display.onresize=(width,height)=>{ previousDisplayResize?.(width,height); sizing.displayResized({width,height}); };
+  const mouse=new Guacamole.Mouse(display.getElement()); mouse.onEach(["mousedown","mousemove","mouseup"],event=>client.sendMouseState(event.state));
+  const keyboard=new Guacamole.Keyboard(surface); keyboard.onkeydown=keysym=>client.sendKeyEvent(1,keysym); keyboard.onkeyup=keysym=>client.sendKeyEvent(0,keysym);
+  const shell=document.querySelector(".shell"), surfaceChanged=()=>sizing.surfaceChanged(), layoutTransitionFinished=event=>{ if(event.target===shell&&event.propertyName==="grid-template-columns") sizing.layoutTransitionFinished(); };
+  remoteRDPInteraction={shutdown:()=>{ sizing.dispose(); stopResizeInstrumentation(); keyboard.reset(); keyboard.onkeydown=null; keyboard.onkeyup=null; mouse.onEach(["mousedown","mousemove","mouseup"],null); client.disconnect(); }, focus:()=>surface.focus({preventScroll:true}), surfaceChanged, layoutTransitionStarted:()=>sizing.layoutTransitionStarted()};
+  surface.addEventListener("pointerdown",()=>surface.focus({preventScroll:true})); const observer=new ResizeObserver(surfaceChanged); observer.observe(frameShell); window.addEventListener("resize",surfaceChanged); shell.addEventListener("transitionend",layoutTransitionFinished); shell.addEventListener("transitioncancel",layoutTransitionFinished); const prior=remoteRDPInteraction.shutdown; remoteRDPInteraction.shutdown=()=>{observer.disconnect();window.removeEventListener("resize",surfaceChanged);shell.removeEventListener("transitionend",layoutTransitionFinished);shell.removeEventListener("transitioncancel",layoutTransitionFinished);prior()};
+  tunnel.onstatechange=state=>{ console.debug("Guacamole tunnel state",guacamoleStateName(Guacamole.Tunnel.State,state)); if(state===Guacamole.Tunnel.State.OPEN){ $("remoteLoading").classList.add("hidden"); surface.focus({preventScroll:true}); toast(`Connected to ${session.targetName||"RDP session"}.`); } }; tunnel.onerror=status=>{ console.warn("Guacamole WebSocket tunnel error",{code:status?.code,message:status?.message}); if(remoteSessionID===session.id) toastError(guacamoleTunnelError(status)); }; client.onstatechange=state=>{ console.debug("Guacamole client state",guacamoleStateName(Guacamole.Client.State,state)); sizing.setConnected(state===Guacamole.Client.State.CONNECTED); }; client.onerror=status=>{ console.warn("Guacamole client/RDP error",{code:status?.code,message:status?.message}); if(remoteSessionID===session.id) toastError(guacamoleClientError(status)); };
+  client.connect(transportParams);
+}
+
+function remoteVNCTransportURL(id, ticket) { const url=new URL(remoteTransportURL(id)); url.searchParams.set("ticket",ticket); return url.toString(); }
+function promptVNCCredentials(session, rfb) { remoteVNCPendingCredentials={sessionID:session.id,rfb}; $("remoteVNCCredentialsTitle").textContent=`Credentials for ${session.targetName||"VNC target"}`; $("remoteVNCUsername").value=session.vnc?.username||""; $("remoteVNCPassword").value=""; $("remoteVNCCredentialsDialog").showModal(); }
+async function openVNCRemoteSession(session) {
+  if (!window.RunPilotNoVNC?.RFB) throw new Error("The embedded noVNC client is still loading. Try again in a moment.");
+  const ticket=await api(`api/v1/remote/sessions/${session.id}/transport-ticket`,{method:"POST"}), surface=$("remoteVNC");
+  $("remoteFrame").src="about:blank"; $("remoteFrame").classList.add("hidden"); $("remoteRDP").classList.add("hidden"); surface.classList.remove("hidden"); surface.classList.add("vnc-active"); surface.replaceChildren();
+  const rfb=new window.RunPilotNoVNC.RFB(surface,remoteVNCTransportURL(session.id,ticket.ticket),{shared:true});
+  rfb.scaleViewport=true; rfb.resizeSession=true; rfb.clipViewport=false; rfb.viewOnly=false;
+  rfb.addEventListener("connect",()=>{ if(remoteSessionID===session.id){ $("remoteLoading").classList.add("hidden"); surface.focus({preventScroll:true}); toast(`Connected to ${session.targetName||"VNC session"}.`); } });
+  rfb.addEventListener("credentialsrequired",()=>{ if(remoteSessionID===session.id) promptVNCCredentials(session,rfb); });
+  rfb.addEventListener("securityfailure",event=>{ if(remoteSessionID===session.id) toastError(`VNC authentication failed${event.detail?.status ? `: ${event.detail.status}` : ""}.`); });
+  rfb.addEventListener("disconnect",event=>{ if(remoteSessionID===session.id && !event.detail?.clean) toastError("VNC session disconnected unexpectedly. Check Remote session diagnostics."); });
+  remoteVNCInteraction={shutdown:()=>rfb.disconnect(),focus:()=>surface.focus({preventScroll:true})};
+  surface.addEventListener("pointerdown",()=>surface.focus({preventScroll:true}),{once:true});
+}
+
 function renderOverview() {
   if (!overview) return;
   const host = overview.host || {};
   const memoryUsed = Math.max(0, (host.memoryTotalBytes || 0) - (host.memoryFreeBytes || 0));
   $("overviewMetrics").innerHTML = [
     utilizationMetric("CPU", host.cpuPercent, host.cpuAveragePercent, "blue"),
-    `<div class="metric"><span>Memory</span><strong>${escapeHtml(`${fmtBytes(memoryUsed)} / ${fmtBytes(host.memoryTotalBytes)}`)}</strong>${meter(percent(memoryUsed, host.memoryTotalBytes), "violet")}</div>`,
     utilizationMetric("GPU", host.gpuPercent, host.gpuAveragePercent, "pink", host.gpuAvailable),
-    ["Processes", `${overview.runningProcesses || 0} running / ${overview.processCount || 0}`, percent(overview.runningProcesses || 0, overview.processCount || 0), "green"],
-    ["Jobs", `${overview.runningJobs || 0} running / ${overview.jobCount || 0}`, percent(overview.runningJobs || 0, overview.jobCount || 0), "amber"],
+    `<div class="metric"><span>Memory</span><strong>${escapeHtml(`${fmtBytes(memoryUsed)} / ${fmtBytes(host.memoryTotalBytes)}`)}</strong>${meter(percent(memoryUsed, host.memoryTotalBytes), "violet")}</div>`,
+    ["Tasks", `${overview.runningTasks || 0} running / ${overview.taskCount || 0}`, percent(overview.runningTasks || 0, overview.taskCount || 0), "green"],
   ].map(metric => Array.isArray(metric) ? `<div class="metric"><span>${metric[0]}</span><strong>${escapeHtml(metric[1])}</strong>${meter(metric[2], metric[3])}</div>` : metric).join("");
 
   const disks = host.disks || [];
@@ -301,7 +486,7 @@ function renderOverview() {
   $("issueDetails").innerHTML = issues.length ? issues.map(issue => `<article class="row issue-row">
     <div class="row-head"><div><h3>${escapeHtml(issue.name)}</h3><div class="meta">${escapeHtml(issue.source)}</div></div>${statusBadge("failure")}</div>
     <div class="row-details"><div class="kv"><span>Details</span><span>${escapeHtml(issue.message)}</span></div></div>
-  </article>`).join("") : `<div class="empty compact"><h2>All clear</h2><p>No current process, job or host errors were reported.</p></div>`;
+  </article>`).join("") : `<div class="empty compact"><h2>All clear</h2><p>No current task or host errors were reported.</p></div>`;
 }
 
 function startAutoRefresh() {
@@ -311,55 +496,64 @@ function startAutoRefresh() {
   }, 5000);
 }
 
-function renderProcesses() {
-  const grid = $("processGrid");
-  grid.innerHTML = processes.map(v => {
-    const d = v.definition, s = v.status;
-    const running = ["running","starting","stopping"].includes(s.state);
-    return `<article class="row">
+async function probeConnection() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3500);
+  try {
+    await fetch("api/v1/system", {headers:{Authorization:`Bearer ${token}`}, signal:controller.signal});
+    setConnected(true);
+  } catch {
+    setConnected(false);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function startConnectionMonitor() {
+  if (connectionTimer) return;
+  connectionTimer = setInterval(() => { if (!document.hidden) probeConnection(); }, 5000);
+  probeConnection();
+}
+
+function renderContinuousTask(v) {
+  const d = v.definition, s = v.status;
+  const running = ["running","starting","stopping"].includes(s.state);
+  return `<article class="row">
       <div class="row-head">
-        <div><h3>${escapeHtml(d.name)}</h3><div class="meta">${escapeHtml(d.command.path)}</div></div>
+        <div><h3>${escapeHtml(d.name)}</h3><div class="meta">Continuous · ${escapeHtml(d.command.path)}</div></div>
         ${statusBadge(s.state)}
       </div>
       <div class="row-details">
-        <div class="kv"><span>PID</span><span>${s.pid || "—"}</span></div>
         <div class="kv"><span>Started</span><span>${fmtDate(s.startedAt)}</span></div>
         <div class="kv"><span>Restart</span><span>${escapeHtml(d.restart?.mode || "on-failure")}</span></div>
         <div class="kv"><span>Autostart</span><span>${d.autostart ? "Yes" : "No"}</span></div>
       </div>
       <div class="row-actions">
-        ${running
-          ? `<button class="button secondary small" onclick="processAction('${d.id}','stop')">Stop</button>
-             <button class="button secondary small" onclick="processAction('${d.id}','restart')">Restart</button>`
-          : `<button class="button primary small" onclick="processAction('${d.id}','start')">Start</button>`}
-        <button class="button secondary small" onclick="openProcessLog('${d.id}','${escapeHtml(d.name)}')">Log</button>
-        <button class="button secondary small" onclick="editProcess('${d.id}')">Edit</button>
-        <button class="button danger small" onclick="deleteProcess('${d.id}')">Delete</button>
-      </div>
-    </article>`;
-  }).join("");
-  $("processEmpty").classList.toggle("hidden", processes.length > 0);
+        ${running ? `<button class="button secondary small" onclick="processAction('${d.id}','stop')">Stop</button><button class="button secondary small" onclick="processAction('${d.id}','restart')">Restart</button>` : `<button class="button primary small" onclick="processAction('${d.id}','start')">Start</button>`}
+        <button class="button secondary small" onclick="openProcessLog('${d.id}','${escapeHtml(d.name)}')">Log</button><button class="button secondary small" onclick="editProcess('${d.id}')">Edit</button><button class="button danger small" onclick="deleteProcess('${d.id}')">Delete</button>
+      </div></article>`;
 }
 
-function renderJobs() {
-  const commands = jobs.filter(v => v.definition.type === "command");
-  const backups = jobs.filter(v => v.definition.type === "backup");
-  $("jobGrid").innerHTML = commands.map(renderJobRow).join("");
-  $("backupGrid").innerHTML = backups.map(renderBackupRow).join("");
-  $("jobEmpty").classList.toggle("hidden", commands.length > 0);
-  $("backupEmpty").classList.toggle("hidden", backups.length > 0);
+function renderTasks() {
+  const items = [
+    ...processes.map(v => ({kind:"continuous", name:v.definition.name, markup:renderContinuousTask(v)})),
+    ...jobs.filter(v => v.definition.type === "command").map(v => ({kind:"scheduled", name:v.definition.name, markup:renderJobRow(v)})),
+    ...jobs.filter(v => v.definition.type === "backup").map(v => ({kind:"backup", name:v.definition.name, markup:renderBackupRow(v)})),
+  ].filter(item => taskFilter === "all" || item.kind === taskFilter).sort((a,b) => a.name.localeCompare(b.name));
+  $("taskGrid").innerHTML = items.map(item => item.markup).join("");
+  $("taskEmpty").classList.toggle("hidden", items.length > 0);
 }
 
 function renderJobRow(v) {
   const d = v.definition, s = v.status;
   const state = s.running ? "running" : (s.lastSuccess === false ? "failure" : "idle");
   return `<article class="row">
-    <div class="row-head"><div><h3>${escapeHtml(d.name)}</h3><div class="meta">${escapeHtml(d.command?.path || "")}</div></div>${statusBadge(state)}</div>
+    <div class="row-head"><div><h3>${escapeHtml(d.name)}</h3><div class="meta">Scheduled · ${escapeHtml(scheduleText(d.schedule))}</div></div>${statusBadge(state)}</div>
     <div class="row-details">
       <div class="kv"><span>Schedule</span><span>${escapeHtml(scheduleText(d.schedule))}</span></div>
       <div class="kv"><span>Enabled</span><span>${d.enabled ? "Yes" : "No"}</span></div>
       <div class="kv"><span>Last run</span><span>${fmtDate(s.lastRunAt)}</span></div>
-      <div class="kv"><span>Last exit</span><span>${s.lastExitCode ?? "—"}</span></div>
+      <div class="kv"><span>Last result</span><span>${s.lastSuccess == null ? "—" : (s.lastSuccess ? "Success" : "Failed")}</span></div>
     </div>
     <div class="row-actions">
       <button class="button primary small" onclick="runJob('${d.id}')">Run now</button>
@@ -377,7 +571,7 @@ function renderBackupRow(v) {
   const target = provider === "restic" ? cfg.repository : cfg.destination;
   const state = s.running ? "running" : (s.lastSuccess === false ? "failure" : "idle");
   return `<article class="row">
-    <div class="row-head"><div><h3>${escapeHtml(d.name)}</h3><div class="meta">${escapeHtml(provider)} · ${escapeHtml(source || "")} → ${escapeHtml(target || "")}</div></div>${statusBadge(state)}</div>
+    <div class="row-head"><div><h3>${escapeHtml(d.name)}</h3><div class="meta">Backup · ${escapeHtml(provider)} · ${escapeHtml(scheduleText(d.schedule))}</div></div>${statusBadge(state)}</div>
     <div class="row-details">
       <div class="kv"><span>Provider</span><span>${escapeHtml(provider)}</span></div>
       <div class="kv"><span>Schedule</span><span>${escapeHtml(scheduleText(d.schedule))}</span></div>
@@ -393,24 +587,6 @@ function renderBackupRow(v) {
   </article>`;
 }
 
-function renderHistory(runs) {
-  $("historyBody").innerHTML = runs.map(r => `<tr>
-    <td><strong>${escapeHtml(r.targetName)}</strong></td>
-    <td>${escapeHtml(r.kind)}</td>
-    <td>${fmtDate(r.startedAt)}</td>
-    <td>${r.success == null ? "—" : statusBadge(r.success ? "success" : "failure")}</td>
-    <td>${r.exitCode ?? "—"}</td>
-    <td><button class="button secondary small" onclick="openRunLog('${r.id}','${escapeHtml(r.targetName)}')">Log</button></td>
-  </tr>`).join("");
-  $("historyEmpty").classList.toggle("hidden", runs.length > 0);
-}
-
-function renderStorage() {
-  const local = storage.find(d => d.id === "storage-local") || storage[0];
-  $("storageEmpty").classList.toggle("hidden", !!local);
-  if (local && !storageLocation) browseStorage(local.id);
-}
-async function browseStorage(id, p = "") { try { const listing = await api(`api/v1/storage/${id}/entries?` + new URLSearchParams({path:p})); storageLocation=id; storagePath=listing.path; $("storageBrowserTitle").textContent=storage.find(x=>x.id===id)?.name || "Helyi fájlrendszer"; $("storageBreadcrumbs").textContent=listing.path || "Ez a gép"; $("storageUp").disabled=listing.parentPath == null; $("storageUp").onclick=()=>browseStorage(id,listing.parentPath || ""); const root=$("storageEntries"); root.replaceChildren(); listing.entries.forEach(e => { const row=document.createElement("article"); row.className="row storage-entry"; row.innerHTML=`<div class="row-head"><div><h3>${escapeHtml(e.name)}</h3><div class="meta">${escapeHtml(e.type)}</div></div></div><div class="row-details"><div class="kv"><span>Size</span><span>${fmtBytes(e.size)}</span></div><div class="kv"><span>Modified</span><span>${fmtDate(e.modifiedAt)}</span></div></div><div class="row-actions"></div>`; if(e.type!=="file") { row.classList.add("openable"); row.addEventListener("click",()=>browseStorage(id,e.path)); } const actions=row.querySelector(".row-actions"); const menu=document.createElement("select"); menu.className="storage-menu"; menu.innerHTML=`<option value="">További műveletek…</option>${e.type==="file"?'<option value="download">Letöltés</option>':''}${e.type!=="filesystem-root"?'<option value="copy">Másolás</option><option value="rename">Átnevezés</option><option value="move">Áthelyezés</option><option value="delete">Törlés</option>':''}`; menu.addEventListener("click",event=>event.stopPropagation()); menu.addEventListener("change",()=>{const action=menu.value;menu.value="";if(action==="download")downloadStorage(id,e.path);if(action==="copy")copyStorage(id,e.path);if(action==="rename")renameStorage(id,e.path);if(action==="move")moveStorage(id,e.path);if(action==="delete")deleteStorageObject(id,e.path,e.type)}); actions.append(menu); root.append(row) }); } catch(e) { toast(e.message); } }
 async function downloadStorage(id,p){try{const t=await api(`api/v1/storage/${id}/download-ticket`,{method:"POST",body:JSON.stringify({path:p})});window.location.assign(t.url)}catch(e){toast(e.message)}}
 async function deleteStorageObject(id,p,type){if(!confirm(`Delete ${type === "directory" ? "folder and all contents" : "file"}? This cannot be undone through RunPilot.`))return;try{await api(`api/v1/storage/${id}/delete`,{method:"POST",body:JSON.stringify({path:p})});browseStorage(id,storagePath)}catch(e){toast(e.message)}}
 async function renameStorage(id,p){const n=prompt("New name:");if(!n)return;try{await api(`api/v1/storage/${id}/rename`,{method:"POST",body:JSON.stringify({path:p,newName:n})});browseStorage(id,storagePath)}catch(e){toast(e.message)}}
@@ -426,27 +602,36 @@ function renderStorage() {
   $("storageBrowser").classList.toggle("hidden", !provider);
   if (provider) { select.value = storage.some(d => d.id === previous) ? previous : provider.id; if (!storageLocation) browseStorage(select.value, ""); }
 }
-function openStorageDialog(provider = null) { const local=provider?.local||{}; $("storageId").value=provider?.id||""; $("storageDialogTitle").textContent=provider?"Storage provider szerkesztése":"Tároló hozzáadása"; $("storageName").value=provider?.name||""; $("storageType").value=provider?.type||"local"; $("storageScope").value=local.scope||"root"; $("storageRoot").value=local.root||""; $("storageRootWrap").classList.toggle("hidden",$("storageScope").value==="host"); $("storageDialog").showModal(); }
 function isEditableText(name) { return !/\.[^./\\]+$/.test(name) || /\.(txt|log|yaml|yml|json|ini|cfg|conf|toml|xml|csv|md|bat|cmd|ps1|go|js|html|css|ts|tsx|jsx|py|rb|java|c|h|cpp|cs|rs|sh|sql)$/i.test(name); }
 function button(label, title, action, disabled = false) { const b=document.createElement("button"); b.className="row-icon"+(title==="Letöltés"?" download-icon":""); b.type="button"; b.textContent=label; b.title=title; b.disabled=disabled; b.addEventListener("click", event=>{event.stopPropagation();action()}); return b; }
 function actionSlot(control = null) { if (control) return control; const slot=document.createElement("span");slot.className="row-icon-slot";slot.setAttribute("aria-hidden","true");return slot; }
 function entryIcon(entry) { if (entry.type === "directory" || entry.type === "filesystem-root") return "folder"; const ext=(entry.name.split(".").pop()||"").toLowerCase(); if (["txt","log","yaml","yml","json","ini","cfg","conf","toml","xml","csv","md","go","js","ts","py","sh","sql"].includes(ext)||!/\.[^./\\]+$/.test(entry.name)) return "text"; if(["jpg","jpeg","png","gif","webp","svg"].includes(ext)) return "image"; if(["mp3","wav","flac","ogg"].includes(ext)) return "audio"; if(["mp4","mkv","avi","mov","webm"].includes(ext)) return "video"; return "file"; }
 function renderBreadcrumbs(id, value) { const root=$("storageBreadcrumbs"); root.replaceChildren(); const home=document.createElement("button");home.className="breadcrumb-link";home.textContent="Ez a gép";home.addEventListener("click",()=>browseStorage(id,""));root.append(home); let built=""; for(const segment of value ? value.split("/") : []) { const sep=document.createElement("span");sep.textContent="/";root.append(sep);built=built?`${built}/${segment}`:segment;const link=document.createElement("button");link.className="breadcrumb-link";link.textContent=segment;const target=built;link.addEventListener("click",()=>browseStorage(id,target));root.append(link); } }
-async function browseStorage(id, p = "") {
+function setStorageEntryLoading(path, loading) { const row=[...document.querySelectorAll(".storage-entry")].find(item=>item.dataset.storagePath===path); if (!row) return; row.setAttribute("aria-busy",String(loading)); row.querySelector(".entry-icon")?.classList.toggle("loading",loading); }
+async function browseStorage(id, p = "", loadingEntry = "") {
+  if (id === "docker-volumes" && loadingEntry) setStorageEntryLoading(loadingEntry, true);
   try {
-    const provider=storage.find(x=>x.id===id); if (!provider || provider.state?.status !== "ready") { toast(provider?.state?.reason || "Storage provider is unavailable"); return; }
+    const provider=storage.find(x=>x.id===id); if (!provider || !["ready","read-only"].includes(provider.state?.status)) { toast(provider?.state?.reason || "Storage provider is unavailable"); return; }
+    const stateNotice=$("storageStateNotice");
     const listing=await api(`api/v1/storage/${id}/entries?`+new URLSearchParams({path:p,showHidden:storageShowHidden})); storageLocation=id; storagePath=listing.path;
-    const toolbarCaps=provider.capabilities||{}; $("storageUpload").parentElement.classList.toggle("hidden",!toolbarCaps.upload); $("storageCreate").classList.toggle("hidden",!toolbarCaps.createDirectory);
-    $("storageProvider").value=id; $("storageBrowserTitle").textContent=storage.find(x=>x.id===id)?.name || "Tároló"; renderBreadcrumbs(id,listing.path);
-    $("storageUp").disabled=listing.parentPath==null; $("storageUp").onclick=()=>browseStorage(id,listing.parentPath||"");
+    const pathState=listing.state||provider.state||{}, readOnly=pathState.status === "read-only";
+    stateNotice.classList.toggle("hidden",!readOnly); stateNotice.innerHTML=readOnly?`<strong>Storage is read-only</strong><span>${escapeHtml(pathState.reason || "This provider is currently read-only.")}</span>`:"";
+    storagePathCapabilities=listing.capabilities||provider.capabilities||{};
+    const toolbarCaps=storagePathCapabilities; $("storageUpload").parentElement.classList.toggle("hidden",!toolbarCaps.upload); $("storageNewFile").classList.toggle("hidden",!toolbarCaps.textEdit); $("storageCreate").classList.toggle("hidden",!toolbarCaps.createDirectory);
+    $("storageProvider").value=id; renderBreadcrumbs(id,listing.path);
     const root=$("storageEntries");root.replaceChildren(); const header=document.createElement("div");header.className="storage-list-head";header.innerHTML="<span>Name</span><span>Size</span><span>Modified</span><span>Actions</span>";root.append(header);
+    if (listing.parentPath != null) {
+      const parent=document.createElement("article");parent.className="row storage-entry storage-row openable";
+      const head=document.createElement("div");head.className="storage-name";const icon=document.createElement("span");icon.className="entry-icon folder";icon.setAttribute("aria-hidden","true");const title=document.createElement("h3");title.textContent="..";const meta=document.createElement("div");meta.className="meta";meta.textContent="parent folder";head.append(icon,title,meta);
+      const size=document.createElement("div");size.className="storage-cell";size.textContent="—";const modified=document.createElement("div");modified.className="storage-cell";modified.textContent="—";const actions=document.createElement("div");actions.className="row-actions";parent.append(head,size,modified,actions);parent.addEventListener("click",()=>browseStorage(id,listing.parentPath));root.append(parent);
+    }
     listing.entries.forEach(entry=>{
-      const row=document.createElement("article");row.className="row storage-entry storage-row";
+      const row=document.createElement("article");row.className="row storage-entry storage-row";row.dataset.storagePath=entry.path;
       const head=document.createElement("div");head.className="storage-name";const icon=document.createElement("span");icon.className=`entry-icon ${entryIcon(entry)}`;icon.setAttribute("aria-hidden","true");const title=document.createElement("h3");title.textContent=entry.name;head.append(icon);
       head.append(title);const meta=document.createElement("div");meta.className="meta";meta.textContent=entry.type;head.append(meta);
       const details=document.createElement("div");details.className="row-details";details.innerHTML=`<div class="kv"><span>Méret</span><span>${fmtBytes(entry.size)}</span></div><div class="kv"><span>Módosítva</span><span>${fmtDate(entry.modifiedAt)}</span></div>`;
       const actions=document.createElement("div");actions.className="row-actions";
-      const caps=storage.find(x=>x.id===id)?.capabilities||{}, mutable=entry.type!=="filesystem-root", editable=entry.type==="file" && isEditableText(entry.name) && caps.textEdit;
+      const caps=storagePathCapabilities||storage.find(x=>x.id===id)?.capabilities||{}, mutable=entry.type!=="filesystem-root", editable=entry.type==="file" && isEditableText(entry.name) && caps.textEdit;
       actions.append(actionSlot(entry.type==="file" && caps.download ? button("↓","Letöltés",()=>downloadStorage(id,entry.path)) : null));
       actions.append(actionSlot(editable ? button("✎","Szerkesztés",()=>openTextEditor(id,entry.path,entry.name)) : null));
       actions.append(actionSlot(mutable && caps.rename ? button("↺","Átnevezés",()=>renameStorage(id,entry.path)) : null));
@@ -455,17 +640,18 @@ async function browseStorage(id, p = "") {
       actions.append(caps[storageClipboard?.operation] && storageClipboard?.providerId===id ? button("📌","Beillesztés",()=>pasteStorage(id)) : actionSlot());
       actions.append(actionSlot(mutable && caps.delete ? button("🗑","Törlés",()=>deleteStorageObject(id,entry.path,entry.type)) : null));
       const size=document.createElement("div");size.className="storage-cell";size.textContent=entry.type==="file"?fmtBytes(entry.size):"—";const modified=document.createElement("div");modified.className="storage-cell";modified.textContent=fmtDate(entry.modifiedAt);row.append(head,size,modified,actions);
-      if(entry.type!=="file") { row.classList.add("openable");row.addEventListener("click",()=>browseStorage(id,entry.path)); }
+      if(entry.type!=="file") { row.classList.add("openable");row.addEventListener("click",()=>browseStorage(id,entry.path,entry.path)); }
       else { row.classList.add("openable");row.addEventListener("click",()=>isEditableText(entry.name)?openTextEditor(id,entry.path,entry.name):downloadStorage(id,entry.path)); }
       root.append(row);
     });
   } catch(e) { toast(e.message); }
+  finally { if (id === "docker-volumes" && loadingEntry) setStorageEntryLoading(loadingEntry, false); }
 }
 function setStorageClipboard(operation, providerId, entry) { storageClipboard={providerId,operation,path:entry.path,name:entry.name}; toast(operation==="copy" ? `Másolásra kijelölve: ${entry.name}` : `Áthelyezésre kijelölve: ${entry.name}`); browseStorage(storageLocation,storagePath); }
 async function pasteStorage(id) { if(!storageClipboard||storageClipboard.providerId!==id)return; try { const endpoint=storageClipboard.operation==="copy"?"copy":"move"; await api(`api/v1/storage/${id}/${endpoint}`,{method:"POST",body:JSON.stringify({sourcePath:storageClipboard.path,destinationDirectory:storagePath})}); const message=storageClipboard.operation==="copy"?"Másolva":"Áthelyezve"; if(storageClipboard.operation==="move")storageClipboard=null;toast(message);browseStorage(id,storagePath); }catch(e){toast(e.message)} }
 function syntaxSpan(kind, value) { return `<span class="syntax-${kind}">${escapeHtml(value)}</span>`; }
 function highlightText(content, name) {
-  const ext=(name.split(".").pop()||"").toLowerCase(); const structured=["json","yaml","yml","toml","ini","xml","html","css"].includes(ext);
+  const ext=(name.split(".").pop()||"").toLowerCase(), yaml=["yaml","yml"].includes(ext), env=ext==="env"; const structured=["json","yaml","yml","toml","ini","xml","html","css"].includes(ext);
   return content.split("\n").map(line=>{
     if (/^\s*(#|\/\/)/.test(line)) return syntaxSpan("comment",line);
     const chunks=line.split(/("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g);
@@ -474,26 +660,30 @@ function highlightText(content, name) {
       let safe=escapeHtml(part);
       if (structured) safe=safe.replace(/\b(true|false|null|yes|no)\b/gi,'<span class="syntax-keyword">$1</span>').replace(/\b(-?\d+(?:\.\d+)?)\b/g,'<span class="syntax-number">$1</span>');
       else safe=safe.replace(/\b(func|function|return|if|else|for|while|package|import|const|var|let|class|public|private|def|true|false|null|nil)\b/g,'<span class="syntax-keyword">$1</span>');
+      if (yaml) safe=safe.replace(/^(\s*(?:-\s+)?)([A-Za-z0-9_.-]+)(\s*:)/,'$1<span class="syntax-key">$2</span>$3');
+      if (env) safe=safe.replace(/^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_]*)(=)/,'$1<span class="syntax-key">$2</span>$3');
       return safe;
     }).join("");
   }).join("\n")+"\n";
 }
 function updateTextHighlight() { const code=$("textHighlight").querySelector("code"); code.innerHTML=highlightText($("textEditorContent").value,editingTextPath?.path||""); }
-async function openTextEditor(id,path,name) { try { const data=await api(`api/v1/storage/${id}/text?`+new URLSearchParams({path})); editingTextPath={id,path};$("textEditorTitle").textContent=`Szerkesztés: ${name}`;$("textEditorPath").textContent=path;$("textEditorContent").value=data.content;updateTextHighlight();$("textEditorDialog").showModal(); }catch(e){toast(e.message)} }
+function updateDockerFileHighlight() { const code=$("dockerFileHighlight").querySelector("code"); code.innerHTML=highlightText($("dockerFileContent").value,dockerEditing?.kind==="env"?".env":"compose.yaml"); }
+async function openTextEditor(id,path,name) { try { const data=await api(`api/v1/storage/${id}/text?`+new URLSearchParams({path})); editingTextPath={id,path};const canEdit=!!(storagePathCapabilities||storage.find(x=>x.id===id)?.capabilities||{}).textEdit;$("textEditorTitle").textContent=`${canEdit ? "Edit" : "View"}: ${name}`;$("textEditorPath").textContent=path;$("textEditorContent").value=data.content;$("textEditorContent").readOnly=!canEdit;$("saveTextEditor").disabled=!canEdit;updateTextHighlight();$("textEditorDialog").showModal(); }catch(e){toast(e.message)} }
+function openNewTextFile() { if (!storageLocation || !(storagePathCapabilities||{}).textEdit) return; const name=prompt("File name:"); if (!name) return; if (name === "." || name === ".." || /[\\/]/.test(name)) { toast("File name must be a single name."); return; } const path=storagePath ? `${storagePath}/${name}` : name; editingTextPath={id:storageLocation,path};$("textEditorTitle").textContent=`New file: ${name}`;$("textEditorPath").textContent=path;$("textEditorContent").value="";$("textEditorContent").readOnly=false;$("saveTextEditor").disabled=false;updateTextHighlight();$("textEditorDialog").showModal(); }
 async function saveTextEditor() { if(!editingTextPath)return;try{await api(`api/v1/storage/${editingTextPath.id}/text`,{method:"PUT",body:JSON.stringify({path:editingTextPath.path,content:$("textEditorContent").value})});$("textEditorDialog").close();toast("Fájl mentve");browseStorage(storageLocation,storagePath)}catch(e){toast(e.message)} }
 
 async function processAction(id, action) {
-  try { await api(`api/v1/processes/${id}/${action}`, {method:"POST"}); toast(`Process ${action} requested`); setTimeout(refresh, 250); }
+  try { await api(`api/v1/processes/${id}/${action}`, {method:"POST"}); toast(`Continuous task ${action} requested`); setTimeout(refresh, 250); }
   catch (e) { toast(e.message); }
 }
 
 async function runJob(id) {
-  try { await api(`api/v1/jobs/${id}/run`, {method:"POST"}); toast("Job started"); setTimeout(refresh, 250); }
+  try { await api(`api/v1/jobs/${id}/run`, {method:"POST"}); toast("Task started"); setTimeout(refresh, 250); }
   catch (e) { toast(e.message); }
 }
 
 async function deleteProcess(id) {
-  if (!confirm("Delete this managed process?")) return;
+  if (!confirm("Delete this continuous task?")) return;
   try { await api(`api/v1/processes/${id}`, {method:"DELETE"}); await refresh(); }
   catch (e) { toast(e.message); }
 }
@@ -516,7 +706,16 @@ function renderSoftware() {
   const card = $("softwareProviderCard"), packages = $("softwarePackages"), picker = $("softwareProviderSelect");
   picker.replaceChildren();
   softwareProviders.forEach(item => { const option = document.createElement("option"); option.value = item.id; option.textContent = `${item.name} (${item.type})`; picker.append(option); });
-  if (!provider) { card.innerHTML = `<div class="empty compact"><h2>Software provider unavailable</h2><p>RunPilot has no configured Software provider.</p></div>`; return; }
+  if (!provider) {
+    picker.parentElement.classList.add("hidden");
+    $("softwareTabs").classList.add("hidden");
+    $("softwareSearchBar").classList.add("hidden");
+    $("softwareBucketBar").classList.add("hidden");
+    card.innerHTML = `<div class="empty compact"><h2>No software providers available</h2><p>No supported software providers are configured for this operating system.</p></div>`;
+    packages.replaceChildren();
+    return;
+  }
+  picker.parentElement.classList.remove("hidden");
   picker.value = provider.id;
   const state = provider.state || "unavailable";
   const message = provider.message || "Preparing the managed Scoop runtime.";
@@ -579,20 +778,271 @@ async function loadSoftwareView(force = false) {
 }
 function softwareSearch() { loadSoftwareView(true); }
 
+function renderDocker() {
+  const notice = $("dockerNotice"), ready = dockerRuntime?.available;
+  notice.classList.toggle("hidden", !!ready);
+  notice.innerHTML = ready ? "" : `<strong>Docker unavailable</strong><span>${escapeHtml(dockerRuntime?.message || "Docker status has not been checked.")}${dockerRuntime?.identity ? ` Running as ${escapeHtml(dockerRuntime.identity)}.` : ""}</span>`;
+  const projectColumns = [[], []];
+  dockerProjects.forEach((project, index) => projectColumns[index % 2].push(dockerProjectCard(project, ready)));
+  $("dockerProjectGrid").innerHTML = projectColumns.filter(column => column.length).map(column => `<div class="docker-project-column">${column.join("")}</div>`).join("");
+  $("dockerVolumeList").innerHTML = dockerVolumes.map(volume => dockerVolumeRow(volume, ready)).join("");
+  $("dockerNetworkList").innerHTML = dockerNetworks.map(network => dockerNetworkRow(network, ready)).join("");
+  $("dockerProjectEmpty").classList.toggle("hidden", dockerProjects.length > 0 || !ready);
+  $("dockerVolumeEmpty").classList.toggle("hidden", dockerVolumes.length > 0 || !ready);
+  $("dockerNetworkEmpty").classList.toggle("hidden", dockerNetworks.length > 0 || !ready);
+}
+function applyDockerSnapshot(snapshot) {
+  dockerRuntime = snapshot[0].runtime; dockerProjects = snapshot[0].projects || []; dockerVolumes = snapshot[1].volumes || []; dockerNetworks = snapshot[2].networks || [];
+  for (const [key, pending] of dockerPendingContainerStates) {
+    const container = dockerProjects.flatMap(project => project.containers || []).find(item => item.id === pending.id);
+    const reachedExpectedState = pending.running == null ? !container : !!container && (container.state === "running") === pending.running;
+    if (reachedExpectedState) { dockerPendingContainerStates.delete(key); dockerBusy.delete(key); }
+  }
+  renderDocker();
+}
+async function refreshDockerSnapshot() {
+  try {
+    const snapshot = await Promise.all([api("api/v1/docker/projects"), api("api/v1/docker/volumes"), api("api/v1/docker/networks")]);
+    applyDockerSnapshot(snapshot);
+    setConnected(true);
+    return true;
+  } catch (error) {
+    setConnected(!!error.serverReachable);
+    toast(error.message);
+    return false;
+  }
+}
+function dockerNetworkRow(network, ready) {
+  const busy=dockerBusy.has(`network:${network.name}`), usage=!network.inUse ? "Unused" : network.runningUse ? "In use by running container" : "Used by stopped container";
+  const protectedNetwork=["bridge","host","none"].includes(network.name);
+  const composeManaged=!!network.composeProject;
+  const detail=network.composeProject ? `Compose: ${network.composeProject}${network.composeNetwork ? ` / ${network.composeNetwork}` : ""}` : `${network.driver || "unknown driver"} · ${network.scope || "local"}`;
+  const actions=protectedNetwork || composeManaged ? "" : `<button class="button danger small" onclick="deleteDockerNetwork('${escapeHtml(network.name)}')" ${!ready || network.inUse || busy ? "disabled" : ""}>Delete</button>`;
+  return `<div class="docker-container docker-resource-row" title="${escapeHtml(detail)}"><span class="docker-dot ${network.inUse ? (network.runningUse ? "green" : "yellow") : "gray"}"></span><strong class="docker-container-name" title="${escapeHtml(network.name)}">${escapeHtml(network.name)}</strong><div class="docker-container-actions docker-resource-actions"><span class="docker-resource-action-slot" aria-hidden="true"></span>${actions}</div><span class="docker-resource-status" title="${escapeHtml(usage)}${(network.usedBy||[]).length ? ` · ${escapeHtml(network.usedBy.join(", "))}` : ""}">${escapeHtml(usage)}</span></div>`;
+}
+function dockerVolumeRow(volume, ready) {
+  const busy = dockerBusy.has(`volume:${volume.name}`), usage = !volume.inUse ? "Unused" : volume.runningUse ? "In use by running container" : "Used by stopped container";
+  const canDelete = ready && !volume.inUse && !busy;
+  const deleteTitle = volume.inUse ? "Delete is unavailable while a container references this volume." : !ready ? "Docker is unavailable." : busy ? "Volume operation in progress." : "Delete volume";
+  const detail = volume.composeProject ? `Compose: ${volume.composeProject}${volume.composeVolume ? ` / ${volume.composeVolume}` : ""}` : `${volume.driver || "unknown driver"} · ${volume.scope || "local"}`;
+  const deleteAction = volume.inUse ? "" : `<button class="button danger small" title="${escapeHtml(deleteTitle)}" onclick="deleteDockerVolume('${escapeHtml(volume.name)}')" ${canDelete ? "" : "disabled"}>Delete</button>`;
+  return `<div class="docker-container docker-resource-row" title="${escapeHtml(detail)}"><span class="docker-dot ${volume.inUse ? (volume.runningUse ? "green" : "yellow") : "gray"}"></span><strong class="docker-container-name" title="${escapeHtml(volume.name)}">${escapeHtml(volume.name)}</strong><div class="docker-container-actions docker-resource-actions"><button class="button secondary small docker-volume-storage" title="Open this volume in Storage" onclick="openDockerVolumeStorage('${escapeHtml(volume.name)}')">Storage</button>${deleteAction}</div><span class="docker-resource-status" title="${escapeHtml(usage)}${(volume.usedBy || []).length ? ` · ${escapeHtml(volume.usedBy.join(", "))}` : ""}">${escapeHtml(usage)}</span></div>`;
+}
+function openDockerVolumeStorage(name) { setPage("storage"); browseStorage("docker-volumes", name); }
+function dockerProjectCard(project, ready) {
+  const busy = dockerBusy.has(project.name), managed = !!project.managed, hasCompose = !!project.composeFileExists;
+  const error = dockerProjectErrors.get(project.name);
+  const active = ["running","partial","degraded"].includes(project.state);
+  // `docker compose up -d` is idempotent and also applies configuration changes
+  // to an already-running project, so it is valid in every project state.
+  const canUp = ready && hasCompose && !busy;
+  const canStart = ready && hasCompose && !busy && project.state === "stopped";
+  const canStop = ready && !busy && active;
+  const canDown = ready && hasCompose && !busy && project.state !== "down";
+  const actions = managed ? `<div class="docker-actions">
+    <div class="docker-action-group docker-action-lifecycle"><button class="button small" onclick="dockerAction('${project.name}','up')" ${canUp ? "" : "disabled"}>Up</button><button class="button small" onclick="dockerAction('${project.name}','start')" ${canStart ? "" : "disabled"}>Start</button><button class="button small" onclick="dockerAction('${project.name}','stop')" ${canStop ? "" : "disabled"}>Stop</button><button class="button small" onclick="dockerAction('${project.name}','down')" ${canDown ? "" : "disabled"}>Down</button></div>
+    <div class="docker-action-group docker-action-files"><button class="button secondary small" onclick="openDockerFile('${project.name}','compose')" ${busy ? "disabled" : ""}>compose.yaml</button><button class="button secondary small" onclick="openDockerFile('${project.name}','env')" ${busy ? "disabled" : ""}>.env</button></div><div class="docker-action-group docker-action-destructive"><button class="button danger small" onclick="deleteDockerProject('${project.name}')" ${!ready || project.state !== "down" || busy ? "disabled" : ""}>Delete</button></div>
+  </div>${busy ? `<div class="docker-busy" role="status"><span class="spinner" aria-hidden="true"></span>Running Compose command…</div>` : ""}` : "";
+  const containers = (project.containers || []).map(c => dockerContainerRow(c, ready && managed)).join("");
+  return `<article class="docker-card"><div class="docker-card-head"><h2>${escapeHtml(project.name)}</h2><span class="status ${escapeHtml(project.state === "running" ? "running" : project.state === "degraded" ? "failure" : project.state || "idle")}">${escapeHtml(project.state || "unknown")}</span></div>${error ? `<div class="docker-project-error" role="alert"><strong>Compose operation failed</strong><span>${escapeHtml(error)}</span></div>` : ""}${actions}${containers}${project.configPath && !managed ? `<div class="docker-path">${escapeHtml(project.configPath)}</div>` : ""}</article>`;
+}
+function dockerContainerRow(container, ready) {
+  const busy=dockerBusy.has(`container:${container.id}`), running=container.state === "running";
+  const canAttach=ready && running && !busy && !!systemInfo?.capabilities?.terminal;
+  const controls=`<div class="docker-container-actions"><div class="docker-action-group docker-action-lifecycle"><button class="row-icon docker-container-icon" title="Start" aria-label="Start container" onclick="dockerContainerAction('${container.id}','start')" ${ready && !running && !busy ? "" : "disabled"}>▶</button><button class="row-icon docker-container-icon" title="Stop" aria-label="Stop container" onclick="dockerContainerAction('${container.id}','stop')" ${ready && running && !busy ? "" : "disabled"}>■</button></div><div class="docker-action-group docker-action-destructive"><button class="row-icon docker-container-icon" title="Delete stopped container" aria-label="Delete stopped container" onclick="dockerContainerAction('${container.id}','delete')" ${ready && !running && !busy ? "" : "disabled"}>🗑</button></div><div class="docker-action-group docker-action-support"><button class="row-icon docker-container-icon" title="Open terminal" aria-label="Open container terminal" onclick="dockerAttachContainer('${container.id}')" ${canAttach ? "" : "disabled"}>↪</button><button class="row-icon docker-container-icon" title="View logs" aria-label="View logs" onclick="openDockerContainerLog('${container.id}')" ${ready && !busy ? "" : "disabled"}>▤</button></div></div>`;
+  return `<div class="docker-container"><span class="docker-dot ${escapeHtml(container.tone || "gray")}"></span><strong class="docker-container-name">${escapeHtml(container.service || container.name)}</strong>${controls}<span class="docker-resource-status">${escapeHtml(container.state || "unknown")}${container.health ? ` · ${escapeHtml(container.health)}` : ""}</span></div>`;
+}
+async function dockerAction(name, action) {
+  dockerBusy.add(name); dockerProjectErrors.delete(name); renderDocker();
+  try {
+    await api(`api/v1/docker/projects/${encodeURIComponent(name)}/actions/${action}`, {method:"POST"});
+    toast(`${name}: ${action} completed`);
+  } catch(e) {
+    dockerProjectErrors.set(name, e.message); renderDocker(); toast(e.message);
+  } finally { dockerBusy.delete(name); await refresh(); }
+}
+async function dockerContainerAction(id, action) {
+  const key=`container:${id}`;
+  if(action==="delete"&&!confirm("Delete this stopped container?"))return;
+  dockerBusy.add(key); renderDocker();
+  try {
+    await api(`api/v1/docker/containers/${encodeURIComponent(id)}/actions/${action}`,{method:"POST"});
+    dockerPendingContainerStates.set(key,{id,running:action === "start" ? true : action === "stop" ? false : null});
+    toast(`Container ${action} completed`);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    await refreshDockerSnapshot();
+  } catch(e) {
+    dockerBusy.delete(key); dockerPendingContainerStates.delete(key); renderDocker(); toast(e.message);
+  }
+}
+function openDockerContainerLog(id) { openLog("Container logs",()=>api(`api/v1/docker/containers/${encodeURIComponent(id)}/logs`)); }
+async function dockerAttachContainer(id) {
+  if (!systemInfo?.capabilities?.terminal) { toast("Interactive terminals are unavailable"); return; }
+  disposeDockerAttachTerminal();
+  const dialog = $("dockerAttachDialog"), pane = $("dockerAttachPane");
+  dialog.showModal();
+  pane.replaceChildren();
+  const term = new Terminal({cursorBlink:true, scrollback:5000, fontFamily:'"Cascadia Code", Consolas, monospace', fontSize:14, theme:{background:'#0b1220'}});
+  const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(pane); fit.fit();
+  const session = {term, fit, socket:null, observer:null}; dockerAttachTerminal = session;
+  term.onData(data => { if (session.socket?.readyState === WebSocket.OPEN) session.socket.send(new TextEncoder().encode(data)); });
+  session.observer = new ResizeObserver(() => { fit.fit(); if (session.socket?.readyState === WebSocket.OPEN) session.socket.send(JSON.stringify({type:"resize",cols:term.cols,rows:term.rows})); });
+  session.observer.observe(pane);
+  try {
+    const ticket = await api(`api/v1/docker/containers/${encodeURIComponent(id)}/attach-ticket`, {method:"POST", body:JSON.stringify({cols:term.cols, rows:term.rows})});
+    if (dockerAttachTerminal !== session) return;
+    const socket = new RunPilotSecureWebSocket(terminalWebSocketURL(ticket.ticket), systemInfo?.websocketPayloadMode || "disabled"); session.socket = socket; socket.binaryType = "arraybuffer";
+    socket.onmessage = event => { if (dockerAttachTerminal === session && event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data)); };
+    socket.onerror = () => { if (dockerAttachTerminal === session) term.writeln("\r\nTerminal connection failed."); };
+    socket.onclose = event => { if (dockerAttachTerminal === session && !event.wasClean) term.writeln(`\r\n${event.reason || "Terminal connection closed."}`); };
+    socket.onopen = () => { socket.send(JSON.stringify({type:"resize",cols:term.cols,rows:term.rows})); term.focus(); };
+  } catch (error) { term.writeln(`\r\n${error.message}`); toast(error.message); }
+}
+function disposeDockerAttachTerminal() { const session = dockerAttachTerminal; dockerAttachTerminal = null; session?.observer?.disconnect(); session?.socket?.close(); session?.term?.dispose(); }
+async function deleteDockerProject(name) { if (!confirm(`Delete the RunPilot project directory for ${name}? This removes compose files and .env only; it never removes Docker images or volumes.`)) return; dockerBusy.add(name); dockerProjectErrors.delete(name); renderDocker(); try { await api(`api/v1/docker/projects/${encodeURIComponent(name)}`, {method:"DELETE"}); dockerProjectErrors.delete(name); toast("Compose project deleted"); } catch(e) { dockerProjectErrors.set(name, e.message); renderDocker(); toast(e.message); } finally { dockerBusy.delete(name); await refresh(); } }
+async function deleteDockerVolume(name) { if (!confirm(`Permanently delete Docker volume ${name} and all of its data? This cannot be undone.`)) return; const key=`volume:${name}`; dockerBusy.add(key);renderDocker();try{await api(`api/v1/docker/volumes/${encodeURIComponent(name)}`,{method:"DELETE"});toast("Docker volume deleted");}catch(e){toast(e.message)}finally{dockerBusy.delete(key);await refresh();} }
+async function deleteDockerNetwork(name) { if (!confirm(`Delete Docker network ${name}? This cannot be undone.`)) return; const key=`network:${name}`;dockerBusy.add(key);renderDocker();try{await api(`api/v1/docker/networks/${encodeURIComponent(name)}`,{method:"DELETE"});toast("Docker network deleted");}catch(e){toast(e.message)}finally{dockerBusy.delete(key);await refresh();} }
+async function openDockerFile(name, kind) { try { const out = await api(`api/v1/docker/projects/${encodeURIComponent(name)}/files/${kind}`); dockerEditing = {name,kind}; $("dockerFileTitle").textContent = `${out.content ? "Edit" : "Create"} ${kind === "compose" ? "compose.yaml" : ".env"}`; $("dockerFilePath").textContent = `${name}/${kind === "compose" ? "compose.yaml" : ".env"}`; $("dockerFileContent").value = out.content || (kind === "compose" ? "services: {}\n" : ""); updateDockerFileHighlight(); $("dockerFileDialog").showModal(); } catch(e) { toast(e.message); } }
+async function saveDockerFile() { if (!dockerEditing) return; try { await api(`api/v1/docker/projects/${encodeURIComponent(dockerEditing.name)}/files/${dockerEditing.kind}`, {method:"PUT", body:JSON.stringify({content:$("dockerFileContent").value})}); $("dockerFileDialog").close(); toast("File saved"); await refresh(); } catch(e) { toast(e.message); } }
+function openDockerCreate() { $("dockerProjectName").value=""; $("dockerCreateError").classList.add("hidden"); $("dockerCreateDialog").showModal(); }
+$("dockerCreateForm").addEventListener("submit", async e => { e.preventDefault(); const name=$("dockerProjectName").value.trim(); try { await api("api/v1/docker/projects", {method:"POST",body:JSON.stringify({name})}); $("dockerCreateDialog").close(); await refresh(); } catch(err) { $("dockerCreateError").textContent=err.message; $("dockerCreateError").classList.remove("hidden"); } });
+function openDockerVolumeCreate() { $("dockerVolumeName").value="";$("dockerVolumeError").classList.add("hidden");$("dockerVolumeDialog").showModal(); }
+$("dockerVolumeForm").addEventListener("submit",async e=>{e.preventDefault();try{await api("api/v1/docker/volumes",{method:"POST",body:JSON.stringify({name:$("dockerVolumeName").value.trim()})});$("dockerVolumeDialog").close();await refresh();}catch(err){$("dockerVolumeError").textContent=err.message;$("dockerVolumeError").classList.remove("hidden");}});
+function openDockerNetworkCreate() { $("dockerNetworkName").value="";$("dockerNetworkError").classList.add("hidden");$("dockerNetworkDialog").showModal(); }
+$("dockerNetworkForm").addEventListener("submit",async e=>{e.preventDefault();try{await api("api/v1/docker/networks",{method:"POST",body:JSON.stringify({name:$("dockerNetworkName").value.trim()})});$("dockerNetworkDialog").close();await refresh();}catch(err){$("dockerNetworkError").textContent=err.message;$("dockerNetworkError").classList.remove("hidden");}});
+$("saveDockerFile").addEventListener("click", saveDockerFile); $("closeDockerFile").addEventListener("click",()=>$("dockerFileDialog").close()); $("cancelDockerFile").addEventListener("click",()=>$("dockerFileDialog").close());
+$("closeDockerAttach").addEventListener("click",()=>$("dockerAttachDialog").close());
+$("dockerAttachDialog").addEventListener("close",disposeDockerAttachTerminal);
+
+async function loadTerminalInfo() {
+  systemInfo = await api("api/v1/system");
+  window.runPilotWebSocketPayloadMode = systemInfo?.websocketPayloadMode || "disabled";
+  if (connectionOnline) setConnected(true);
+  configurePlatformAwareFields(systemInfo.capabilities || {});
+  const enabled = !!systemInfo?.capabilities?.terminal;
+  $("terminalNav").classList.toggle("hidden", !enabled);
+	$("dockerNav").classList.toggle("hidden", !systemInfo?.capabilities?.dockerCompose);
+  if (!enabled) return;
+  terminalInfo = await api("api/v1/terminal");
+  const select = $("terminalShell");
+  select.replaceChildren();
+  for (const shell of terminalInfo.shells || []) {
+    const option = document.createElement("option"); option.value = shell.id; option.textContent = shell.name; select.append(option);
+  }
+  select.value = terminalInfo.defaultShell || "";
+  $("terminalUnavailableMessage").textContent = terminalInfo.available ? "" : "No supported interactive shell could be started on this host.";
+  $("terminalUnavailable").classList.toggle("hidden", !!terminalInfo.available);
+  $("terminalWorkspace").classList.toggle("hidden", !terminalInfo.available);
+  $("newTerminal").disabled = !terminalInfo.available;
+}
+
+function configurePlatformAwareFields(capabilities) {
+  const labels = {direct:"Direct executable", python:"Python", powershell:"PowerShell", cmd:"CMD / batch", sh:"POSIX shell (sh)", bash:"Bash"};
+  const interpreters = new Set(capabilities.commandInterpreters || []);
+  document.querySelectorAll("select[id$='Interpreter']").forEach(select => {
+    const selected = select.value || "auto";
+    for (const option of select.options) {
+      if (option.value === "auto" || option.value === "direct") continue;
+      option.hidden = !interpreters.has(option.value);
+      option.disabled = !interpreters.has(option.value);
+      if (labels[option.value]) option.textContent = labels[option.value];
+    }
+    if (select.querySelector(`option[value="${selected}"]`)?.disabled) select.value = "auto";
+  });
+  const robocopy = $("backupProvider").querySelector('option[value="robocopy"]');
+  if (robocopy) { robocopy.disabled = !capabilities.robocopy; robocopy.hidden = !capabilities.robocopy; }
+  const vss = $("resticVss").closest("label");
+  if (vss) vss.classList.toggle("hidden", !capabilities.windows);
+}
+
+function renderTerminalTabs() {
+  const tabs = $("terminalTabs"); tabs.replaceChildren();
+  for (const tab of terminalTabs) {
+    const button = document.createElement("div"); button.className = `terminal-tab${tab.id === activeTerminalID ? " active" : ""}`; button.tabIndex = 0; button.setAttribute("role", "tab");
+    const label = document.createElement("span"); label.textContent = tab.shell.name; button.append(label);
+    const close = document.createElement("button"); close.type = "button"; close.className = "terminal-tab-close"; close.textContent = "×"; close.setAttribute("aria-label", `Close ${tab.shell.name}`);
+    close.addEventListener("click", event => { event.stopPropagation(); closeTerminal(tab.id); }); button.append(close);
+    button.addEventListener("click", () => activateTerminal(tab.id)); button.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); activateTerminal(tab.id); } }); tabs.append(button);
+  }
+  $("terminalWorkspace").classList.toggle("hidden", !terminalInfo?.available || terminalTabs.length === 0);
+}
+
+function activateTerminal(id) {
+  activeTerminalID = id;
+  terminalTabs.forEach(tab => tab.pane.classList.toggle("active", tab.id === id));
+  renderTerminalTabs();
+  const tab = terminalTabs.find(item => item.id === id); if (tab) { tab.fit.fit(); tab.term.focus(); sendTerminalResize(tab); }
+}
+
+function terminalWebSocketURL(ticket) {
+  const wsURL = new URL("api/v1/terminal/connect", document.baseURI);
+  wsURL.protocol = wsURL.protocol === "https:" ? "wss:" : "ws:";
+  wsURL.searchParams.set("ticket", ticket);
+  return wsURL;
+}
+
+function terminalSessionID() {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("").replace(/^(.{8})(.{4})(.{4})(.{4})(.+)$/, "$1-$2-$3-$4-$5");
+}
+// RunPilotSecureWebSocket owns the underlying new WebSocket and preserves the
+// native event/message surface expected by terminal consumers.
+
+function sendTerminalResize(tab) {
+  if (tab.socket?.readyState === WebSocket.OPEN) tab.socket.send(JSON.stringify({type:"resize", cols:tab.term.cols, rows:tab.term.rows}));
+}
+
+async function openTerminalSession(shell, requestTicket) {
+  const id = terminalSessionID();
+  const pane = document.createElement("div"); pane.className = "terminal-pane active"; pane.id = `terminal-pane-${id}`; $("terminalPanes").append(pane);
+  const term = new Terminal({cursorBlink:true, scrollback:5000, fontFamily:'"Cascadia Code", Consolas, monospace', fontSize:14, theme:{background:'#0b1220'}});
+  const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(pane); fit.fit();
+  const tab = {id, shell, pane, term, fit, socket:null, observer:null}; terminalTabs.push(tab); activateTerminal(id);
+  term.onData(data => { if (tab.socket?.readyState === WebSocket.OPEN) tab.socket.send(new TextEncoder().encode(data)); });
+  tab.observer = new ResizeObserver(() => { fit.fit(); sendTerminalResize(tab); }); tab.observer.observe(pane);
+  try {
+    const ticket = await requestTicket(term);
+    const socket = new RunPilotSecureWebSocket(terminalWebSocketURL(ticket.ticket), systemInfo?.websocketPayloadMode || "disabled"); tab.socket = socket; socket.binaryType = "arraybuffer";
+    socket.onmessage = event => { if (event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data)); };
+    socket.onerror = error => term.writeln(`\r\n${error?.message || "Terminal connection failed."}`);
+    socket.onclose = event => { if (!event.wasClean) term.writeln(`\r\n${event.reason || "Terminal connection closed."}`); };
+    socket.onopen = () => { sendTerminalResize(tab); term.focus(); };
+  } catch (error) { term.writeln(`\r\n${error.message}`); toast(error.message); }
+}
+
+async function newTerminal() {
+  if (!terminalInfo?.available) { toast("Terminal is unavailable"); return; }
+  const shell = (terminalInfo.shells || []).find(item => item.id === $("terminalShell").value) || terminalInfo.shells[0];
+  if (!shell) { toast("Shell executable was not found."); return; }
+  await openTerminalSession(shell, term => api("api/v1/terminal/ticket", {method:"POST", body:JSON.stringify({shell:shell.id, cols:term.cols, rows:term.rows})}));
+}
+
+function closeTerminal(id) {
+  const index = terminalTabs.findIndex(tab => tab.id === id); if (index < 0) return;
+  const [tab] = terminalTabs.splice(index, 1); tab.observer?.disconnect(); tab.socket?.close(); tab.term.dispose(); tab.pane.remove();
+  activeTerminalID = terminalTabs[0]?.id || ""; if (activeTerminalID) activateTerminal(activeTerminalID); else renderTerminalTabs();
+}
+
 function setPage(page) {
   currentPage = page;
+	if (page !== "remote") document.querySelector("main").classList.remove("remote-active");
   document.querySelectorAll(".nav").forEach(n => n.classList.toggle("active", n.dataset.page === page));
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
   $(`${page}Page`).classList.add("active");
-  const [title, sub, action] = pageMeta[page];
+  const [title, action] = pageMeta[page];
   $("pageTitle").textContent = title;
-  $("pageSubtitle").textContent = sub;
   $("primaryAction").textContent = action || "";
   $("primaryAction").classList.toggle("hidden", !action);
-	if (page === "software" && !softwareProviders.length) {
-		$("softwareProviderCard").innerHTML = `<div class="empty compact"><h2>Preparing RunPilot Software Management…</h2><p>Initializing the managed Scoop runtime for this RunPilot data directory.</p></div>`;
-		$("softwarePackages").innerHTML = `<div class="software-loading" role="status"><span class="spinner" aria-hidden="true"></span><strong>Loading applications…</strong><span>Querying the selected provider.</span></div>`;
-	}
+	$("dockerVolumeAction").classList.toggle("hidden", page !== "docker");
+	$("dockerNetworkAction").classList.toggle("hidden", page !== "docker");
+	$("rdpSettingsAction").classList.toggle("hidden", page !== "remote");
+	if (page === "software") renderSoftware();
+	if (page === "docker") renderDocker();
+	if (page === "remote") renderRemote();
+	if (page === "terminal" && terminalInfo?.available && terminalTabs.length === 0) newTerminal();
   refresh();
 }
 
@@ -604,27 +1054,66 @@ $("softwareAddBucket").addEventListener("click", softwareAddBucket);
 $("softwareProviderSelect").addEventListener("change", event => changeSoftwareProvider(event.target.value));
 $("softwareSearchInput").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareSearch(); } });
 $("softwareBucketSource").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareAddBucket(); } });
+$("newTerminal").addEventListener("click", newTerminal);
+$("dockerVolumeAction").addEventListener("click", openDockerVolumeCreate);
+$("dockerNetworkAction").addEventListener("click", openDockerNetworkCreate);
+$("rdpSettingsAction").addEventListener("click", openGuacdSettings);
 document.querySelectorAll("[data-dismiss]").forEach(button => button.addEventListener("click", () => {
   $(button.dataset.dismiss).close();
 }));
 $("primaryAction").addEventListener("click", () => {
-  if (currentPage === "processes") openProcess();
-  if (currentPage === "jobs") openJob();
-  if (currentPage === "backups") openBackup();
-  if (currentPage === "storage") openStorageDialog();
+	if (currentPage === "tasks") $("taskDialog").showModal();
+	if (currentPage === "docker") openDockerCreate();
+	if (currentPage === "remote") openRemoteTarget();
 });
-$("storageEmptyAdd").addEventListener("click",()=>openStorageDialog());
-$("storageEdit").addEventListener("click",()=>{const provider=storage.find(x=>x.id===$("storageProvider").value);if(provider)openStorageDialog(provider)});
-$("storageRemove").addEventListener("click",async()=>{const provider=storage.find(x=>x.id===$("storageProvider").value);if(!provider||!confirm(`Remove ${provider.name}? This only removes it from RunPilot; files at the underlying location are never deleted.`))return;try{await api(`api/v1/storage/${provider.id}`,{method:"DELETE"});storageLocation=null;storagePath="";await refresh()}catch(e){toast(e.message)}});
+
+$("remoteBack").addEventListener("click", closeRemoteSession);
+$("remoteStop").addEventListener("click", () => { if (remoteSessionID) stopRemoteSession(remoteSessionID); });
+$("remoteFullscreen").addEventListener("click", async () => {
+  try {
+    const surface = remoteRDPInteraction ? $("remoteRDP") : remoteVNCInteraction ? $("remoteVNC") : $("remoteFrame");
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await surface.requestFullscreen();
+    focusRemoteClient();
+  } catch (error) {
+    toast(`Fullscreen unavailable: ${error.message}`);
+  }
+});
+document.addEventListener("fullscreenchange", () => { focusRemoteClient(); remoteRDPInteraction?.surfaceChanged?.(); });
+$("remoteFrame").addEventListener("load", () => { if (remoteSessionID) { $("remoteLoading").classList.add("hidden"); focusRemoteClient(); } });
+$("remoteFrame").addEventListener("pointerenter", focusRemoteClient);
+$("remoteFrame").addEventListener("pointerdown", focusRemoteClient);
+$("remoteXpraDPIMode").addEventListener("change", updateRemoteXpraSettings);
+$("remoteXpraProfile").addEventListener("change", applyRemoteXpraProfile);
+$("remoteTargetProvider").addEventListener("change", () => { updateRemoteXpraSettings(); updateRemoteTargetDialogCopy(); });
+[$("remoteXpraEncoding"), $("remoteXpraVideo")].forEach(control => control.addEventListener("change", () => { $("remoteXpraProfile").value="custom"; }));
+$("remoteTargetForm").addEventListener("submit", async event => {
+  event.preventDefault(); const id=$("remoteTargetId").value, provider=$("remoteTargetProvider").value, isRDP=provider === "rdp", isVNC=provider === "vnc", command=isRDP||isVNC ? undefined : commandFromEditor("remote"); if (!isRDP && !isVNC && !command) return;
+  const xpra=$("remoteTargetProvider").value === "xpra" ? {profile:$("remoteXpraProfile").value,encoding:$("remoteXpraEncoding").value,video:$("remoteXpraVideo").checked,dpiMode:$("remoteXpraDPIMode").value,dpi:Number($("remoteXpraDPI").value),launchAfterConnect:$("remoteXpraLaunchAfterConnect").checked,clipboard:$("remoteXpraClipboard").checked,dynamicResize:$("remoteXpraDynamicResize").checked,menu:$("remoteXpraMenu").value,toolbarPosition:$("remoteXpraToolbarPosition").value} : undefined;
+  const rdpIdentity=splitRDPUsername($("remoteRDPUsername").value), rdp=isRDP ? {host:$("remoteRDPHost").value.trim(),port:Number($("remoteRDPPort").value),username:rdpIdentity.username,domain:rdpIdentity.domain,securityMode:$("remoteRDPSecurity").value,serverLayout:$("remoteRDPLayout").value,resizeMethod:$("remoteRDPResize").value,certificatePolicy:$("remoteRDPCertificate").value,timeoutSeconds:Number($("remoteRDPTimeout").value),clipboardNormalization:$("remoteRDPClipboard").value,performanceProfile:$("remoteRDPPerformance").value,copy:true,paste:true} : undefined;
+  const vnc=isVNC ? {host:$("remoteVNCHost").value.trim(),port:Number($("remoteVNCPort").value),username:$("remoteVNCConfigUsername").value.trim(),connectTimeoutSeconds:Number($("remoteVNCTimeout").value)} : undefined;
+  const body={name:$("remoteTargetName").value.trim(),provider,type:isRDP||isVNC ? "desktop" : $("remoteTargetType").value,dbusMode:$("remoteDBusMode").value,command,xpra,rdp,vnc};
+  try { await api(id ? `api/v1/remote/targets/${id}` : "api/v1/remote/targets",{method:id?"PUT":"POST",body:JSON.stringify(body)}); $("remoteTargetDialog").close(); await refresh(); } catch(error) { setCommandError("remote",error.message); }
+});
+$("remoteRDPConnectForm").addEventListener("submit", async event => { event.preventDefault(); const target=remotePendingTarget; if (!target) return; const password=$("remoteRDPConnectPassword").value, identity=password ? splitRDPUsername($("remoteRDPConnectUsername").value) : {domain:"",username:""}, credentials={username:identity.username,domain:identity.domain,password}; remotePendingTarget=null; $("remoteRDPConnectDialog").close(); if (target.sessionID) await openRemoteSession(target.sessionID,credentials); else await beginRemoteSession(target.id,credentials); });
+$("remoteVNCCredentialsForm").addEventListener("submit", event => { event.preventDefault(); const pending=remoteVNCPendingCredentials; if (!pending) return; remoteVNCPendingCredentials=null; const credentials={username:$("remoteVNCUsername").value,password:$("remoteVNCPassword").value}; $("remoteVNCUsername").value=""; $("remoteVNCPassword").value=""; $("remoteVNCCredentialsDialog").close(); // noVNC retains this object while it completes the asynchronous RFB authentication handshake.
+  pending.rfb.sendCredentials(credentials); });
+$("remoteVNCCredentialsDialog").addEventListener("close",()=>{ const pending=remoteVNCPendingCredentials; remoteVNCPendingCredentials=null; if(pending) pending.rfb.disconnect(); });
+$("guacdSettingsForm").addEventListener("submit",async event=>{event.preventDefault();const value=guacdValue(),error=validateGuacdForm(value);setGuacdError(error);if(error)return;try{await api("api/v1/remote/guacd",{method:"PUT",body:JSON.stringify(value)});$("guacdSettingsDialog").close();toast("guacd settings saved.");await refresh()}catch(e){setGuacdError(e.message)}});
+$("guacdTest").addEventListener("click",async()=>{const value=guacdValue(),error=validateGuacdForm(value);setGuacdError(error);setGuacdStatus();if(error)return;try{const status=await api("api/v1/remote/guacd/test",{method:"POST",body:JSON.stringify(value)});setGuacdStatus(status.state==="available" ? "Connected to guacd." : status.message||"Unable to connect to guacd.",status.state!=="available")}catch(e){setGuacdStatus(e.message,true)}});
+
+document.querySelectorAll("[data-task-filter]").forEach(button => button.addEventListener("click", () => { taskFilter = button.dataset.taskFilter; document.querySelectorAll("[data-task-filter]").forEach(item => item.classList.toggle("active", item === button)); renderTasks(); }));
+document.querySelectorAll("[data-task-kind]").forEach(button => button.addEventListener("click", () => { $("taskDialog").close(); if (button.dataset.taskKind === "continuous") openProcess(); else if (button.dataset.taskKind === "scheduled") openJob(); else openBackup(); }));
 $("storageCreate").addEventListener("click",async()=>{if(!storageLocation)return;const name=prompt("Folder name:");if(!name)return;try{await api(`api/v1/storage/${storageLocation}/directories`,{method:"POST",body:JSON.stringify({parentPath:storagePath,name})});browseStorage(storageLocation,storagePath)}catch(e){toast(e.message)}});
+$("storageNewFile").addEventListener("click",openNewTextFile);
 $("storageUpload").addEventListener("change",async e=>{if(!storageLocation||!e.target.files.length)return;const form=new FormData();form.append("path",storagePath);for(const f of e.target.files)form.append("files",f);try{await api(`api/v1/storage/${storageLocation}/upload`,{method:"POST",body:form});browseStorage(storageLocation,storagePath)}catch(err){toast(err.message)}finally{e.target.value=""}});
 $("storageProvider").addEventListener("change",e=>browseStorage(e.target.value,""));
 $("storageShowHidden").addEventListener("change",e=>{storageShowHidden=e.target.checked;browseStorage(storageLocation,storagePath)});
-$("storageScope").addEventListener("change",()=>$("storageRootWrap").classList.toggle("hidden",$("storageScope").value==="host"));
-$("storageForm").addEventListener("submit",async e=>{e.preventDefault();const scope=$("storageScope").value,id=$("storageId").value,body={name:$("storageName").value.trim(),type:$("storageType").value,local:{scope,root:scope==="root"?$("storageRoot").value.trim():""}};try{await api(id?`api/v1/storage/${id}`:"api/v1/storage",{method:id?"PUT":"POST",body:JSON.stringify(body)});$("storageDialog").close();storageLocation=id||null;await refresh()}catch(err){toast(err.message)}});
 $("saveTextEditor").addEventListener("click",saveTextEditor);$("closeTextEditor").addEventListener("click",()=>$("textEditorDialog").close());$("cancelTextEditor").addEventListener("click",()=>$("textEditorDialog").close());
 $("textEditorContent").addEventListener("input",updateTextHighlight);
 $("textEditorContent").addEventListener("scroll",e=>{ $("textHighlight").scrollTop=e.target.scrollTop; $("textHighlight").scrollLeft=e.target.scrollLeft; });
+$("dockerFileContent").addEventListener("input",updateDockerFileHighlight);
+$("dockerFileContent").addEventListener("scroll",e=>{ $("dockerFileHighlight").scrollTop=e.target.scrollTop; $("dockerFileHighlight").scrollLeft=e.target.scrollLeft; });
 
 function openProcess(existing = null) {
   $("processForm").reset();
@@ -633,7 +1122,7 @@ function openProcess(existing = null) {
   populateCommandEditor("process", existing?.command);
   $("processRestart").value = existing?.restart?.mode || "on-failure";
   $("processAutostart").checked = !!existing?.autostart;
-  $("processDialogTitle").textContent = existing ? "Edit process" : "Add process";
+  $("processDialogTitle").textContent = existing ? "Edit continuous task" : "Add continuous task";
   $("processDialog").showModal();
 }
 function editProcess(id) { openProcess(processes.find(v => v.definition.id === id)?.definition); }
@@ -691,7 +1180,7 @@ function openJob(existing = null) {
   populateCommandEditor("job", existing?.command);
   $("jobEnabled").checked = existing ? !!existing.enabled : true;
   fillSchedule("job", existing?.schedule || {});
-  $("jobDialogTitle").textContent = existing ? "Edit scheduled job" : "Add scheduled job";
+  $("jobDialogTitle").textContent = existing ? "Edit scheduled task" : "Add scheduled task";
   $("jobDialog").showModal();
 }
 function editJob(id) { openJob(jobs.find(v => v.definition.id === id)?.definition); }
@@ -730,7 +1219,7 @@ function openBackup(existing = null) {
   fillSchedule("backup", existing?.schedule || {type:"daily", timeOfDay:"03:00"});
   updateMirrorWarning();
   updateBackupProvider();
-  $("backupDialogTitle").textContent = existing ? "Edit backup" : "Add backup";
+  $("backupDialogTitle").textContent = existing ? "Edit backup task" : "Add backup task";
   $("backupDialog").showModal();
 }
 function editBackup(id) { openBackup(jobs.find(v => v.definition.id === id)?.definition); }
@@ -802,8 +1291,10 @@ $("loginForm").addEventListener("submit", async e => {
     $("loginError").classList.add("hidden");
     $("loginDialog").close();
     setConnected(true);
+    await loadTerminalInfo();
     await refresh();
     startAutoRefresh();
+    startConnectionMonitor();
   } catch {
     token = old;
     $("loginError").textContent = "The token was rejected.";
@@ -812,15 +1303,21 @@ $("loginForm").addEventListener("submit", async e => {
 });
 
 (async function init() {
+  initializeSidebar();
   initializeTheme();
   if (!token) {
     $("loginDialog").showModal();
     return;
   }
+  setConnected(false);
+  startConnectionMonitor();
   await refresh();
+  const requestedSession = new URLSearchParams(location.search).get("remoteSession");
+  if (requestedSession) { setPage("remote"); await openRemoteSession(requestedSession); }
+  try { await loadTerminalInfo(); } catch (e) { if (e.message !== "Unauthorized") toast(e.message); }
   startAutoRefresh();
 })();
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) refresh();
+  if (!document.hidden) { refresh(); probeConnection(); }
 });

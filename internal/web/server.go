@@ -11,32 +11,63 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/szilab/RunPilot/internal/core"
+	"github.com/szilab/RunPilot/internal/dockercompose"
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/platform"
 	"github.com/szilab/RunPilot/internal/software"
 	"github.com/szilab/RunPilot/internal/storage"
+	"github.com/szilab/RunPilot/internal/terminal"
+	"github.com/szilab/RunPilot/internal/websocketsecure"
 )
 
 //go:embed static/*
 var staticFS embed.FS
 
 type Server struct {
-	ctrl     *core.Controller
-	basePath string
-	tickets  map[string]downloadTicket
-	ticketMu sync.Mutex
+	ctrl              *core.Controller
+	basePath          string
+	tickets           map[string]downloadTicket
+	ticketMu          sync.Mutex
+	terminal          *terminal.Manager
+	terminalTickets   map[string]terminalTicket
+	terminalTicketMu  sync.Mutex
+	remoteTickets     map[string]remoteClientTicket
+	remoteTicketMu    sync.Mutex
+	transportTickets  map[string]remoteTransportTicket
+	transportTicketMu sync.Mutex
+	rdpCredentials    map[string]rdpCredentials
+	rdpCredentialMu   sync.Mutex
+	docker            *dockercompose.Manager
+}
+type terminalTicket struct {
+	Shell        string
+	DockerExecID string
+	Cols, Rows   uint16
+	Expires      time.Time
 }
 type downloadTicket struct {
 	StorageID, Path string
 	Expires         time.Time
 }
+type remoteClientTicket struct {
+	SessionID    string
+	ClientParams map[string]string
+	Expires      time.Time
+}
+type remoteTransportTicket struct {
+	SessionID string
+	Expires   time.Time
+}
+type rdpCredentials struct{ Username, Domain, Password string }
 
 func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	basePath := "/"
@@ -47,7 +78,7 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}}, nil
+	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, terminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), terminalTickets: map[string]terminalTicket{}, remoteTickets: map[string]remoteClientTicket{}, transportTickets: map[string]remoteTransportTicket{}, rdpCredentials: map[string]rdpCredentials{}, docker: ctrl.Docker()}, nil
 }
 
 func (s *Server) BasePath() string { return s.basePath }
@@ -61,6 +92,38 @@ func (s *Server) Handler() http.Handler {
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/v1/system", s.handleSystem)
+	api.HandleFunc("GET /api/v1/docker", s.handleDockerRuntime)
+	api.HandleFunc("GET /api/v1/docker/projects", s.handleDockerProjects)
+	api.HandleFunc("GET /api/v1/docker/volumes", s.handleDockerVolumes)
+	api.HandleFunc("POST /api/v1/docker/volumes", s.handleDockerCreateVolume)
+	api.HandleFunc("DELETE /api/v1/docker/volumes/{name}", s.handleDockerDeleteVolume)
+	api.HandleFunc("GET /api/v1/docker/networks", s.handleDockerNetworks)
+	api.HandleFunc("POST /api/v1/docker/networks", s.handleDockerCreateNetwork)
+	api.HandleFunc("DELETE /api/v1/docker/networks/{name}", s.handleDockerDeleteNetwork)
+	api.HandleFunc("POST /api/v1/docker/containers/{id}/actions/{action}", s.handleDockerContainerAction)
+	api.HandleFunc("GET /api/v1/docker/containers/{id}/logs", s.handleDockerContainerLogs)
+	api.HandleFunc("POST /api/v1/docker/containers/{id}/attach-ticket", s.handleDockerContainerAttachTicket)
+	api.HandleFunc("POST /api/v1/docker/projects", s.handleDockerCreateProject)
+	api.HandleFunc("DELETE /api/v1/docker/projects/{name}", s.handleDockerDeleteProject)
+	api.HandleFunc("POST /api/v1/docker/projects/{name}/actions/{action}", s.handleDockerAction)
+	api.HandleFunc("GET /api/v1/docker/projects/{name}/files/{kind}", s.handleDockerReadFile)
+	api.HandleFunc("PUT /api/v1/docker/projects/{name}/files/{kind}", s.handleDockerWriteFile)
+	api.HandleFunc("GET /api/v1/terminal", s.handleTerminalInfo)
+	api.HandleFunc("GET /api/v1/remote/providers", s.handleRemoteProviders)
+	api.HandleFunc("GET /api/v1/remote/guacd", s.handleGuacdConfig)
+	api.HandleFunc("PUT /api/v1/remote/guacd", s.handleUpdateGuacdConfig)
+	api.HandleFunc("POST /api/v1/remote/guacd/test", s.handleTestGuacd)
+	api.HandleFunc("GET /api/v1/remote/targets", s.handleRemoteTargets)
+	api.HandleFunc("POST /api/v1/remote/targets", s.handleCreateRemoteTarget)
+	api.HandleFunc("PUT /api/v1/remote/targets/{id}", s.handleUpdateRemoteTarget)
+	api.HandleFunc("DELETE /api/v1/remote/targets/{id}", s.handleDeleteRemoteTarget)
+	api.HandleFunc("GET /api/v1/remote/sessions", s.handleRemoteSessions)
+	api.HandleFunc("GET /api/v1/remote/sessions/{id}/diagnostics", s.handleRemoteSessionDiagnostics)
+	api.HandleFunc("POST /api/v1/remote/targets/{id}/sessions", s.handleStartRemoteSession)
+	api.HandleFunc("DELETE /api/v1/remote/sessions/{id}", s.handleStopRemoteSession)
+	api.HandleFunc("POST /api/v1/remote/sessions/{id}/client-ticket", s.handleRemoteClientTicket)
+	api.HandleFunc("POST /api/v1/remote/sessions/{id}/transport-ticket", s.handleRemoteTransportTicket)
+	api.HandleFunc("POST /api/v1/terminal/ticket", s.handleTerminalTicket)
 	api.HandleFunc("GET /api/v1/overview", s.handleOverview)
 	api.HandleFunc("GET /api/v1/processes", s.handleListProcesses)
 	api.HandleFunc("POST /api/v1/processes", s.handleCreateProcess)
@@ -80,9 +143,6 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/runs", s.handleRuns)
 	api.HandleFunc("GET /api/v1/runs/{id}/log", s.handleRunLog)
 	api.HandleFunc("GET /api/v1/storage", s.handleListStorage)
-	api.HandleFunc("POST /api/v1/storage", s.handleCreateStorage)
-	api.HandleFunc("PUT /api/v1/storage/{id}", s.handleUpdateStorage)
-	api.HandleFunc("DELETE /api/v1/storage/{id}", s.handleDeleteStorage)
 	api.HandleFunc("GET /api/v1/storage/{id}/entries", s.handleStorageEntries)
 	api.HandleFunc("POST /api/v1/storage/{id}/download-ticket", s.handleDownloadTicket)
 	api.HandleFunc("POST /api/v1/storage/{id}/upload", s.handleUpload)
@@ -110,6 +170,15 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/v1/software/providers/{id}/refresh", s.handleSoftwareRefresh)
 
 	mux.Handle("/api/", s.auth(api))
+	// The embedded upstream HTML5 client cannot attach a Bearer header to every
+	// asset and WebSocket request. It receives only a scoped, HttpOnly,
+	// path-scoped cookie after an authenticated client-ticket request.
+	mux.HandleFunc("GET /api/v1/remote/sessions/{id}/client/{path...}", s.handleRemoteClient)
+	mux.HandleFunc("GET /api/v1/remote/sessions/{id}/transport", s.handleRemoteTransport)
+	mux.HandleFunc("GET /remote/session/{id}", s.handleRemoteSessionPage)
+	// A terminal connection is authenticated by its short-lived, single-use
+	// ticket. It intentionally does not accept the permanent API token in a URL.
+	mux.HandleFunc("GET /api/v1/terminal/connect", s.handleTerminalConnect)
 
 	sub, _ := fs.Sub(staticFS, "static")
 	static := http.FileServer(http.FS(sub))
@@ -135,6 +204,9 @@ func (s *Server) Handler() http.Handler {
 		mux.ServeHTTP(w, clone)
 	}))
 }
+
+// Close releases all interactive shell sessions during RunPilot shutdown.
+func (s *Server) Close() error { return s.terminal.Close() }
 
 func normalizeBasePath(value string) (string, error) {
 	value = strings.TrimSpace(value)
@@ -166,13 +238,443 @@ func (s *Server) auth(next http.Handler) http.Handler {
 func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	cfg := s.ctrl.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":         "RunPilot",
-		"version":      "0.1.0-dev",
-		"dataDir":      s.ctrl.DataDir(),
-		"configPath":   s.ctrl.ConfigPath(),
-		"bind":         cfg.Server.Bind,
-		"capabilities": platform.CurrentCapabilities(),
+		"name":                 "RunPilot",
+		"version":              "0.1.0-dev",
+		"dataDir":              s.ctrl.DataDir(),
+		"configPath":           s.ctrl.ConfigPath(),
+		"bind":                 cfg.Server.Bind,
+		"capabilities":         platform.CurrentCapabilities(),
+		"websocketPayloadMode": requestWebSocketPayloadMode(r, cfg.Server.WebSocketPayloadMode),
 	})
+}
+
+// requestWebSocketPayloadMode disables the additional payload cipher for an
+// HTTP browser session. HTTPS clients retain the configured transport mode.
+func requestWebSocketPayloadMode(r *http.Request, configured string) string {
+	if requestScheme(r) == "http" {
+		return websocketsecure.ModeDisabled
+	}
+	return websocketsecure.NormalizeMode(configured)
+}
+
+func requestScheme(r *http.Request) string {
+	if origin, err := url.Parse(r.Header.Get("Origin")); err == nil && (origin.Scheme == "http" || origin.Scheme == "https") {
+		return origin.Scheme
+	}
+	if forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]); forwarded == "http" || forwarded == "https" {
+		return forwarded
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+func (s *Server) dockerSupported(w http.ResponseWriter) bool {
+	if !platform.CurrentCapabilities().DockerCompose {
+		writeError(w, http.StatusNotImplemented, dockercompose.ErrUnsupported)
+		return false
+	}
+	return true
+}
+
+func (s *Server) handleDockerRuntime(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.docker.Runtime(r.Context()))
+}
+func (s *Server) handleDockerProjects(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	runtime, projects, err := s.docker.List(r.Context())
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runtime": runtime, "projects": projects})
+}
+func (s *Server) handleDockerVolumes(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	runtime, volumes, err := s.docker.ListVolumes(r.Context())
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runtime": runtime, "volumes": volumes})
+}
+func (s *Server) handleDockerCreateVolume(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	v, err := s.docker.CreateVolume(r.Context(), body.Name)
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, v)
+}
+func (s *Server) handleDockerDeleteVolume(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	if err := s.docker.DeleteVolume(r.Context(), r.PathValue("name")); err != nil {
+		dockerError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (s *Server) handleDockerNetworks(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	runtime, networks, err := s.docker.ListNetworks(r.Context())
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runtime": runtime, "networks": networks})
+}
+func (s *Server) handleDockerCreateNetwork(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	network, err := s.docker.CreateNetwork(r.Context(), body.Name)
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, network)
+}
+func (s *Server) handleDockerDeleteNetwork(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	if err := s.docker.DeleteNetwork(r.Context(), r.PathValue("name")); err != nil {
+		dockerError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (s *Server) handleDockerContainerAction(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	if err := s.docker.ContainerAction(r.Context(), r.PathValue("id"), r.PathValue("action")); err != nil {
+		dockerError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (s *Server) handleDockerContainerLogs(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	logs, err := s.docker.ContainerLogs(r.Context(), r.PathValue("id"))
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(logs))
+}
+func (s *Server) handleDockerContainerAttachTicket(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	if err := s.docker.TerminalContainer(r.Context(), r.PathValue("id")); err != nil {
+		dockerError(w, err)
+		return
+	}
+	var request struct{ Cols, Rows uint16 }
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if request.Cols == 0 {
+		request.Cols = 80
+	}
+	if request.Rows == 0 {
+		request.Rows = 24
+	}
+	if request.Cols > 500 || request.Rows > 300 {
+		writeError(w, http.StatusBadRequest, errors.New("terminal dimensions are too large"))
+		return
+	}
+	ticket, err := secureTicket()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.terminalTicketMu.Lock()
+	s.terminalTickets[ticket] = terminalTicket{DockerExecID: r.PathValue("id"), Cols: request.Cols, Rows: request.Rows, Expires: time.Now().Add(time.Minute)}
+	s.terminalTicketMu.Unlock()
+	writeJSON(w, http.StatusCreated, map[string]string{"ticket": ticket})
+}
+func (s *Server) handleDockerCreateProject(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	p, err := s.docker.Create(body.Name)
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, p)
+}
+func (s *Server) handleDockerAction(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	if err := s.docker.Action(r.Context(), r.PathValue("name"), r.PathValue("action")); err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+}
+func (s *Server) handleDockerDeleteProject(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	if err := s.docker.Delete(r.Context(), r.PathValue("name")); err != nil {
+		dockerError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (s *Server) handleDockerReadFile(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	content, err := s.docker.ReadFile(r.PathValue("name"), r.PathValue("kind"))
+	if err != nil {
+		dockerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"content": content})
+}
+func (s *Server) handleDockerWriteFile(w http.ResponseWriter, r *http.Request) {
+	if !s.dockerSupported(w) {
+		return
+	}
+	var body struct {
+		Content string `json:"content"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if err := s.docker.WriteFile(r.PathValue("name"), r.PathValue("kind"), body.Content); err != nil {
+		dockerError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func dockerError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, dockercompose.ErrInvalidName), strings.Contains(err.Error(), "invalid Compose action"), strings.Contains(err.Error(), "invalid managed file"):
+		writeError(w, http.StatusBadRequest, err)
+	case errors.Is(err, dockercompose.ErrProjectNotFound):
+		writeError(w, http.StatusNotFound, err)
+	case errors.Is(err, dockercompose.ErrReadOnly):
+		writeError(w, http.StatusForbidden, err)
+	case errors.Is(err, dockercompose.ErrBusy), errors.Is(err, dockercompose.ErrProjectNotDown):
+		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, dockercompose.ErrRuntimeUnavailable):
+		writeError(w, http.StatusServiceUnavailable, err)
+	case errors.Is(err, dockercompose.ErrUnsupported):
+		writeError(w, http.StatusNotImplemented, err)
+	case errors.Is(err, dockercompose.ErrFileTooLarge):
+		writeError(w, http.StatusRequestEntityTooLarge, err)
+	case errors.Is(err, dockercompose.ErrVolumeInUse), errors.Is(err, dockercompose.ErrNetworkInUse), errors.Is(err, dockercompose.ErrProtectedNetwork), errors.Is(err, dockercompose.ErrNetworkExists):
+		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, dockercompose.ErrContainerRunning):
+		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, dockercompose.ErrContainerNotFound):
+		writeError(w, http.StatusNotFound, err)
+	case errors.Is(err, dockercompose.ErrContainerReadOnly):
+		writeError(w, http.StatusForbidden, err)
+	default:
+		writeError(w, http.StatusInternalServerError, err)
+	}
+}
+
+func (s *Server) handleTerminalInfo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"available":    s.terminal.Available(),
+		"shells":       s.terminal.Shells(),
+		"defaultShell": s.terminal.DefaultShell(),
+	})
+}
+
+func (s *Server) handleTerminalTicket(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Shell string `json:"shell"`
+		Cols  uint16 `json:"cols"`
+		Rows  uint16 `json:"rows"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if !s.terminal.Available() {
+		writeError(w, http.StatusServiceUnavailable, errors.New("terminal is not available on this host"))
+		return
+	}
+	if request.Shell != "" {
+		found := false
+		for _, shell := range s.terminal.Shells() {
+			if shell.ID == request.Shell {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeError(w, http.StatusBadRequest, terminal.ErrUnknownShell)
+			return
+		}
+	}
+	if request.Cols == 0 {
+		request.Cols = 80
+	}
+	if request.Rows == 0 {
+		request.Rows = 24
+	}
+	if request.Cols > 500 || request.Rows > 300 {
+		writeError(w, http.StatusBadRequest, errors.New("terminal dimensions are too large"))
+		return
+	}
+	ticket, err := secureTicket()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.terminalTicketMu.Lock()
+	s.terminalTickets[ticket] = terminalTicket{Shell: request.Shell, Cols: request.Cols, Rows: request.Rows, Expires: time.Now().Add(time.Minute)}
+	s.terminalTicketMu.Unlock()
+	// The browser resolves the WebSocket endpoint from document.baseURI so it
+	// retains the public scheme, host, port, and any configured base path.
+	// Returning only the ticket prevents a backend address from leaking into
+	// the browser-facing connection URL.
+	writeJSON(w, http.StatusCreated, map[string]string{"ticket": ticket})
+}
+
+func (s *Server) handleTerminalConnect(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("ticket") == "" {
+		http.Error(w, "terminal ticket required", http.StatusUnauthorized)
+		return
+	}
+	// coder/websocket validates Origin against the request Host by default.
+	// Do not set InsecureSkipVerify or broad origin patterns here.
+	conn, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.CloseNow()
+	conn.SetReadLimit(websocketsecure.MaxEncryptedMessageSize)
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	ticket, ok := s.consumeTerminalTicket(r.URL.Query().Get("ticket"))
+	if !ok {
+		_ = conn.Close(websocket.StatusPolicyViolation, "terminal connection expired or already used")
+		return
+	}
+	secure, err := websocketsecure.ServerHandshake(ctx, conn, requestWebSocketPayloadMode(r, s.ctrl.Snapshot().Server.WebSocketPayloadMode))
+	if err != nil {
+		_ = conn.Close(websocket.StatusPolicyViolation, "secure WebSocket negotiation failed")
+		return
+	}
+	var session *terminal.Session
+	if ticket.DockerExecID != "" {
+		session, err = s.terminal.StartCommand("Container terminal", "docker", []string{"exec", "-i", "-t", ticket.DockerExecID, "/bin/sh"}, ticket.Cols, ticket.Rows)
+	} else {
+		session, err = s.terminal.Start(ticket.Shell, ticket.Cols, ticket.Rows)
+	}
+	if err != nil {
+		_ = conn.Close(websocket.StatusInternalError, err.Error())
+		return
+	}
+	defer session.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		buffer := make([]byte, 32*1024)
+		for {
+			n, readErr := session.Read(buffer)
+			if n > 0 {
+				if writeErr := secure.Write(ctx, websocket.MessageBinary, buffer[:n]); writeErr != nil {
+					return
+				}
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+	for {
+		kind, data, readErr := secure.Read(ctx)
+		if readErr != nil {
+			break
+		}
+		switch kind {
+		case websocket.MessageBinary:
+			if _, err := session.Write(data); err != nil {
+				return
+			}
+		case websocket.MessageText:
+			var control struct {
+				Type       string `json:"type"`
+				Cols, Rows uint16
+			}
+			if json.Unmarshal(data, &control) != nil || control.Type != "resize" || session.Resize(control.Cols, control.Rows) != nil {
+				_ = conn.Close(websocket.StatusPolicyViolation, "invalid terminal control message")
+				return
+			}
+		}
+	}
+	cancel()
+	_ = session.Close()
+	<-done
+}
+
+func (s *Server) consumeTerminalTicket(value string) (terminalTicket, bool) {
+	s.terminalTicketMu.Lock()
+	defer s.terminalTicketMu.Unlock()
+	ticket, ok := s.terminalTickets[value]
+	if ok {
+		delete(s.terminalTickets, value)
+	}
+	if !ok || time.Now().After(ticket.Expires) {
+		return terminalTicket{}, false
+	}
+	return ticket, true
+}
+
+func secureTicket() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", b), nil
 }
 
 func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
@@ -322,70 +824,25 @@ func (s *Server) handleRunLog(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListStorage(w http.ResponseWriter, r *http.Request) {
-	type view struct {
-		model.StorageDefinition
-		Capabilities any           `json:"capabilities"`
-		State        storage.State `json:"state"`
-	}
-	out := make([]view, 0)
-	for _, d := range s.ctrl.StorageDefinitions() {
-		p, e := s.ctrl.StorageProvider(d.ID)
-		v := view{StorageDefinition: d, State: storage.State{Status: "unavailable", Reason: "Provider configuration is invalid"}}
-		if e == nil {
-			v.Capabilities = p.Capabilities()
-			v.State = storage.State{Status: "ready"}
-			if stateful, ok := p.(storage.StateProvider); ok {
-				v.State = stateful.State()
-			}
-		}
-		out = append(out, v)
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, s.ctrl.StorageLocations(r.Context()))
 }
-func (s *Server) handleCreateStorage(w http.ResponseWriter, r *http.Request) {
-	var d model.StorageDefinition
-	if !decodeJSON(w, r, &d) {
-		return
+func storageCapabilities(p storage.Provider, path string) storage.Capabilities {
+	if scoped, ok := p.(storage.PathCapabilitiesProvider); ok {
+		return scoped.CapabilitiesFor(path)
 	}
-	d.ID = ""
-	out, e := s.ctrl.UpsertStorage(d)
-	if e != nil {
-		writeError(w, http.StatusBadRequest, e)
-		return
-	}
-	writeJSON(w, http.StatusCreated, out)
-}
-func (s *Server) handleUpdateStorage(w http.ResponseWriter, r *http.Request) {
-	var d model.StorageDefinition
-	if !decodeJSON(w, r, &d) {
-		return
-	}
-	d.ID = r.PathValue("id")
-	out, e := s.ctrl.UpsertStorage(d)
-	if e != nil {
-		writeError(w, http.StatusBadRequest, e)
-		return
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-func (s *Server) handleDeleteStorage(w http.ResponseWriter, r *http.Request) {
-	if e := s.ctrl.DeleteStorage(r.PathValue("id")); e != nil {
-		writeError(w, http.StatusNotFound, e)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	return p.Capabilities()
 }
 func (s *Server) handleStorageEntries(w http.ResponseWriter, r *http.Request) {
-	p, e := s.ctrl.StorageProvider(r.PathValue("id"))
+	p, e := s.ctrl.StorageProvider(r.Context(), r.PathValue("id"))
 	if e != nil {
 		writeError(w, http.StatusNotFound, e)
-		return
-	}
-	if !p.Capabilities().Browse {
-		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("browse is not supported"))
 		return
 	}
 	storagePath := r.URL.Query().Get("path")
+	if !storageCapabilities(p, storagePath).Browse {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("browse is not supported"))
+		return
+	}
 	showHidden := r.URL.Query().Get("showHidden") == "true"
 	var out any
 	if filtered, ok := p.(interface {
@@ -408,12 +865,12 @@ func (s *Server) handleDownloadTicket(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &v) {
 		return
 	}
-	p, e := s.ctrl.StorageProvider(r.PathValue("id"))
+	p, e := s.ctrl.StorageProvider(r.Context(), r.PathValue("id"))
 	if e != nil {
 		writeError(w, http.StatusNotFound, e)
 		return
 	}
-	if !p.Capabilities().Download {
+	if !storageCapabilities(p, v.Path).Download {
 		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("download is not supported"))
 		return
 	}
@@ -453,7 +910,7 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	p, e := s.ctrl.StorageProvider(t.StorageID)
+	p, e := s.ctrl.StorageProvider(r.Context(), t.StorageID)
 	if e != nil {
 		http.NotFound(w, r)
 		return
@@ -484,7 +941,7 @@ func (s *Server) mutable(w http.ResponseWriter, id, action string) (interface {
 	Move(string, string) error
 	Delete(string) error
 }, bool) {
-	p, e := s.ctrl.StorageProvider(id)
+	p, e := s.ctrl.StorageProvider(context.Background(), id)
 	if e != nil {
 		writeError(w, 404, e)
 		return nil, false
@@ -507,7 +964,7 @@ func (s *Server) mutable(w http.ResponseWriter, id, action string) (interface {
 	return m, true
 }
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
-	p, e := s.ctrl.StorageProvider(r.PathValue("id"))
+	p, e := s.ctrl.StorageProvider(r.Context(), r.PathValue("id"))
 	if e != nil {
 		writeError(w, 404, e)
 		return
@@ -599,7 +1056,7 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &v) {
 		return
 	}
-	p, err := s.ctrl.StorageProvider(r.PathValue("id"))
+	p, err := s.ctrl.StorageProvider(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeError(w, 404, err)
 		return
@@ -619,7 +1076,7 @@ func (s *Server) textEditor(w http.ResponseWriter, id string) (interface {
 	ReadText(string) (string, error)
 	WriteText(string, string) error
 }, bool) {
-	p, err := s.ctrl.StorageProvider(id)
+	p, err := s.ctrl.StorageProvider(context.Background(), id)
 	if err != nil {
 		writeError(w, 404, err)
 		return nil, false
@@ -635,6 +1092,15 @@ func (s *Server) textEditor(w http.ResponseWriter, id string) (interface {
 	return e, true
 }
 func (s *Server) handleReadText(w http.ResponseWriter, r *http.Request) {
+	p, err := s.ctrl.StorageProvider(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if !storageCapabilities(p, r.URL.Query().Get("path")).Browse {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("reading is not supported"))
+		return
+	}
 	e, ok := s.textEditor(w, r.PathValue("id"))
 	if !ok {
 		return
@@ -652,6 +1118,15 @@ func (s *Server) handleWriteText(w http.ResponseWriter, r *http.Request) {
 		Content string `json:"content"`
 	}
 	if !decodeJSON(w, r, &v) {
+		return
+	}
+	p, err := s.ctrl.StorageProvider(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if !storageCapabilities(p, v.Path).TextEdit {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("editing is not supported"))
 		return
 	}
 	e, ok := s.textEditor(w, r.PathValue("id"))

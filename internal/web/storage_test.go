@@ -7,10 +7,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/szilab/RunPilot/internal/core"
-	"github.com/szilab/RunPilot/internal/model"
 )
 
 func TestDownloadTicketAtRootUsesLocalPath(t *testing.T) {
@@ -23,15 +23,12 @@ func TestDownloadTicketAtRootUsesLocalPath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "report.bin"), []byte{1, 2, 3}, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	d, err := ctrl.UpsertStorage(model.StorageDefinition{Name: "test", Type: model.StorageLocal, Local: &model.LocalStorageSpec{Scope: model.LocalStorageScopeRoot, Root: root}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	s, err := New(ctrl)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/"+d.ID+"/download-ticket", bytes.NewBufferString(`{"path":"report.bin"}`))
+	path := "root" + filepath.ToSlash(root) + "/report.bin"
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/local/download-ticket", bytes.NewBufferString(`{"path":"`+path+`"}`))
 	req.Header.Set("Authorization", "Bearer "+ctrl.Snapshot().Server.Token)
 	response := httptest.NewRecorder()
 	s.Handler().ServeHTTP(response, req)
@@ -55,6 +52,60 @@ func TestDownloadTicketAtRootUsesLocalPath(t *testing.T) {
 	}
 }
 
+func TestStorageTextEndpointCreatesNewLocalFile(t *testing.T) {
+	ctrl, err := core.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	root := t.TempDir()
+	s, err := New(ctrl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "root" + filepath.ToSlash(root) + "/new-note.txt"
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/storage/local/text", bytes.NewBufferString(`{"path":"`+path+`","content":"hello"}`))
+	request.Header.Set("Authorization", "Bearer "+ctrl.Snapshot().Server.Token)
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("create status = %d: %s", response.Code, response.Body.String())
+	}
+	content, err := os.ReadFile(filepath.Join(root, "new-note.txt"))
+	if err != nil || string(content) != "hello" {
+		t.Fatalf("created file = %q, %v", content, err)
+	}
+}
+
+func TestStorageLocationsAreRuntimeOnly(t *testing.T) {
+	ctrl, err := core.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	s, err := New(ctrl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := ctrl.Snapshot().Server.Token
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/storage", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"local"`)) {
+		t.Fatalf("locations = %d %s", response.Code, response.Body.String())
+	}
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+		request = httptest.NewRequest(method, "/api/v1/storage/unused", nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		response = httptest.NewRecorder()
+		s.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s storage CRUD status = %d", method, response.Code)
+		}
+	}
+}
+
 func TestSoftwareProviderConfigurationRequiresAuth(t *testing.T) {
 	ctrl, err := core.Open(t.TempDir())
 	if err != nil {
@@ -75,8 +126,15 @@ func TestSoftwareProviderConfigurationRequiresAuth(t *testing.T) {
 	authorized.Header.Set("Authorization", "Bearer "+ctrl.Snapshot().Server.Token)
 	r = httptest.NewRecorder()
 	s.Handler().ServeHTTP(r, authorized)
-	if r.Code != http.StatusOK {
+	wantStatus := http.StatusOK
+	if runtime.GOOS != "windows" {
+		wantStatus = http.StatusNotFound
+	}
+	if r.Code != wantStatus {
 		t.Fatalf("configuration status = %d: %s", r.Code, r.Body.String())
+	}
+	if runtime.GOOS != "windows" {
+		return
 	}
 	var provider struct{ ID string }
 	if err := json.NewDecoder(r.Body).Decode(&provider); err != nil {

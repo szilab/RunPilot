@@ -46,6 +46,7 @@ func Run(ctx context.Context, dataDir string, options ...Options) error {
 	if err != nil {
 		return err
 	}
+	defer ui.Close()
 	if ctrl.TokenCreated() {
 		log.Printf("RunPilot API token (save it now): %s", cfg.Server.Token)
 	}

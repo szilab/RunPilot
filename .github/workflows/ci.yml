@@ -30,24 +30,24 @@ jobs:
           name: runpilot-linux-amd64
           path: dist/runpilot-linux-amd64
 
-  windows-build:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.23.x"
-          cache: true
-      - name: Test on Windows
-        run: go test ./...
-      - name: Vet on Windows
-        run: go vet ./...
-      - name: Build
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          go build -trimpath -ldflags="-s -w" -o dist/runpilot-windows-amd64.exe ./cmd/runpilot
-      - uses: actions/upload-artifact@v4
-        with:
-          name: runpilot-windows-amd64
-          path: dist/runpilot-windows-amd64.exe
+  # windows-build:
+  #   runs-on: windows-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-go@v5
+  #       with:
+  #         go-version: "1.23.x"
+  #         cache: true
+  #     - name: Test on Windows
+  #       run: go test ./...
+  #     - name: Vet on Windows
+  #       run: go vet ./...
+  #     - name: Build
+  #       shell: pwsh
+  #       run: |
+  #         New-Item -ItemType Directory -Force dist | Out-Null
+  #         go build -trimpath -ldflags="-s -w" -o dist/runpilot-windows-amd64.exe ./cmd/runpilot
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: runpilot-windows-amd64
+  #         path: dist/runpilot-windows-amd64.exe

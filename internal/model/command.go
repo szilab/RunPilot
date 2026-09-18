@@ -26,7 +26,7 @@ func ValidateEnvironment(environment map[string]string) error {
 		}
 		canonical := strings.ToUpper(name)
 		if previous, exists := seen[canonical]; exists {
-			return fmt.Errorf("environment variable names %q and %q conflict on Windows", previous, name)
+			return fmt.Errorf("environment variable names %q and %q conflict on case-insensitive platforms", previous, name)
 		}
 		seen[canonical] = name
 	}

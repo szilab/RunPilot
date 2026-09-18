@@ -1,8 +1,12 @@
 # RunPilot
 
-RunPilot is a lightweight Windows host-management application written in Go. One native Windows service manages configured workloads and operations and exposes an embedded local web UI.
+<div align="center">
+  <img src="internal/web/static/runpilot-logo.png" width="120">
+</div>
 
-RunPilot provides process supervision, scheduling, backup jobs, storage access and isolated software management through a coherent Windows management GUI.
+RunPilot is a lightweight Windows/Linux host-management application written in Go. One native service manages configured workloads and operations and exposes an embedded local web UI. Windows uses Windows Service Control Manager; Linux uses a systemd user service.
+
+RunPilot provides process supervision, scheduling, backup jobs, storage access and isolated software management through a coherent management GUI.
 
 The project takes the useful operating model of Perch — one service, one dashboard, many managed processes — but uses its own implementation and broader typed capability/integration model.
 
@@ -14,7 +18,7 @@ RunPilot should integrate specialist tools such as Robocopy, Restic or future pa
 
 ## Capabilities
 
-- Native Windows service (`RunPilot Process Manager`)
+- Native service (`RunPilot Process Manager`) through Windows SCM or a Linux systemd user service
 - Long-running process supervision
 - `.exe`, `.bat`/`.cmd`, `.ps1` and `.py` launch support
 - Autostart and `never` / `on-failure` / `always` restart policies
@@ -27,8 +31,10 @@ RunPilot should integrate specialist tools such as Robocopy, Restic or future pa
 - Embedded web GUI and REST API
 - Overview dashboard with host CPU, memory, disk and workload health
 - Token-authenticated API bound to `127.0.0.1` by default
-- YAML configuration under `%ProgramData%\RunPilot`
+- YAML configuration under `%ProgramData%\RunPilot` on Windows or `$XDG_DATA_HOME/runpilot` / `~/.local/share/runpilot` on Linux
 - Software Management through a RunPilot-owned isolated Scoop provider
+- Interactive Terminal tabs backed by a Linux PTY or Windows ConPTY
+- Remote Access targets and sessions through Xpra, embedded-browser RDP, and VNC/noVNC providers
 
 ## Product direction
 
@@ -36,18 +42,17 @@ RunPilot separates user-facing capabilities from external tool integrations.
 
 Planned/possible capabilities include:
 
-- **Applications** — lifecycle, status and logs for long-running workloads.
-- **Jobs** — manually or automatically scheduled one-shot operations.
-- **Backups** — GUI and scheduling around specialist backup tools.
-- **Storage** — writable Local Filesystem browsing (a restricted folder or all drives accessible to the service identity), plus future versioned providers.
+- **Tasks** — one user-facing view for continuous commands, scheduled commands and typed scheduled backups.
+- **Storage** — the always-available Local filesystem plus Docker volumes discovered at runtime.
 - **Software** — install, upgrade and remove portable applications through the RunPilot-owned Scoop provider; WinGet may be a future provider for conventional Windows software.
-- **History and health** — shared execution history, logs and host/workload status.
+- **Terminal** — short-lived interactive local shells in the web UI, using native PTY/ConPTY support rather than command execution pipes.
+- **Health** — shared execution history, logs and host/workload status; logs remain available from their task.
 
 An external integration may serve more than one capability. Restic currently provides backup execution, native retention and repository checking; repository browsing, historical versions and restore remain separate follow-up work.
 
 RunPilot should not emulate unsupported backend features merely to make integrations look identical. If Robocopy does not provide versioned repository semantics, versioned backup should use a tool that natively provides them rather than adding a home-grown backup format to RunPilot.
 
-Similarly, future Docker/Compose support should attach to an already functional external runtime and expose useful GUI lifecycle/status/log operations. Provisioning WSL, installing or operating Docker daemons, implementing container networking or recreating Docker orchestration are not currently part of the RunPilot product boundary.
+Docker support attaches to an already functional external runtime and is limited to explicit Compose projects, Compose-labelled containers, named volumes, and named networks. Provisioning WSL, installing or operating Docker daemons, generic Docker execution, or recreating Docker orchestration are not part of the RunPilot product boundary.
 
 See `ARCHITECTURE.md` for the detailed capability/integration model and guardrails.
 
@@ -57,6 +62,15 @@ See `ARCHITECTURE.md` for the detailed capability/integration model and guardrai
 go test ./...
 go vet ./...
 go run ./cmd/runpilot run --data-dir ./runpilot-data
+```
+
+On Linux, install and start the user service with `runpilot service install` and
+`runpilot service start`. The service runs with the installing user's permissions
+and does not require a graphical login. To keep it running and start it at boot
+without an interactive login, enable lingering for that user:
+
+```bash
+sudo loginctl enable-linger <username>
 ```
 
 Open `http://127.0.0.1:9070`. On first start, `run` prints a newly generated API
@@ -72,7 +86,27 @@ server:
   bind: 127.0.0.1:9070 # Host part is used with port; full legacy address also works.
   port: 9070
   basePath: /runpilot
+  websocketPayloadMode: disabled # disabled, optional, or required
 ```
+
+### WebSocket payload encryption
+
+RunPilot can encrypt application payloads inside the existing WSS connection with
+ephemeral P-256 ECDH, HKDF-SHA-256, and AES-256-GCM. This protects payload
+contents from passive TLS-inspecting proxies; connection endpoints, timing,
+frame sizes, and traffic volume remain visible, and WSS remains required.
+
+`disabled` preserves current WebSocket behavior. `optional` negotiates encryption
+with a compatible client but permits an unencrypted legacy client, so it is
+compatible but vulnerable to an active downgrade. `required` rejects clients
+that do not complete the secure negotiation and never falls back to plaintext.
+Each connection creates fresh ephemeral keys and directional sequence numbers;
+closing or reconnecting discards the session.
+
+The current browser deployment has no independently provisioned server identity
+trust anchor. The handshake therefore protects against passive observation, but
+does not claim protection against an active application-layer MITM that can
+substitute both handshake keys. Do not call this E2EE.
 
 `--port` and `--base-path` override these values for one foreground run:
 
@@ -81,9 +115,143 @@ server:
 ```
 
 Use the same flags with `service install` to persist them in the installed
-Windows service command line. With the example above, publish the application
+service command line. With the example above, publish the application
 through a reverse proxy at `https://mydomain.com/runpilot/`, forwarding that
-prefix unchanged to RunPilot. The UI and API both use the configured prefix.
+prefix unchanged to RunPilot. The UI, REST API, and Terminal WebSocket all use
+this one RunPilot listener and configured prefix. No terminal-specific port or
+proxy target is required.
+
+The Terminal WebSocket endpoint is `api/v1/terminal/connect`. It is therefore
+`/api/v1/terminal/connect` with the root base path and
+`/runpilot/api/v1/terminal/connect` when `basePath: /runpilot` is configured.
+The browser builds its `ws:`/`wss:` URL from the GUI page's base URI, so the
+public host, port, TLS scheme, and prefix are preserved when TLS terminates at
+a reverse proxy.
+
+Configure a WebSocket-aware proxy to forward `/runpilot/*` (including Upgrade
+requests) to the same RunPilot upstream port, preserving both the `/runpilot`
+prefix and original `Host` header. Do not strip that prefix in the proxy when
+RunPilot is configured with `basePath: /runpilot`.
+
+## Interactive Terminal
+
+The Terminal page starts an interactive shell as the RunPilot service identity.
+It uses a real Linux PTY or Windows ConPTY, with embedded xterm.js assets; no
+Node.js runtime or public CDN is required after build. Each browser tab has one
+short-lived session: closing the tab, browser connection, or RunPilot shuts
+down its shell and process tree. Terminal bytes and commands are never saved by
+RunPilot.
+
+Terminal access is equivalent to arbitrary command execution as the account
+running RunPilot. On Linux this is the installing user's normal account; on
+Windows it is the configured service identity. It is protected by the same API
+token boundary as process and job management. The browser first obtains a short-lived, single-use connection
+ticket through the authenticated REST API; the permanent token is never placed
+in the WebSocket URL.
+
+## Remote Access
+
+Remote Access is a provider-based capability, not a remote-display protocol.
+Xpra is available on Linux hosts. Add an enabled application target
+(for example `firefox`) or desktop target (for example `startxfce4`) from the
+Remote page; its command, arguments, working directory and environment are
+stored in `runpilot.yaml` like other configured workloads. Each Open action
+creates a new, ephemeral isolated session.
+
+RunPilot discovers `xpra` on `PATH` and reports the installed version, missing
+binary, or unsupported platform without preventing the daemon from starting.
+Install Xpra using your distribution's package source (for example, `apt install
+xpra` on Debian/Ubuntu or `dnf install xpra` on Fedora where those packages are
+available). The selected application and any desktop environment/window manager
+must already be installed; RunPilot does not install or configure them.
+
+Each target selects a D-Bus mode. **Isolated** (the default) sanitizes the
+RunPilot graphical-session environment and starts a private Xpra session bus
+when `dbus-launch` is installed (on Debian-family systems this is commonly in
+`dbus-x11`). **Host session** is an advanced compatibility mode that explicitly
+passes `DBUS_SESSION_BUS_ADDRESS` to the target. It can cause single-instance
+or D-Bus-activated applications to open on the physical desktop, so it should
+only be used deliberately.
+
+RunPilot's environment is not a remote graphical session. The Xpra server does
+not inherit the host `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, or session
+D-Bus bindings by default. Remote children are configured for X11 through
+Xpra's supported environment options. For Firefox, Chromium, Electron, and
+other single-instance applications, configure target-specific arguments and an
+isolated profile/data directory—for example Firefox `--new-instance --profile
+<dedicated-profile>`—rather than relying on the user's normal desktop profile.
+
+Xpra targets also have a browser-administration display profile. The default
+**Recommended** profile uses WebP with video codecs disabled, automatic DPI,
+clipboard and dynamic resize enabled, starts the target after the first browser
+client connects, and keeps the Xpra floating menu auto-hidden. Sound, printing,
+and Xpra file transfer are explicitly disabled. **Automatic** uses Xpra's
+automatic encoding with video enabled; **Compatibility / Lossless** uses RGB
+with video disabled to help diagnose partial-repaint corruption; **Custom**
+exposes the encoding and video choices. Xpra 6.5 supports the server options
+`--start-after-connect` / `--start-child-after-connect`, `--dpi`,
+`--resize-display`, clipboard, printing, file-transfer, speaker, and microphone
+controls. The bundled xpra-html5 v19 client receives only its supported client
+parameters: `encoding`, `video`, `clipboard`, `sound`, `printing`,
+`file_transfer`, `floating_menu`, `autohide`, and `toolbar_position`.
+
+Xpra listens only on a per-session `127.0.0.1` WebSocket/HTTP port. The browser
+loads Xpra's upstream HTML5 client through a same-origin, ticketed RunPilot
+reverse proxy, so no Xpra port is exposed publicly. The ticket is exchanged for
+an HttpOnly, path-scoped, bounded-lifetime cookie used only for the embedded client's assets and
+WebSocket upgrade. RunPilot never accepts a browser-supplied upstream host or
+port. Clipboard, dynamic resize, and fullscreen are supplied by the upstream
+Xpra HTML5 client when the installed Xpra build supports them.
+
+Sessions are intentionally ephemeral: RunPilot stops the Xpra processes it owns
+during shutdown and does not adopt orphaned sessions after a restart. The first
+supported deployment is RunPilot directly on a Linux host. Xpra server support
+is reported as unsupported on Windows.
+
+### RDP
+
+RDP is implemented through Apache Guacamole's `guacd` daemon. RunPilot embeds
+the official Apache Guacamole 1.6.0 `guacamole-common-js` client; the full
+Guacamole web application, Tomcat, Java, and a Guacamole database are not
+required. `guacd` is the only external RDP runtime component.
+
+Configure the provider's guacd host, port, TLS, and connection timeout on the
+Remote Access page. Keep guacd on a trusted private network: it has no
+authentication. For a host deployment, bind it only to loopback:
+
+```bash
+docker run -d --name runpilot-guacd --restart unless-stopped \
+  -p 127.0.0.1:4822:4822 guacamole/guacd:1.6.0
+```
+
+RDP targets remain desktop-only and retain the public `rdp` provider ID. They
+store only non-secret target settings (host, port, username/domain, keyboard
+layout and typed advanced options). Passwords are posted over the authenticated
+same-origin API, used once for the guacd handshake, then discarded. They never
+enter YAML, browser storage, URLs, sessions, diagnostics, or logs.
+
+The browser WebSocket carries only the Guacamole protocol and a short-lived
+session ticket. RunPilot snapshots both the target and guacd configuration and
+chooses every destination, so it is not a generic guacd/TCP proxy. The target
+host is resolved by guacd; when guacd is in Docker, `127.0.0.1` means that
+container. Use a host gateway name such as `host.docker.internal` when needed.
+For Hungarian RDP servers choose **Hungarian** in the target keyboard layout;
+this sends `server-layout=hu-hu-qwertz`.
+
+### VNC / noVNC
+
+VNC is a built-in, desktop-only provider on Linux and Windows. It embeds the
+noVNC 1.7.0 browser client and needs neither `websockify`, a native VNC client,
+nor another RunPilot-managed daemon. Configure the VNC host, port, and connect
+timeout on a `vnc` target. When the VNC server requires authentication, noVNC
+asks in the browser; those credentials are not saved in YAML, browser storage,
+session views, diagnostics, or logs.
+
+The browser opens a short-lived, single-use, session-scoped WebSocket ticket.
+RunPilot bridges its binary RFB frames to TCP by calling the Remote provider's
+captured `Runtime.Dial()` target. The WebSocket has no host, port, or upstream
+destination parameters, so it cannot be used as a generic TCP proxy. Unlike
+RDP, VNC does not use guacd.
 
 ## Windows build
 
@@ -102,7 +270,9 @@ The default data directory is `%ProgramData%\RunPilot`.
 
 ## Configuration model
 
-Processes are continuous workloads. Scheduled jobs are one-shot executions. Backups are a typed job subtype, so they use the same scheduler, history and manual-run machinery without becoming arbitrary shell-script templates.
+Tasks are presented as one user-facing capability while continuous process supervision and scheduled execution retain separate internal lifecycle engines. Processes are continuous workloads; scheduled jobs are one-shot executions; backups are a typed job subtype sharing scheduler, history and manual-run machinery without becoming arbitrary shell-script templates.
+
+Storage locations are runtime capabilities, not user-managed configuration records. `local` always exposes filesystem roots available to the RunPilot service identity. `docker-volumes` is one Docker-backed location whose root lists current volumes as directories. Volume contents are accessed through short-lived Docker helper containers, never through a Docker host mountpoint; running volumes are read-only.
 
 Processes and command jobs can set per-command environment variables. These values
 are stored in the normal RunPilot YAML configuration and are not encrypted secret
@@ -185,11 +355,26 @@ runpilot.exe
 │   ├── One-shot job runner
 │   └── Typed external integrations
 ├── Future storage providers / software providers
+├── Runtime PTY/ConPTY terminal sessions (not persisted)
 ├── YAML config + JSONL run history + per-run logs
 └── Embedded HTTP API + web UI
 ```
 
 The first implementation deliberately keeps persistence simple. A later milestone can migrate history/configuration to embedded SQLite once the domain/API has stabilized.
+
+## Docker Compose (Linux)
+
+RunPilot has a deliberately narrow, Linux-only Docker Compose v2 feature. Managed projects are directories below `<data-dir>/compose/<project-name>/`; each can contain `compose.yaml` and a secret-bearing `.env` file. Project directories are the registry, so a managed project appears before its first `up`.
+
+The Docker page has projects, volumes, and networks. It discovers other Compose projects through Docker too, but leaves them read-only. RunPilot never adopts or edits them. Managed projects expose only `up -d`, `start`, `stop`, and `down`; commands always include the project name, project directory, and Compose file. `down` does not remove volumes or images. A managed directory can be deleted only after Docker confirms there are no containers with its Compose project label. Containers in managed projects can be started, stopped, and deleted only when stopped; their logs can be viewed and a running container can open a PTY-backed `docker exec -it <id> /bin/sh` terminal. These actions validate the container ID, Compose project label, and managed-project directory before using fixed Docker arguments; they are not a general container-control or command API.
+
+Volumes are discovered with Docker metadata and show Compose ownership only when Compose labels exist. Every discoverable volume is automatically a Storage location. RunPilot can create named local-driver volumes and may delete an unreferenced volume; deletion never uses force. Non-local drivers remain visible but unavailable for browsing. Running-volume Storage is read-only.
+
+Docker volume mountpoints are resolved only through `docker volume inspect` internally and are never sent through the Storage API. This prepares a future provider-neutral Backup source flow; no Docker volume backup job exists yet. A filesystem backup of a volume used by a running application, especially a database, is not automatically application-consistent. Future backup support must explicitly require downtime or provide a separate quiescing strategy.
+
+Docker networks are also visible on the Docker page. RunPilot can create named bridge networks and delete an unused network only after Docker confirms that no running or stopped container references it. Compose ownership is shown only from Compose labels. It does not expose network driver options, attach/detach controls, firewall configuration, or generic Docker networking commands.
+
+Docker authority is exactly the authority of the process running RunPilot. The page tests the Docker CLI, Compose v2 plugin, and daemon access under that identity, distinguishing missing CLI/plugin, unavailable daemon, and permission denial. It never invokes sudo, changes Docker socket permissions, or modifies group membership.
 
 ## Near-term roadmap
 

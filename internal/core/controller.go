@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,11 +9,16 @@ import (
 
 	"github.com/szilab/RunPilot/internal/backup"
 	"github.com/szilab/RunPilot/internal/config"
+	"github.com/szilab/RunPilot/internal/dockercompose"
 	"github.com/szilab/RunPilot/internal/history"
 	"github.com/szilab/RunPilot/internal/jobs"
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/platform"
 	"github.com/szilab/RunPilot/internal/processmgr"
+	"github.com/szilab/RunPilot/internal/remote"
+	"github.com/szilab/RunPilot/internal/remote/rdp"
+	"github.com/szilab/RunPilot/internal/remote/vnc"
+	"github.com/szilab/RunPilot/internal/remote/xpra"
 	"github.com/szilab/RunPilot/internal/scheduler"
 	"github.com/szilab/RunPilot/internal/software"
 	"github.com/szilab/RunPilot/internal/storage"
@@ -26,6 +32,9 @@ type Controller struct {
 	jobs      *jobs.Runner
 	scheduler *scheduler.Scheduler
 	software  *software.Manager
+	docker    *dockercompose.Manager
+	storage   *storage.Registry
+	remote    *remote.Service
 }
 
 func Open(dataDir string) (*Controller, error) {
@@ -49,6 +58,13 @@ func Open(dataDir string) (*Controller, error) {
 		jobs:      jr,
 		scheduler: scheduler.New(jr),
 		software:  software.NewManager(dataDir),
+		docker:    dockercompose.NewManager(dataDir),
+	}
+	c.remote = remote.New(dataDir, xpra.New(), rdp.New(func() model.GuacdConfig { return c.Snapshot().Remote.Guacd }), vnc.New())
+	if platform.CurrentCapabilities().DockerCompose {
+		c.storage = storage.NewRegistry(c.docker)
+	} else {
+		c.storage = storage.NewRegistry(nil)
 	}
 	snap := cfg.Snapshot()
 	c.processes.Reconcile(snap.Processes)
@@ -63,6 +79,7 @@ func (c *Controller) Start() {
 }
 
 func (c *Controller) Close() {
+	c.remote.Close()
 	c.scheduler.Stop()
 	snap := c.config.Snapshot()
 	for _, p := range snap.Processes {
@@ -70,65 +87,205 @@ func (c *Controller) Close() {
 	}
 }
 
+func (c *Controller) Remote() *remote.Service { return c.remote }
+
+func (c *Controller) GuacdConfig() model.GuacdConfig {
+	value, err := model.NormalizeGuacdConfig(c.config.Snapshot().Remote.Guacd)
+	if err != nil {
+		return c.config.Snapshot().Remote.Guacd
+	}
+	return value
+}
+
+func (c *Controller) UpdateGuacdConfig(value model.GuacdConfig) (model.GuacdConfig, error) {
+	if strings.TrimSpace(value.Host) == "" {
+		return value, fmt.Errorf("guacd host is required")
+	}
+	value, err := model.NormalizeGuacdConfig(value)
+	if err != nil {
+		return value, err
+	}
+	err = c.config.Update(func(cfg *model.Config) error { cfg.Remote.Guacd = value; return nil })
+	return value, err
+}
+
+func (c *Controller) TestGuacdConfig(ctx context.Context, value model.GuacdConfig) (model.RemoteProviderStatus, error) {
+	if strings.TrimSpace(value.Host) == "" {
+		return model.RemoteProviderStatus{}, fmt.Errorf("guacd host is required")
+	}
+	value, err := model.NormalizeGuacdConfig(value)
+	if err != nil {
+		return model.RemoteProviderStatus{}, err
+	}
+	return rdp.ProbeGuacd(ctx, value), nil
+}
+
+func (c *Controller) RemoteTargets() []model.RemoteTarget {
+	targets := c.config.Snapshot().RemoteTargets
+	for i := range targets {
+		switch targets[i].Provider {
+		case "xpra":
+			options, err := model.NormalizeXpraRemoteOptions(targets[i].Xpra)
+			if err != nil {
+				// A manually edited invalid legacy YAML value must not make all Remote
+				// pages unusable. API writes still reject invalid values below.
+				options = model.DefaultXpraRemoteOptions()
+			}
+			targets[i].Xpra = &options
+		case "rdp":
+			options, err := model.NormalizeRDPRemoteOptions(targets[i].RDP)
+			if err == nil {
+				targets[i].RDP = &options
+			}
+		case "vnc":
+			options, err := model.NormalizeVNCRemoteOptions(targets[i].VNC)
+			if err == nil {
+				targets[i].VNC = &options
+			}
+		}
+	}
+	return targets
+}
+
+func (c *Controller) RemoteTarget(id string) (model.RemoteTarget, error) {
+	for _, target := range c.RemoteTargets() {
+		if target.ID == id {
+			return target, nil
+		}
+	}
+	return model.RemoteTarget{}, fmt.Errorf("unknown remote target %q", id)
+}
+
+func (c *Controller) UpsertRemoteTarget(target model.RemoteTarget) (model.RemoteTarget, error) {
+	if strings.TrimSpace(target.Name) == "" {
+		return target, fmt.Errorf("remote target name is required")
+	}
+	if target.Provider == "" {
+		target.Provider = "xpra"
+	}
+	if target.Type != model.RemoteTargetApplication && target.Type != model.RemoteTargetDesktop {
+		return target, fmt.Errorf("remote target type must be application or desktop")
+	}
+	switch target.Provider {
+	case "xpra":
+		if strings.TrimSpace(target.Command.Path) == "" {
+			return target, fmt.Errorf("remote target command path is required")
+		}
+		if target.Command.Interpreter != "" && target.Command.Interpreter != "direct" && target.Command.Interpreter != "auto" {
+			return target, fmt.Errorf("remote targets require a direct executable command")
+		}
+		target.Command.Interpreter = "direct"
+		if target.DBusMode == "" {
+			if target.ForwardDBus {
+				target.DBusMode = model.RemoteDBusHost
+			} else {
+				target.DBusMode = model.RemoteDBusIsolated
+			}
+		}
+		if target.DBusMode != model.RemoteDBusIsolated && target.DBusMode != model.RemoteDBusHost {
+			return target, fmt.Errorf("remote target D-Bus mode must be isolated or host-session")
+		}
+		target.ForwardDBus = false
+		options, err := model.NormalizeXpraRemoteOptions(target.Xpra)
+		if err != nil {
+			return target, err
+		}
+		target.Xpra = &options
+		target.RDP = nil
+		target.VNC = nil
+		if err := model.ValidateCommand(target.Command); err != nil {
+			return target, err
+		}
+	case "rdp":
+		if target.Type != model.RemoteTargetDesktop {
+			return target, fmt.Errorf("RDP supports desktop sessions only")
+		}
+		options, err := model.NormalizeRDPRemoteOptions(target.RDP)
+		if err != nil {
+			return target, err
+		}
+		target.RDP = &options
+		target.Xpra = nil
+		target.VNC = nil
+		target.Command = model.CommandSpec{}
+		target.DBusMode = ""
+		target.ForwardDBus = false
+	case "vnc":
+		if target.Type != model.RemoteTargetDesktop {
+			return target, fmt.Errorf("VNC supports desktop sessions only")
+		}
+		options, err := model.NormalizeVNCRemoteOptions(target.VNC)
+		if err != nil {
+			return target, err
+		}
+		target.VNC = &options
+		target.Xpra = nil
+		target.RDP = nil
+		target.Command = model.CommandSpec{}
+		target.DBusMode = ""
+		target.ForwardDBus = false
+	default:
+		return target, fmt.Errorf("unknown remote provider %q", target.Provider)
+	}
+	if target.ID == "" {
+		target.ID = config.NewID("remote-target")
+	}
+	err := c.config.Update(func(cfg *model.Config) error {
+		for i := range cfg.RemoteTargets {
+			if cfg.RemoteTargets[i].ID == target.ID {
+				cfg.RemoteTargets[i] = target
+				return nil
+			}
+		}
+		cfg.RemoteTargets = append(cfg.RemoteTargets, target)
+		return nil
+	})
+	return target, err
+}
+
+func (c *Controller) DeleteRemoteTarget(id string) error {
+	return c.config.Update(func(cfg *model.Config) error {
+		out := cfg.RemoteTargets[:0]
+		found := false
+		for _, target := range cfg.RemoteTargets {
+			if target.ID == id {
+				found = true
+				continue
+			}
+			out = append(out, target)
+		}
+		if !found {
+			return fmt.Errorf("unknown remote target %q", id)
+		}
+		cfg.RemoteTargets = out
+		return nil
+	})
+}
+
 func (c *Controller) DataDir() string        { return c.dataDir }
 func (c *Controller) ConfigPath() string     { return c.config.Path() }
 func (c *Controller) Snapshot() model.Config { return c.config.Snapshot() }
 func (c *Controller) TokenCreated() bool     { return c.config.TokenCreated() }
 
-func (c *Controller) StorageDefinitions() []model.StorageDefinition {
-	return c.config.Snapshot().Storage
+func (c *Controller) StorageLocations(ctx context.Context) []storage.Descriptor {
+	return c.storage.List(ctx)
 }
-func (c *Controller) UpsertStorage(d model.StorageDefinition) (model.StorageDefinition, error) {
-	if strings.TrimSpace(d.Name) == "" {
-		return d, fmt.Errorf("storage name is required")
-	}
-	if err := storage.NormalizeDefinition(&d); err != nil {
-		return d, err
-	}
-	if d.ID == "" {
-		d.ID = config.NewID("storage")
-	}
-	err := c.config.Update(func(cfg *model.Config) error {
-		for i := range cfg.Storage {
-			if cfg.Storage[i].ID == d.ID {
-				cfg.Storage[i] = d
-				return nil
-			}
-		}
-		cfg.Storage = append(cfg.Storage, d)
-		return nil
-	})
-	return d, err
+func (c *Controller) StorageProvider(ctx context.Context, id string) (storage.Provider, error) {
+	return c.storage.Provider(ctx, id)
 }
-func (c *Controller) DeleteStorage(id string) error {
-	return c.config.Update(func(cfg *model.Config) error {
-		out := cfg.Storage[:0]
-		found := false
-		for _, d := range cfg.Storage {
-			if d.ID == id {
-				found = true
-				continue
-			}
-			out = append(out, d)
-		}
-		if !found {
-			return fmt.Errorf("unknown storage %q", id)
-		}
-		cfg.Storage = out
-		return nil
-	})
-}
-func (c *Controller) StorageProvider(id string) (storage.Provider, error) {
-	for _, d := range c.config.Snapshot().Storage {
-		if d.ID == id {
-			return storage.ProviderFor(d)
-		}
-	}
-	return nil, fmt.Errorf("unknown storage %q", id)
-}
+func (c *Controller) Docker() *dockercompose.Manager { return c.docker }
 
 func (c *Controller) SoftwareDefinitions() []model.SoftwareProviderDefinition {
-	return c.config.Snapshot().Software.Providers
+	definitions := c.config.Snapshot().Software.Providers
+	capabilities := platform.CurrentCapabilities()
+	available := make([]model.SoftwareProviderDefinition, 0, len(definitions))
+	for _, definition := range definitions {
+		if definition.Type == model.SoftwareProviderScoop && !capabilities.Scoop {
+			continue
+		}
+		available = append(available, definition)
+	}
+	return available
 }
 
 func (c *Controller) SoftwareProvider(id string) (software.Provider, error) {
@@ -210,6 +367,8 @@ func (c *Controller) Overview() model.Overview {
 			})
 		}
 	}
+	overview.TaskCount = overview.ProcessCount + overview.JobCount
+	overview.RunningTasks = overview.RunningProcesses + overview.RunningJobs
 	return overview
 }
 

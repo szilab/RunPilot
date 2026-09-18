@@ -2,7 +2,7 @@
 
 ## Product direction
 
-RunPilot is a lightweight Windows host-management control plane with a single native Windows service and an embedded web UI. Its purpose is to give Windows users one coherent GUI for managing applications, scheduled operations, backup tools, storage access and software installation.
+RunPilot is a lightweight Windows/Linux host-management control plane with one native service per platform and an embedded web UI. Windows uses Windows Service Control Manager; Linux uses a systemd user service. Its purpose is to give users one coherent GUI for managing applications, scheduled operations, backup tools, storage access and software installation.
 
 RunPilot should integrate existing specialist tools instead of reimplementing them. The guiding rule is:
 
@@ -15,7 +15,7 @@ Examples:
 - RunPilot may expose Docker/Compose lifecycle operations in the future; it should not become a WSL or Docker orchestrator.
 - RunPilot exposes software installation through external providers; it should not become a package manager.
 
-The browser is only a management client. Privileged operations remain owned by the RunPilot service and its backend integrations.
+The browser is only a management client. Operations run with the permissions of the account hosting RunPilot; RunPilot does not grant additional privileges.
 
 ## Domain boundaries
 
@@ -25,12 +25,10 @@ The product separates capabilities from tool integrations.
 
 Core RunPilot capabilities provide the consistent user experience:
 
-1. **Applications** — long-running workloads with lifecycle, status and logs.
-2. **Jobs** — one-shot operations that can run manually or on a schedule.
-3. **Backups** — typed backup jobs delegated to external backup tools.
-4. **Storage** — browsable storage sources with provider-specific capabilities such as download, versions or restore.
-5. **Software management** — GUI over external installation/package providers.
-6. **History and health** — cross-cutting execution history, logs and host/workload status.
+1. **Tasks** — one view for continuous commands, scheduled commands and typed backup jobs.
+2. **Storage** — runtime-discovered Local filesystem and Docker-volume locations.
+3. **Software management** — GUI over external installation/package providers.
+4. **Health** — cross-cutting execution history, logs and host/workload status.
 
 These capabilities should share RunPilot infrastructure such as configuration, scheduling, execution history, authorization and the embedded GUI, but they should not collapse into one generic shell-command abstraction.
 
@@ -58,8 +56,8 @@ Tool-specific configuration should remain typed. Avoid a universal configuration
 
 ```text
                          +----------------------------+
-                         |      runpilot.exe          |
-                         | Native Windows Service     |
+                         |        runpilot            |
+                         | Windows SCM / systemd user|
                          +-------------+--------------+
                                        |
                    +-------------------+--------------------+
@@ -89,7 +87,7 @@ Persistence is deliberately transparent:
 - `history.jsonl` — completed run records
 - `runs/<run-id>.log` — captured stdout/stderr
 
-Default location: `%ProgramData%\RunPilot`.
+Default location: `%ProgramData%\RunPilot` on Windows and `$XDG_DATA_HOME/runpilot` or `~/.local/share/runpilot` on Linux. `RUNPILOT_DATA_DIR` takes precedence. Linux service installation uses the current user's systemd unit directory and normal user permissions; `sudo loginctl enable-linger <user>` enables boot-time operation without an interactive login.
 
 SQLite is a sensible next persistence step when query requirements, retention and migration needs justify it. REST/domain interfaces should remain stable when that migration happens.
 
@@ -141,9 +139,10 @@ Each backup integration may expose a tool-specific editor and operations. A capa
 
 Storage access is intentionally separate from backup execution.
 
-A **Storage Provider** exposes a browsable data source to the RunPilot GUI. Initial/future providers include:
+A **Storage location** exposes a browsable data source to the RunPilot GUI. Locations are runtime capabilities, not user-managed configuration records. Initial locations include:
 
-- **Local filesystem** — browse, upload, download and manage either an explicitly configured Windows root or all drives accessible to the RunPilot service identity.
+- **Local filesystem** — always available as `local`, browsing all roots accessible to the RunPilot service identity.
+- **Docker volumes** — one `docker-volumes` virtual location; its root dynamically lists volume directories. Contents are accessed through Docker-mounted helper containers, and running volumes are read-only.
 - **Restic repository** — browse snapshots, inspect historical file versions, download a selected version and restore through Restic.
 
 Conceptually, providers may offer capabilities such as:
@@ -161,7 +160,7 @@ The Local Filesystem provider supports practical scoped browser operations: uplo
 
 ### Local filesystem security
 
-Local filesystem providers explicitly choose either a configured hard root boundary or host-filesystem mode. Root mode resolves symlinks and verifies effective paths remain beneath the configured root. Host mode enumerates available drives and accepts only controlled provider-relative paths; Windows permissions remain authoritative.
+The user-visible Local filesystem is host-scoped and enumerates available roots; OS permissions remain authoritative. The internal root-scoped Local adapter remains available to provider-backed locations such as Docker volumes, resolving symlinks and enforcing its root boundary.
 
 ### Version-oriented UX
 
@@ -212,7 +211,7 @@ WinGet remains a possible future provider for conventional Windows software, beh
 
 ## Security
 
-The service is privileged and can execute arbitrary configured programs. Current defaults therefore:
+The service can execute configured programs with the permissions of its hosting account. Current defaults therefore:
 
 - bind only to `127.0.0.1`
 - generate a random API token at first start
@@ -229,7 +228,7 @@ Storage/download endpoints require the same authentication boundary as other man
 
 The embedded GUI uses static HTML/CSS/JavaScript. There is no frontend runtime dependency and no separate web server. Assets compile into `runpilot.exe`.
 
-The long-term goal is a coherent Windows host-management GUI rather than a collection of unrelated tool pages. Integrations may expose tool-specific options, but navigation, status, execution feedback, history and common interactions should remain consistent.
+The long-term goal is a coherent Windows/Linux host-management GUI rather than a collection of unrelated tool pages. Integrations may expose tool-specific options, but navigation, status, execution feedback, history and common interactions should remain consistent.
 
 New GUI features should call backend/domain integrations and must not duplicate execution logic in browser JavaScript.
 

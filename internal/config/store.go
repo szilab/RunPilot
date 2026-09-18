@@ -22,6 +22,8 @@ type Store struct {
 	tokenCreated bool
 }
 
+var userHomeDir = os.UserHomeDir
+
 func DefaultDataDir() string {
 	if v := os.Getenv("RUNPILOT_DATA_DIR"); v != "" {
 		return v
@@ -32,7 +34,13 @@ func DefaultDataDir() string {
 		}
 	}
 	if runtime.GOOS == "linux" {
-		return "/var/lib/runpilot"
+		if dataHome := os.Getenv("XDG_DATA_HOME"); dataHome != "" {
+			return filepath.Join(dataHome, "runpilot")
+		}
+		if home, err := userHomeDir(); err == nil {
+			return filepath.Join(home, ".local", "share", "runpilot")
+		}
+		return ""
 	}
 	return filepath.Join(".", "runpilot-data")
 }
@@ -40,6 +48,9 @@ func DefaultDataDir() string {
 func Open(dataDir string) (*Store, error) {
 	if dataDir == "" {
 		dataDir = DefaultDataDir()
+		if dataDir == "" {
+			return nil, fmt.Errorf("resolve default data directory: home directory is unavailable")
+		}
 	}
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
@@ -62,12 +73,20 @@ func Open(dataDir string) (*Store, error) {
 	if err := yaml.Unmarshal(b, &s.cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", s.path, err)
 	}
+	// Storage used to be persisted configuration. Decode it only so opening an
+	// older file can rewrite it without the obsolete section; locations are now
+	// discovered at runtime by the Storage registry.
+	var raw map[string]any
+	if err := yaml.Unmarshal(b, &raw); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", s.path, err)
+	}
+	_, hadLegacyStorage := raw["storage"]
 	before := clone(s.cfg)
 	normalize(&s.cfg)
 	if before.Server.Token == "" {
 		s.tokenCreated = true
 	}
-	if !reflect.DeepEqual(before, s.cfg) {
+	if hadLegacyStorage || !reflect.DeepEqual(before, s.cfg) {
 		if err := s.saveLocked(); err != nil {
 			return nil, err
 		}
@@ -117,7 +136,7 @@ func (s *Store) saveLocked() error {
 }
 
 func defaultConfig() model.Config {
-	return model.Config{
+	config := model.Config{
 		Version: 1,
 		Server: model.ServerConfig{
 			Bind:     "127.0.0.1:9070",
@@ -127,14 +146,15 @@ func defaultConfig() model.Config {
 		},
 		Processes: []model.ProcessDefinition{},
 		Jobs:      []model.JobDefinition{},
-		// Storage has no global switch and no implicit local provider. Users add
-		// the locations RunPilot may expose from the Storage page.
-		Storage: []model.StorageDefinition{},
-		Software: model.SoftwareConfig{Providers: []model.SoftwareProviderDefinition{{
+		Remote:    model.RemoteConfig{Guacd: model.DefaultGuacdConfig()},
+	}
+	if runtime.GOOS == "windows" {
+		config.Software.Providers = []model.SoftwareProviderDefinition{{
 			ID: "scoop", Name: "RunPilot Scoop", Type: model.SoftwareProviderScoop,
 			Scoop: &model.ScoopProviderSpec{},
-		}}},
+		}}
 	}
+	return config
 }
 
 func normalize(c *model.Config) {
@@ -150,29 +170,38 @@ func normalize(c *model.Config) {
 	if c.Server.Token == "" {
 		c.Server.Token = randomToken()
 	}
-	// Provider definitions are optional. In particular, do not recreate a
-	// removed Local provider during configuration normalization.
-	if c.Storage == nil {
-		c.Storage = []model.StorageDefinition{}
-	}
-	hasScoop := false
-	for _, provider := range c.Software.Providers {
-		if provider.ID == "scoop" {
-			hasScoop = true
-			break
+	if runtime.GOOS == "windows" {
+		hasScoop := false
+		for _, provider := range c.Software.Providers {
+			if provider.ID == "scoop" {
+				hasScoop = true
+				break
+			}
 		}
-	}
-	if !hasScoop {
-		c.Software.Providers = append(c.Software.Providers, model.SoftwareProviderDefinition{
-			ID: "scoop", Name: "RunPilot Scoop", Type: model.SoftwareProviderScoop,
-			Scoop: &model.ScoopProviderSpec{},
-		})
+		if !hasScoop {
+			c.Software.Providers = append(c.Software.Providers, model.SoftwareProviderDefinition{
+				ID: "scoop", Name: "RunPilot Scoop", Type: model.SoftwareProviderScoop,
+				Scoop: &model.ScoopProviderSpec{},
+			})
+		}
 	}
 	for i := range c.Processes {
 		model.NormalizeProcess(&c.Processes[i])
 	}
 	for i := range c.Jobs {
 		model.NormalizeJob(&c.Jobs[i])
+	}
+	for i := range c.RemoteTargets {
+		target := &c.RemoteTargets[i]
+		if target.DBusMode != model.RemoteDBusIsolated && target.DBusMode != model.RemoteDBusHost {
+			if target.ForwardDBus {
+				target.DBusMode = model.RemoteDBusHost
+			} else {
+				target.DBusMode = model.RemoteDBusIsolated
+			}
+		}
+		// Remove the compatibility field on the next normal configuration save.
+		target.ForwardDBus = false
 	}
 }
 

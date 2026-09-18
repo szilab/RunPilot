@@ -63,6 +63,14 @@ func (l *Local) State() State {
 	return State{Status: "ready"}
 }
 
+func (l *Local) ResolveBackupSource(p string) (BackupSource, error) {
+	abs, err := l.resolve(p, false)
+	if err != nil {
+		return BackupSource{}, err
+	}
+	return BackupSource{Path: abs}, nil
+}
+
 func validNamespace(p string) ([]string, error) {
 	if p == "" {
 		return nil, nil
@@ -469,13 +477,28 @@ func (l *Local) WriteText(p, content string) error {
 	if len(content) > 1<<20 {
 		return fmt.Errorf("text files larger than 1 MiB cannot be edited")
 	}
-	abs, err := l.resolve(p, false)
+	abs, err := l.resolve(p, true)
 	if err != nil {
 		return err
 	}
 	info, err := os.Stat(abs)
+	if errors.Is(err, os.ErrNotExist) {
+		f, err := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return err
+		}
+		_, err = io.WriteString(f, content)
+		closeErr := f.Close()
+		if err != nil {
+			return err
+		}
+		return closeErr
+	}
 	if err != nil {
 		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("symbolic links cannot be edited")
 	}
 	if info.IsDir() {
 		return fmt.Errorf("directories cannot be edited")
