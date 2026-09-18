@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -243,8 +244,30 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 		"configPath":           s.ctrl.ConfigPath(),
 		"bind":                 cfg.Server.Bind,
 		"capabilities":         platform.CurrentCapabilities(),
-		"websocketPayloadMode": websocketsecure.NormalizeMode(cfg.Server.WebSocketPayloadMode),
+		"websocketPayloadMode": requestWebSocketPayloadMode(r, cfg.Server.WebSocketPayloadMode),
 	})
+}
+
+// requestWebSocketPayloadMode disables the additional payload cipher for an
+// HTTP browser session. HTTPS clients retain the configured transport mode.
+func requestWebSocketPayloadMode(r *http.Request, configured string) string {
+	if requestScheme(r) == "http" {
+		return websocketsecure.ModeDisabled
+	}
+	return websocketsecure.NormalizeMode(configured)
+}
+
+func requestScheme(r *http.Request) string {
+	if origin, err := url.Parse(r.Header.Get("Origin")); err == nil && (origin.Scheme == "http" || origin.Scheme == "https") {
+		return origin.Scheme
+	}
+	if forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]); forwarded == "http" || forwarded == "https" {
+		return forwarded
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
 }
 
 func (s *Server) dockerSupported(w http.ResponseWriter) bool {
@@ -574,7 +597,7 @@ func (s *Server) handleTerminalConnect(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close(websocket.StatusPolicyViolation, "terminal connection expired or already used")
 		return
 	}
-	secure, err := websocketsecure.ServerHandshake(ctx, conn, s.ctrl.Snapshot().Server.WebSocketPayloadMode)
+	secure, err := websocketsecure.ServerHandshake(ctx, conn, requestWebSocketPayloadMode(r, s.ctrl.Snapshot().Server.WebSocketPayloadMode))
 	if err != nil {
 		_ = conn.Close(websocket.StatusPolicyViolation, "secure WebSocket negotiation failed")
 		return

@@ -114,6 +114,26 @@ func TestSecureSessionRoundTripAndSequence(t *testing.T) {
 	}
 }
 
+func TestSecureSessionPreservesConsecutiveServerBinaryFrames(t *testing.T) {
+	client, server := securePair(t)
+	payloads := [][]byte{[]byte("prompt> "), []byte("rapid command\r\n"), {0, 1, 2, 255}, []byte("next prompt> ")}
+	for _, payload := range payloads {
+		if err := server.Write(context.Background(), websocket.MessageBinary, payload); err != nil {
+			t.Fatal(err)
+		}
+		kind, got, err := client.Read(context.Background())
+		if err != nil || kind != websocket.MessageBinary {
+			t.Fatalf("client read kind=%v err=%v", kind, err)
+		}
+		if string(got) != string(payload) {
+			t.Fatalf("payload changed: got %v, want %v", got, payload)
+		}
+	}
+	if server.writeSeq != uint64(len(payloads)) || client.readSeq != uint64(len(payloads)) {
+		t.Fatalf("sequence server=%d client=%d", server.writeSeq, client.readSeq)
+	}
+}
+
 func TestSecureSessionRejectsReplayAndTampering(t *testing.T) {
 	client, server := securePair(t)
 	if err := client.Write(context.Background(), websocket.MessageBinary, []byte("secret")); err != nil {

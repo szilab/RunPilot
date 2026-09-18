@@ -90,7 +90,7 @@ func (s *Server) handleRDPRemoteTransport(w http.ResponseWriter, r *http.Request
 	}
 	ws.SetReadLimit(websocketsecure.MaxEncryptedMessageSize)
 	s.ctrl.Remote().AddDiagnostic(id, "browser tunnel upgraded")
-	secure, err := websocketsecure.ServerHandshake(r.Context(), ws, s.ctrl.Snapshot().Server.WebSocketPayloadMode)
+	secure, err := websocketsecure.ServerHandshake(r.Context(), ws, requestWebSocketPayloadMode(r, s.ctrl.Snapshot().Server.WebSocketPayloadMode))
 	if err != nil {
 		_ = ws.Close(websocket.StatusPolicyViolation, "secure WebSocket negotiation failed")
 		return

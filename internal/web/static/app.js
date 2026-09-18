@@ -57,6 +57,7 @@ function setConnected(ok) {
   $("connectionDot").classList.toggle("ok", ok);
   const mode = systemInfo?.websocketPayloadMode || "disabled";
   const encryptionStatus = mode === "required" ? "Encrypted" : "Normal";
+  $("connectionWarning").classList.toggle("hidden", location.protocol !== "http:");
   $("connectionText").textContent = ok ? `Connected · ${encryptionStatus}` : "Offline";
   $("connectionDot").title = ok ? encryptionStatus : "RunPilot is offline";
   $("connectionText").title = ok ? encryptionStatus : "RunPilot is offline";
@@ -979,6 +980,14 @@ function terminalWebSocketURL(ticket) {
   wsURL.searchParams.set("ticket", ticket);
   return wsURL;
 }
+
+function terminalSessionID() {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("").replace(/^(.{8})(.{4})(.{4})(.{4})(.+)$/, "$1-$2-$3-$4-$5");
+}
 // RunPilotSecureWebSocket owns the underlying new WebSocket and preserves the
 // native event/message surface expected by terminal consumers.
 
@@ -987,7 +996,7 @@ function sendTerminalResize(tab) {
 }
 
 async function openTerminalSession(shell, requestTicket) {
-  const id = crypto.randomUUID();
+  const id = terminalSessionID();
   const pane = document.createElement("div"); pane.className = "terminal-pane active"; pane.id = `terminal-pane-${id}`; $("terminalPanes").append(pane);
   const term = new Terminal({cursorBlink:true, scrollback:5000, fontFamily:'"Cascadia Code", Consolas, monospace', fontSize:14, theme:{background:'#0b1220'}});
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(pane); fit.fit();
@@ -998,7 +1007,7 @@ async function openTerminalSession(shell, requestTicket) {
     const ticket = await requestTicket(term);
     const socket = new RunPilotSecureWebSocket(terminalWebSocketURL(ticket.ticket), systemInfo?.websocketPayloadMode || "disabled"); tab.socket = socket; socket.binaryType = "arraybuffer";
     socket.onmessage = event => { if (event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data)); };
-    socket.onerror = () => term.writeln("\r\nTerminal connection failed.");
+    socket.onerror = error => term.writeln(`\r\n${error?.message || "Terminal connection failed."}`);
     socket.onclose = event => { if (!event.wasClean) term.writeln(`\r\n${event.reason || "Terminal connection closed."}`); };
     socket.onopen = () => { sendTerminalResize(tab); term.focus(); };
   } catch (error) { term.writeln(`\r\n${error.message}`); toast(error.message); }

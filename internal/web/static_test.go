@@ -5,6 +5,81 @@ import (
 	"testing"
 )
 
+func TestSecureWebSocketDefersApplicationTrafficUntilHandshakeCompletes(t *testing.T) {
+	source, err := staticFS.ReadFile("static/secure-websocket.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(source)
+	for _, want := range []string{
+		"this._ready=false",
+		"return this._ready || this.mode === \"disabled\" ? WebSocket.OPEN : WebSocket.CONNECTING",
+		"if(this._ready)this._receive(event)",
+		"this._ready=true; this.onopen?.()",
+		"const sequence=this.sendSequence, header=concat(TAG",
+		"this.sendSequence++",
+		"}).catch(error=>this._reportError(error));",
+		"Secure WebSocket requires HTTPS and Web Crypto",
+		"kind===\"text\"?textDecoder.decode(plain):plain",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("secure WebSocket regression protection is missing %q", want)
+		}
+	}
+	for _, removed := range []string{
+		"this.readyState=WebSocket.CLOSED",
+		"this.sendChain=this.sendChain.catch(()=>{})",
+		"kind===\"text\"?textDecoder.decode(plain):plain.buffer",
+	} {
+		if strings.Contains(script, removed) {
+			t.Fatalf("secure WebSocket retains broken behavior %q", removed)
+		}
+	}
+}
+
+func TestTerminalSessionIDsDoNotRequireCryptoRandomUUID(t *testing.T) {
+	source, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(source)
+	for _, want := range []string{
+		"function terminalSessionID()",
+		"typeof crypto.randomUUID === \"function\"",
+		"crypto.getRandomValues(new Uint8Array(16))",
+		"const id = terminalSessionID();",
+		"error?.message || \"Terminal connection failed.\"",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("terminal UUID compatibility behavior is missing %q", want)
+		}
+	}
+}
+
+func TestSidebarWarnsWhenHTTPDisablesWebSocketPayloadEncryption(t *testing.T) {
+	index, err := staticFS.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(index), `id="connectionWarning"`) || !strings.Contains(string(index), `aria-label="HTTP connection: WebSocket payload encryption is disabled."`) {
+		t.Fatal("sidebar HTTP transport warning is missing")
+	}
+	app, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(app), `$("connectionWarning").classList.toggle("hidden", location.protocol !== "http:")`) {
+		t.Fatal("sidebar HTTP transport warning is not controlled by page scheme")
+	}
+	styles, err := staticFS.ReadFile("static/styles.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(styles), `.shell.sidebar-collapsed .side-foot, .shell.sidebar-collapsed .connection-warning { width: 40px; height: 40px;`) || !strings.Contains(string(styles), `position: absolute; inset: 0; display: grid; place-items: center;`) {
+		t.Fatal("collapsed sidebar warning treatment is missing")
+	}
+}
+
 func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	index, err := staticFS.ReadFile("static/index.html")
 	if err != nil {

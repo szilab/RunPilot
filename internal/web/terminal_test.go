@@ -9,7 +9,28 @@ import (
 	"time"
 
 	"github.com/szilab/RunPilot/internal/core"
+	"github.com/szilab/RunPilot/internal/websocketsecure"
 )
+
+func TestHTTPRequestsDisableWebSocketPayloadEncryption(t *testing.T) {
+	for _, test := range []struct {
+		name, origin, forwarded, want string
+	}{
+		{"HTTP origin", "http://host.example", "", websocketsecure.ModeDisabled},
+		{"HTTPS origin", "https://host.example", "", websocketsecure.ModeRequired},
+		{"forwarded HTTP", "", "http", websocketsecure.ModeDisabled},
+		{"forwarded HTTPS", "", "https", websocketsecure.ModeRequired},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "http://runpilot.example/api/v1/system", nil)
+			request.Header.Set("Origin", test.origin)
+			request.Header.Set("X-Forwarded-Proto", test.forwarded)
+			if got := requestWebSocketPayloadMode(request, websocketsecure.ModeRequired); got != test.want {
+				t.Fatalf("payload mode = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
 
 func TestTerminalTicketRequiresAuthAndIsSingleUse(t *testing.T) {
 	ctrl, err := core.Open(t.TempDir())

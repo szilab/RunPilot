@@ -31,7 +31,7 @@ func (s *Server) handleVNCRemoteTransport(w http.ResponseWriter, r *http.Request
 	defer func() { _ = ws.Close(websocket.StatusNormalClosure, "") }()
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	secure, err := websocketsecure.ServerHandshake(ctx, ws, s.ctrl.Snapshot().Server.WebSocketPayloadMode)
+	secure, err := websocketsecure.ServerHandshake(ctx, ws, requestWebSocketPayloadMode(r, s.ctrl.Snapshot().Server.WebSocketPayloadMode))
 	if err != nil {
 		_ = ws.Close(websocket.StatusPolicyViolation, "secure WebSocket negotiation failed")
 		return
