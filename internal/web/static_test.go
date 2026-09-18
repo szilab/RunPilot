@@ -381,10 +381,13 @@ func TestGuacamoleAssetAndRDPUIAreEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"function openGuacdSettings", `openGuacdSettings()">Settings`, "body:JSON.stringify(value)"} {
+	for _, want := range []string{"function openGuacdSettings", `rdpSettingsAction").addEventListener("click", openGuacdSettings)`, "body:JSON.stringify(value)"} {
 		if !strings.Contains(string(app), want) {
 			t.Fatalf("guacd dialog behavior missing %q", want)
 		}
+	}
+	if !strings.Contains(string(page), `id="rdpSettingsAction"`) || !strings.Contains(string(page), ">RDP settings</button>") {
+		t.Fatal("RDP settings action is missing")
 	}
 }
 
