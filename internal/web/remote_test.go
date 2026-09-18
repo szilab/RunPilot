@@ -267,13 +267,19 @@ func TestVNCTransportIsSessionScopedAndBridgesBinaryRFB(t *testing.T) {
 	if got := <-received; !bytes.Equal(got, []byte("client-request")) {
 		t.Fatalf("upstream received %q", got)
 	}
-	messageType, data, err := ws.Read(context.Background())
-	if err != nil || messageType != websocket.MessageBinary || !bytes.Equal(data, []byte("RFB 003.008\n")) {
-		t.Fatalf("RFB greeting type=%v data=%q err=%v", messageType, data, err)
+	readCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	want := []byte("RFB 003.008\nserver-response")
+	var got []byte
+	for len(got) < len(want) {
+		messageType, data, err := ws.Read(readCtx)
+		if err != nil || messageType != websocket.MessageBinary {
+			t.Fatalf("RFB message type=%v data=%q err=%v", messageType, data, err)
+		}
+		got = append(got, data...)
 	}
-	messageType, data, err = ws.Read(context.Background())
-	if err != nil || messageType != websocket.MessageBinary || !bytes.Equal(data, []byte("server-response")) {
-		t.Fatalf("RFB response type=%v data=%q err=%v", messageType, data, err)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("RFB stream data=%q, want %q", got, want)
 	}
 }
 
