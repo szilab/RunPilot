@@ -22,6 +22,8 @@ type Store struct {
 	tokenCreated bool
 }
 
+var userHomeDir = os.UserHomeDir
+
 func DefaultDataDir() string {
 	if v := os.Getenv("RUNPILOT_DATA_DIR"); v != "" {
 		return v
@@ -35,10 +37,10 @@ func DefaultDataDir() string {
 		if dataHome := os.Getenv("XDG_DATA_HOME"); dataHome != "" {
 			return filepath.Join(dataHome, "runpilot")
 		}
-		if home, err := os.UserHomeDir(); err == nil {
+		if home, err := userHomeDir(); err == nil {
 			return filepath.Join(home, ".local", "share", "runpilot")
 		}
-		return filepath.Join(".", "runpilot-data")
+		return ""
 	}
 	return filepath.Join(".", "runpilot-data")
 }
@@ -46,6 +48,9 @@ func DefaultDataDir() string {
 func Open(dataDir string) (*Store, error) {
 	if dataDir == "" {
 		dataDir = DefaultDataDir()
+		if dataDir == "" {
+			return nil, fmt.Errorf("resolve default data directory: home directory is unavailable")
+		}
 	}
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err

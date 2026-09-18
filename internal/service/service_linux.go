@@ -40,6 +40,9 @@ var (
 )
 
 func Install(dataDir string, options ...daemon.Options) error {
+	if dataDir == "" {
+		return fmt.Errorf("data directory is unavailable; set --data-dir or RUNPILOT_DATA_DIR")
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
@@ -162,7 +165,7 @@ func unitContents(executable, dataDir string, option daemon.Options) string {
 	if option.BasePath != "" {
 		args = append(args, "--base-path", unitQuote(option.BasePath))
 	}
-	return "[Unit]\nDescription=RunPilot Process Manager\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=" + unitQuote(dataDir) + "\nExecStart=" + strings.Join(args, " ") + "\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"
+	return "[Unit]\nDescription=RunPilot Process Manager\n\n[Service]\nType=simple\nWorkingDirectory=" + unitQuote(dataDir) + "\nExecStart=" + strings.Join(args, " ") + "\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"
 }
 
 func unitQuote(value string) string {

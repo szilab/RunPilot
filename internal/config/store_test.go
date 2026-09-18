@@ -66,6 +66,23 @@ func TestDefaultDataDirHonorsEnvironmentAndLinuxDefaults(t *testing.T) {
 	}
 }
 
+func TestDefaultDataDirDoesNotFallBackToRelativePath(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux default only")
+	}
+	t.Setenv("RUNPILOT_DATA_DIR", "")
+	t.Setenv("XDG_DATA_HOME", "")
+	oldHome := userHomeDir
+	userHomeDir = func() (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() { userHomeDir = oldHome })
+	if got := DefaultDataDir(); got != "" {
+		t.Fatalf("unresolvable Linux default = %q, want empty", got)
+	}
+	if _, err := Open(""); err == nil || !strings.Contains(err.Error(), "home directory is unavailable") {
+		t.Fatalf("Open error = %v, want unavailable home error", err)
+	}
+}
+
 func TestSoftwareProviderRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir)

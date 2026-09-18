@@ -19,6 +19,9 @@ func TestUnitContentsIncludesConfiguredRuntime(t *testing.T) {
 			t.Fatalf("unit missing %q:\n%s", want, unit)
 		}
 	}
+	if strings.Contains(unit, "After=network.target") {
+		t.Fatalf("user unit must not claim network ordering:\n%s", unit)
+	}
 	if strings.Contains(unit, "User=") {
 		t.Fatalf("user service must not contain User=:\n%s", unit)
 	}
