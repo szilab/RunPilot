@@ -90,11 +90,11 @@ jobs:
             dist/install.sh \
             --clobber
 
-      - name: Create immutable v1.0.0 release
+      - name: Create immutable v1.0.1 release
         if: github.ref_name == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION_TAG: v1.0.0
+          VERSION_TAG: v1.0.1
         shell: bash
         run: |
           if gh release view "$VERSION_TAG" >/dev/null 2>&1; then
@@ -107,5 +107,5 @@ jobs:
             dist/runpilot-linux-amd64.sha256 \
             dist/install.sh \
             --target "$GITHUB_SHA" \
-            --title "RunPilot v1.0.0" \
+            --title "RunPilot v1.0.1" \
             --generate-notes

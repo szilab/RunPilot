@@ -14,7 +14,7 @@ import (
 	"github.com/szilab/RunPilot/internal/service"
 )
 
-var version = "1.0.0"
+var version = "1.0.1"
 
 func main() {
 	if err := run(); err != nil {
