@@ -499,6 +499,6 @@ type RunRecord struct {
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 	ExitCode   *int       `json:"exitCode,omitempty"`
 	Success    *bool      `json:"success,omitempty"`
-	LogPath    string     `json:"logPath"`
+	LogPath    string     `json:"-"`
 	Message    string     `json:"message,omitempty"`
 }

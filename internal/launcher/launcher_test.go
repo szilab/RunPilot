@@ -25,3 +25,16 @@ func TestRejectsIncompatibleInterpreter(t *testing.T) {
 		t.Fatalf("%s should be rejected on %s", interpreter, runtime.GOOS)
 	}
 }
+
+func TestInlineShellCommandUsesSingleCommandArgument(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("inline shell commands are Unix-only")
+	}
+	cmd, err := Build(model.CommandSpec{Path: "printf '%s' inline", Interpreter: "sh-inline"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cmd.Args, []string{"sh", "-c", "printf '%s' inline"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("args = %#v, want %#v", got, want)
+	}
+}

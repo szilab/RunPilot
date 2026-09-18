@@ -85,6 +85,7 @@ func (c *Controller) Close() {
 	for _, p := range snap.Processes {
 		_ = c.processes.Stop(p.ID)
 	}
+	_ = c.history.Close()
 }
 
 func (c *Controller) Remote() *remote.Service { return c.remote }
@@ -514,8 +515,8 @@ func (c *Controller) RunJob(id string) (string, error) {
 	return "", fmt.Errorf("unknown job %q", id)
 }
 
-func (c *Controller) RecentRuns(limit int) ([]model.RunRecord, error) {
-	return c.history.Recent(limit)
+func (c *Controller) RecentRuns(targetID string, limit int) ([]model.RunRecord, error) {
+	return c.history.Recent(targetID, limit)
 }
 
 func (c *Controller) ProcessLog(id string, lines int) (string, error) {

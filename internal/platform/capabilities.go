@@ -25,7 +25,7 @@ func CurrentCapabilities() Capabilities {
 		c.Robocopy, c.Scoop = true, true
 	} else if c.Linux {
 		c.ServiceManager = "systemd"
-		c.CommandInterpreters = append(c.CommandInterpreters, "sh", "bash")
+		c.CommandInterpreters = append(c.CommandInterpreters, "sh", "bash", "sh-inline")
 	}
 	c.Terminal = c.Windows || c.Linux
 	c.DockerCompose = c.Linux

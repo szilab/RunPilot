@@ -35,6 +35,7 @@
         <div class="side-foot" role="status" aria-live="polite">
           <span id="connectionDot" class="dot"></span>
           <span id="connectionText" class="side-foot-label">Not authenticated</span>
+          <span id="systemVersion" class="system-version" aria-label="RunPilot version"></span>
         </div>
         <div id="connectionWarning" class="connection-warning hidden" role="alert" aria-label="HTTP connection: WebSocket payload encryption is disabled." title="HTTP connection: WebSocket payload encryption is disabled.">HTTP connection: WebSocket payload encryption is disabled.</div>
       </div>
@@ -154,10 +155,11 @@
             <option value="cmd">CMD / batch</option>
             <option value="python">Python</option>
             <option value="sh">POSIX shell (sh)</option>
+            <option value="sh-inline">Inline shell command</option>
             <option value="bash">Bash</option>
           </select>
         </label>
-        <label class="span-2">Executable or script path<input id="processPath" placeholder="/opt/runpilot/myapp or C:\Tools\myapp.exe" required></label>
+        <label class="span-2">Executable, script, or inline command<input id="processPath" placeholder="/opt/runpilot/myapp, C:\Tools\myapp.exe, or ls -la /" required></label>
         <label class="span-2">Arguments<input id="processArgs" placeholder='--port 8080 --mode service'></label>
         <label class="span-2">Working directory<input id="processCwd" placeholder="Optional"></label>
         <div class="environment-editor span-2" data-command-prefix="process">
@@ -241,10 +243,11 @@
             <option value="cmd">CMD / batch</option>
             <option value="python">Python</option>
             <option value="sh">POSIX shell (sh)</option>
+            <option value="sh-inline">Inline shell command</option>
             <option value="bash">Bash</option>
           </select>
         </label>
-        <label class="span-2">Executable or script path<input id="jobPath" placeholder="/opt/runpilot/task.sh or C:\Tools\task.ps1" required></label>
+        <label class="span-2">Executable, script, or inline command<input id="jobPath" placeholder="/opt/runpilot/task.sh, C:\Tools\task.ps1, or ls -la /" required></label>
         <label class="span-2">Arguments<input id="jobArgs"></label>
         <label class="span-2">Working directory<input id="jobCwd" placeholder="Optional"></label>
         <div class="environment-editor span-2" data-command-prefix="job">
@@ -332,6 +335,7 @@
   </dialog>
 
   <dialog id="taskDialog" class="dialog small"><div class="dialog-head"><div><h2>Add task</h2><p>What should RunPilot execute?</p></div><button class="icon-btn" type="button" data-dismiss="taskDialog" aria-label="Close">×</button></div><div class="row-list"><button class="row task-choice" type="button" data-task-kind="continuous"><strong>Continuous command</strong><span class="meta">Run continuously and supervise/restart it.</span></button><button class="row task-choice" type="button" data-task-kind="scheduled"><strong>Scheduled command</strong><span class="meta">Run a command according to a schedule.</span></button><button class="row task-choice" type="button" data-task-kind="backup"><strong>Backup</strong><span class="meta">Run a configured backup according to a schedule.</span></button></div></dialog>
+  <dialog id="runHistoryDialog" class="dialog run-history-dialog"><div class="dialog-head"><div><h2 id="runHistoryTitle">Run history</h2><p>Captured output from previous runs.</p></div><button class="icon-btn" id="closeRunHistory" type="button" aria-label="Close">×</button></div><div class="run-history-layout"><div id="runHistoryList" class="row-list"></div><section class="run-history-log"><pre id="runHistoryLogOutput">No run selected.</pre></section></div></dialog>
   <dialog id="textEditorDialog" class="dialog log-dialog"><div class="dialog-head"><div><h2 id="textEditorTitle">Fájl szerkesztése</h2><p id="textEditorPath"></p></div><button class="icon-btn" id="closeTextEditor" type="button">×</button></div><div class="editor-shell"><pre id="textHighlight" aria-hidden="true"><code></code></pre><textarea id="textEditorContent" class="text-editor" spellcheck="false"></textarea></div><div class="dialog-actions"><button class="button secondary" id="cancelTextEditor" type="button">Mégse</button><button class="button primary" id="saveTextEditor" type="button">Mentés</button></div></dialog>
 
   <dialog id="dockerCreateDialog" class="dialog small"><form method="dialog" id="dockerCreateForm"><div class="dialog-head"><div><h2>Create Compose project</h2><p>The project directory is created under RunPilot's data directory.</p></div><button class="icon-btn" type="button" data-dismiss="dockerCreateDialog">×</button></div><label>Project name<input id="dockerProjectName" pattern="[a-z0-9][a-z0-9_-]*" required placeholder="jellyfin"></label><p id="dockerCreateError" class="form-error hidden"></p><div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="dockerCreateDialog">Cancel</button><button class="button primary">Create project</button></div></form></dialog>
