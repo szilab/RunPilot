@@ -1154,7 +1154,12 @@ func (m *Manager) managedFile(name, kind string, create bool) (string, error) {
 	file := ""
 	switch kind {
 	case "compose":
-		file = "compose.yaml"
+		p, exists := composeAt(dir)
+		if exists {
+			file = filepath.Base(p)
+		} else {
+			file = "compose.yaml"
+		}
 	case "env":
 		file = ".env"
 	default:

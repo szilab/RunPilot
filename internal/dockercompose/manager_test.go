@@ -94,6 +94,49 @@ func TestActionUsesExactComposeArguments(t *testing.T) {
 	}
 }
 
+func TestManagedComposeFilesPreserveExistingSupportedName(t *testing.T) {
+	for _, file := range []string{"compose.yml", "docker-compose.yml"} {
+		t.Run(file, func(t *testing.T) {
+			f := &fakeRunner{found: true, results: map[string]Result{join([]string{"compose", "version"}): {}, join([]string{"info"}): {}}}
+			m := NewManagerForTest(t.TempDir(), f, true)
+			if _, err := m.Create("misc"); err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(m.Root(), "misc")
+			path := filepath.Join(dir, file)
+			if err := os.Rename(filepath.Join(dir, "compose.yaml"), path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("services:\n  app:\n    image: example\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := m.ReadFile("misc", "compose")
+			if err != nil || got != "services:\n  app:\n    image: example\n" {
+				t.Fatalf("read %q: %v", got, err)
+			}
+			if err := m.WriteFile("misc", "compose", "services:\n  app:\n    image: updated\n"); err != nil {
+				t.Fatal(err)
+			}
+			gotBytes, err := os.ReadFile(path)
+			if err != nil || string(gotBytes) != "services:\n  app:\n    image: updated\n" {
+				t.Fatalf("written file %q: %v", gotBytes, err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "compose.yaml")); !os.IsNotExist(err) {
+				t.Fatalf("compose.yaml was created: %v", err)
+			}
+			if err := m.Action(context.Background(), "misc", "up"); err != nil {
+				t.Fatal(err)
+			}
+			gotArgs := f.calls[len(f.calls)-1].args
+			wantArgs := []string{"compose", "--project-name", "misc", "--project-directory", dir, "-f", path, "up", "-d"}
+			if join(gotArgs) != join(wantArgs) {
+				t.Fatalf("action args %q want %q", gotArgs, wantArgs)
+			}
+		})
+	}
+}
+
 func TestManagedFilesystemSecurityAndFiles(t *testing.T) {
 	m := NewManagerForTest(t.TempDir(), &fakeRunner{}, true)
 	for _, name := range []string{"", "..", "a/b", "A", "-bad", " bad"} {
