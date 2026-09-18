@@ -43,6 +43,7 @@ if [ -z "$release_tag" ]; then
 fi
 
 asset="runpilot-linux-$arch"
+version_asset="$asset.version"
 base_url="https://github.com/$repo/releases/download/$release_tag"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -132,8 +133,39 @@ download() {
 	fi
 }
 
+download_optional() {
+	url="$1"
+	output="$2"
+	if command -v curl >/dev/null 2>&1; then
+		curl -fsSL "$url" -o "$output"
+	elif command -v wget >/dev/null 2>&1; then
+		wget -q "$url" -O "$output"
+	else
+		return 1
+	fi
+}
+
+installed_version() {
+	if [ -x "$install_dir/runpilot" ]; then
+		"$install_dir/runpilot" version 2>/dev/null | sed -n 's/^RunPilot //p' | head -n 1
+	fi
+}
+
 binary_tmp="$tmp_dir/$asset"
 sum_tmp="$tmp_dir/$asset.sha256"
+version_tmp="$tmp_dir/$version_asset"
+
+latest_version=""
+if download_optional "$base_url/$version_asset" "$version_tmp"; then
+	latest_version="$(sed -n '1{s/[[:space:]]*$//;p;}' "$version_tmp")"
+	current_version="$(installed_version)"
+	if [ -n "$latest_version" ] && [ "$latest_version" = "$current_version" ]; then
+		echo "RunPilot $current_version is already installed."
+		exit 0
+	fi
+elif [ "$is_update" = "1" ]; then
+	echo "Release version metadata is unavailable; checking the downloaded binary instead."
+fi
 
 echo "Downloading RunPilot $release_tag from $repo..."
 download "$base_url/$asset" "$binary_tmp"
@@ -145,6 +177,15 @@ if command -v sha256sum >/dev/null 2>&1; then
 	echo "Checksum verified."
 else
 	echo "sha256sum is not available; skipping checksum verification." >&2
+fi
+
+if [ -z "$latest_version" ]; then
+	latest_version="$("$binary_tmp" version 2>/dev/null | sed -n 's/^RunPilot //p' | head -n 1 || true)"
+	current_version="$(installed_version)"
+	if [ -n "$latest_version" ] && [ "$latest_version" = "$current_version" ]; then
+		echo "RunPilot $current_version is already installed."
+		exit 0
+	fi
 fi
 
 mkdir -p "$install_dir" "$data_dir"

@@ -134,6 +134,10 @@ task is still recording its result. The deferred restart is important:
 restarting `runpilot.service` directly from the task can stop RunPilot before
 it records the final task status.
 
+The installer compares the selected release version with the installed binary
+and exits without replacing or restarting RunPilot when that version is already
+installed.
+
 Automatic self-updates can temporarily or permanently cut off web and terminal
 access if the downloaded binary is broken, the service unit is misconfigured, or
 the restart fails. Keep another way to reach the host, such as SSH, local console

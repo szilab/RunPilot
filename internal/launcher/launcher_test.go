@@ -38,3 +38,16 @@ func TestInlineShellCommandUsesSingleCommandArgument(t *testing.T) {
 		t.Fatalf("args = %#v, want %#v", got, want)
 	}
 }
+
+func TestInlineShellCommandTrimsAccidentalOuterQuotes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("inline shell commands are Unix-only")
+	}
+	cmd, err := Build(model.CommandSpec{Path: `"printf '%s' inline"`, Interpreter: "sh-inline"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cmd.Args[2], "printf '%s' inline"; got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
