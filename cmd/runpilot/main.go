@@ -12,9 +12,8 @@ import (
 	"github.com/szilab/RunPilot/internal/config"
 	"github.com/szilab/RunPilot/internal/daemon"
 	"github.com/szilab/RunPilot/internal/service"
+	"github.com/szilab/RunPilot/internal/version"
 )
-
-var version = "1.0.1"
 
 func main() {
 	if err := run(); err != nil {
@@ -43,7 +42,7 @@ func run() error {
 	case "service":
 		return runServiceCommand(args[1:])
 	case "version", "--version", "-v":
-		fmt.Println("RunPilot", version)
+		fmt.Println("RunPilot", version.Version)
 		return nil
 	case "help", "--help", "-h":
 		usage()

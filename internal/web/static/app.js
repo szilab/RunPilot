@@ -167,6 +167,7 @@ function populateCommandEditor(prefix, command = {}) {
   $(`${prefix}Args`).value = formatArgs(command.args || []);
   $(`${prefix}Cwd`).value = command.workingDirectory || "";
   $(`${prefix}Interpreter`).value = command.interpreter || "auto";
+  updateCommandEditorMode(prefix);
   $(`${prefix}EnvRows`).replaceChildren();
   Object.keys(command.environment || {}).sort((a, b) => a.localeCompare(b)).forEach(name => {
     addEnvironmentRow(prefix, name, command.environment[name]);
@@ -174,6 +175,15 @@ function populateCommandEditor(prefix, command = {}) {
   updateEnvironmentEmpty(prefix);
   setCommandError(prefix);
 	if (systemInfo?.capabilities) configurePlatformAwareFields(systemInfo.capabilities);
+}
+
+function updateCommandEditorMode(prefix) {
+  const interpreter = $(`${prefix}Interpreter`), args = $(`${prefix}Args`);
+  if (!interpreter || !args) return;
+  const inlineShell = interpreter.value === "sh-inline";
+  args.disabled = inlineShell;
+  args.placeholder = inlineShell ? "Not used for inline shell commands" : "Optional arguments";
+  args.setAttribute("aria-disabled", String(inlineShell));
 }
 
 function commandFromEditor(prefix) {
@@ -200,9 +210,10 @@ function commandFromEditor(prefix) {
     environment[name] = value;
   }
   setCommandError(prefix);
+  const inlineShell = $(`${prefix}Interpreter`).value === "sh-inline";
   return {
     path: $(`${prefix}Path`).value.trim(),
-    args: splitArgs($(`${prefix}Args`).value),
+    args: inlineShell ? [] : splitArgs($(`${prefix}Args`).value),
     workingDirectory: $(`${prefix}Cwd`).value.trim(),
     interpreter: $(`${prefix}Interpreter`).value,
     environment,
@@ -212,6 +223,10 @@ function commandFromEditor(prefix) {
 document.querySelectorAll(".environment-editor").forEach(editor => {
   const prefix = editor.dataset.commandPrefix;
   editor.querySelector(".env-add").addEventListener("click", () => addEnvironmentRow(prefix, "", "", true));
+});
+document.querySelectorAll("select[id$='Interpreter']").forEach(select => {
+  const prefix = select.id.slice(0, -"Interpreter".length);
+  select.addEventListener("change", () => updateCommandEditorMode(prefix));
 });
 
 function fmtDate(value) {
@@ -264,6 +279,34 @@ function scheduleText(s) {
 function statusBadge(status) {
   const cls = status || "idle";
   return `<span class="status ${escapeHtml(cls)}">${escapeHtml(cls)}</span>`;
+}
+
+function runDuration(run) {
+  const end = run.finishedAt ? new Date(run.finishedAt) : new Date();
+  return `${Math.max(0, Math.round((end - new Date(run.startedAt)) / 1000))}s`;
+}
+
+function runStatus(run) { return run.finishedAt ? (run.success ? "Success" : "Failed") : "Running"; }
+
+async function openRunHistory(id, name) {
+  $("runHistoryTitle").textContent = `${name} history`;
+  $("runHistoryList").innerHTML = `<div class="empty compact"><p>Loading history…</p></div>`;
+  $("runHistoryLogOutput").textContent = "No run selected.";
+  $("runHistoryDialog").showModal();
+  try {
+    const runs = await api(`api/v1/runs?targetId=${encodeURIComponent(id)}&limit=20`);
+    $("runHistoryList").innerHTML = runs.length ? runs.map(run => `<article class="row run-history-row" role="button" tabindex="0" aria-label="Open log from ${escapeHtml(fmtDate(run.startedAt))}" onclick="openHistoryRunLog('${escapeHtml(run.id)}','${escapeHtml(name)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openHistoryRunLog('${escapeHtml(run.id)}','${escapeHtml(name)}')}"><div class="row-head"><div><strong>${escapeHtml(fmtDate(run.startedAt))}</strong><div class="meta">${escapeHtml(runStatus(run))} · ${escapeHtml(runDuration(run))}${run.exitCode != null ? ` · exit ${escapeHtml(run.exitCode)}` : ""}</div></div>${statusBadge(runStatus(run).toLowerCase())}</div>${run.message ? `<div class="meta">${escapeHtml(run.message)}</div>` : ""}</article>`).join("") : `<div class="empty compact"><h2>No completed runs</h2><p>Run history will appear here after this task executes.</p></div>`;
+  } catch (error) { $("runHistoryList").innerHTML = `<div class="empty compact"><p>${escapeHtml(error.message)}</p></div>`; }
+}
+
+async function openHistoryRunLog(id, name) {
+  $("runHistoryLogOutput").textContent = "Loading…";
+  try {
+    const text = await api(`api/v1/runs/${encodeURIComponent(id)}/log?lines=800`);
+    $("runHistoryLogOutput").textContent = text || "(no output)";
+  } catch (error) {
+    $("runHistoryLogOutput").textContent = error.message;
+  }
 }
 
 function escapeHtml(value) {
@@ -558,6 +601,7 @@ function renderJobRow(v) {
     <div class="row-actions">
       <button class="button primary small" onclick="runJob('${d.id}')">Run now</button>
       ${s.currentRunId ? `<button class="button secondary small" onclick="openRunLog('${s.currentRunId}','${escapeHtml(d.name)}')">Live log</button>` : ""}
+      <button class="button secondary small" onclick="openRunHistory('${d.id}','${escapeHtml(d.name)}')">History</button>
       <button class="button secondary small" onclick="editJob('${d.id}')">Edit</button>
       <button class="button danger small" onclick="deleteJob('${d.id}')">Delete</button>
     </div>
@@ -581,6 +625,7 @@ function renderBackupRow(v) {
     <div class="row-actions">
       <button class="button primary small" onclick="runJob('${d.id}')">Run backup</button>
       ${s.currentRunId ? `<button class="button secondary small" onclick="openRunLog('${s.currentRunId}','${escapeHtml(d.name)}')">Live log</button>` : ""}
+      <button class="button secondary small" onclick="openRunHistory('${d.id}','${escapeHtml(d.name)}')">History</button>
       <button class="button secondary small" onclick="editBackup('${d.id}')">Edit</button>
       <button class="button danger small" onclick="deleteJob('${d.id}')">Delete</button>
     </div>
@@ -916,6 +961,7 @@ $("dockerAttachDialog").addEventListener("close",disposeDockerAttachTerminal);
 
 async function loadTerminalInfo() {
   systemInfo = await api("api/v1/system");
+  $("systemVersion").textContent = systemInfo?.version ? `v${systemInfo.version}` : "";
   window.runPilotWebSocketPayloadMode = systemInfo?.websocketPayloadMode || "disabled";
   if (connectionOnline) setConnected(true);
   configurePlatformAwareFields(systemInfo.capabilities || {});
@@ -937,7 +983,7 @@ async function loadTerminalInfo() {
 }
 
 function configurePlatformAwareFields(capabilities) {
-  const labels = {direct:"Direct executable", python:"Python", powershell:"PowerShell", cmd:"CMD / batch", sh:"POSIX shell (sh)", bash:"Bash"};
+  const labels = {direct:"Direct executable", python:"Python", powershell:"PowerShell", cmd:"CMD / batch", sh:"POSIX shell (sh)", "sh-inline":"Inline shell command", bash:"Bash"};
   const interpreters = new Set(capabilities.commandInterpreters || []);
   document.querySelectorAll("select[id$='Interpreter']").forEach(select => {
     const selected = select.value || "auto";
@@ -1279,6 +1325,7 @@ $("closeLog").addEventListener("click", () => {
   if (logTimer) clearInterval(logTimer);
   logTimer = null; logSource = null; $("logDialog").close();
 });
+$("closeRunHistory").addEventListener("click", () => $("runHistoryDialog").close());
 
 $("loginForm").addEventListener("submit", async e => {
   e.preventDefault();

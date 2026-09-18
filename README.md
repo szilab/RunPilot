@@ -92,16 +92,47 @@ the task.
 
 A RunPilot scheduled task can update the installed binary non-interactively and
 ask systemd to restart RunPilot after the task has had time to finish recording
-its result:
+its result. Because a RunPilot `sh` interpreter runs a script path, use a
+direct `/bin/sh -c` command for an inline pipeline:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/szilab/RunPilot/main/install.sh | env RUNPILOT_ASSUME_YES=1 RUNPILOT_SKIP_SERVICE=1 sh && systemd-run --user --on-active=30s systemctl --user restart runpilot.service
+```yaml
+name: RunPilot update
+enabled: true
+type: command
+schedule:
+  type: daily
+  timeOfDay: "01:00"
+overlapPolicy: skip
+command:
+  path: /bin/sh
+  args:
+    - -c
+    - 'curl -fsSL https://raw.githubusercontent.com/szilab/RunPilot/main/install.sh | env RUNPILOT_ASSUME_YES=1 RUNPILOT_SKIP_SERVICE=1 sh && systemd-run --user --on-active=30s systemctl --user restart runpilot.service'
+  interpreter: direct
 ```
 
-Use `RUNPILOT_CHANNEL=develop` in the same command to track the develop rolling
-release. The deferred restart is important: restarting `runpilot.service`
-directly from the task can stop the RunPilot process before it records the final
-task status.
+Use the same task with `RUNPILOT_CHANNEL=develop` before the installer command
+to track the develop rolling release:
+
+```yaml
+command:
+  path: /bin/sh
+  args:
+    - -c
+    - 'curl -fsSL https://raw.githubusercontent.com/szilab/RunPilot/main/install.sh | env RUNPILOT_CHANNEL=develop RUNPILOT_ASSUME_YES=1 RUNPILOT_SKIP_SERVICE=1 sh && systemd-run --user --on-active=30s systemctl --user restart runpilot.service'
+  interpreter: direct
+```
+
+In the GUI, choose **Direct executable**, enter `/bin/sh` as the executable or
+script path, and add `-c` followed by the complete pipeline as the arguments.
+The arguments field parses quotes itself, so enter the pipeline as one quoted
+argument, for example: `-c "curl ... | env ... sh && systemd-run ..."`.
+
+`RUNPILOT_ASSUME_YES=1` allows the unattended installer to proceed and
+`RUNPILOT_SKIP_SERVICE=1` prevents it from restarting the service while the
+task is still recording its result. The deferred restart is important:
+restarting `runpilot.service` directly from the task can stop RunPilot before
+it records the final task status.
 
 Automatic self-updates can temporarily or permanently cut off web and terminal
 access if the downloaded binary is broken, the service unit is misconfigured, or
@@ -409,11 +440,13 @@ runpilot.exe
 │   └── Typed external integrations
 ├── Future storage providers / software providers
 ├── Runtime PTY/ConPTY terminal sessions (not persisted)
-├── YAML config + JSONL run history + per-run logs
+├── YAML config + SQLite run history + per-run logs
 └── Embedded HTTP API + web UI
 ```
 
-The first implementation deliberately keeps persistence simple. A later milestone can migrate history/configuration to embedded SQLite once the domain/API has stabilized.
+Run history metadata is stored in a small embedded SQLite database while stdout
+and stderr remain in per-run log files. Existing `history.jsonl` records are
+migrated on startup without deleting the legacy file.
 
 ## Docker Compose (Linux)
 

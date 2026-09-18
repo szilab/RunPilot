@@ -39,7 +39,8 @@ jobs:
       - name: Build Linux AMD64 binary
         run: |
           mkdir -p dist
-          go build -trimpath -ldflags="-s -w" -o dist/runpilot-linux-amd64 ./cmd/runpilot
+          BUILD_VERSION="1.0.2-${GITHUB_REF_NAME}.${GITHUB_SHA::7}"
+          go build -trimpath -ldflags="-s -w -X github.com/szilab/RunPilot/internal/version.Version=${BUILD_VERSION}" -o dist/runpilot-linux-amd64 ./cmd/runpilot
           sha256sum dist/runpilot-linux-amd64 > dist/runpilot-linux-amd64.sha256
           cp install.sh dist/install.sh
 
@@ -90,11 +91,11 @@ jobs:
             dist/install.sh \
             --clobber
 
-      - name: Create immutable v1.0.1 release
+      - name: Create immutable v1.0.2 release
         if: github.ref_name == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION_TAG: v1.0.1
+          VERSION_TAG: v1.0.2
         shell: bash
         run: |
           if gh release view "$VERSION_TAG" >/dev/null 2>&1; then
@@ -107,5 +108,5 @@ jobs:
             dist/runpilot-linux-amd64.sha256 \
             dist/install.sh \
             --target "$GITHUB_SHA" \
-            --title "RunPilot v1.0.1" \
+            --title "RunPilot v1.0.2" \
             --generate-notes

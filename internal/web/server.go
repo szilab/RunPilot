@@ -26,6 +26,7 @@ import (
 	"github.com/szilab/RunPilot/internal/software"
 	"github.com/szilab/RunPilot/internal/storage"
 	"github.com/szilab/RunPilot/internal/terminal"
+	"github.com/szilab/RunPilot/internal/version"
 	"github.com/szilab/RunPilot/internal/websocketsecure"
 )
 
@@ -239,7 +240,7 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	cfg := s.ctrl.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":                 "RunPilot",
-		"version":              "0.1.0-dev",
+		"version":              version.Version,
 		"dataDir":              s.ctrl.DataDir(),
 		"configPath":           s.ctrl.ConfigPath(),
 		"bind":                 cfg.Server.Bind,
@@ -805,12 +806,30 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
-	runs, err := s.ctrl.RecentRuns(queryLimit(r, 100))
+	targetID := r.URL.Query().Get("targetId")
+	if targetID != "" && !validRunTargetID(targetID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid target id"))
+		return
+	}
+	runs, err := s.ctrl.RecentRuns(targetID, queryLimit(r, 100))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, runs)
+}
+
+func validRunTargetID(id string) bool {
+	if id == "" || id != path.Base(id) {
+		return false
+	}
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (s *Server) handleRunLog(w http.ResponseWriter, r *http.Request) {
@@ -1396,7 +1415,11 @@ func storageError(w http.ResponseWriter, e error) {
 }
 
 func queryLimit(r *http.Request, fallback int) int {
-	n, err := strconv.Atoi(r.URL.Query().Get("lines"))
+	value := r.URL.Query().Get("limit")
+	if value == "" {
+		value = r.URL.Query().Get("lines")
+	}
+	n, err := strconv.Atoi(value)
 	if err != nil || n <= 0 || n > 5000 {
 		return fallback
 	}

@@ -49,6 +49,11 @@ func Build(spec model.CommandSpec) (*exec.Cmd, error) {
 		}
 		args := append([]string{spec.Path}, spec.Args...)
 		cmd = exec.Command(interpreter, args...)
+	case "sh-inline":
+		if runtime.GOOS == "windows" {
+			return nil, fmt.Errorf("inline shell commands are only available on Unix-like systems")
+		}
+		cmd = exec.Command("sh", "-c", spec.Path)
 	case "python":
 		exe := "python.exe"
 		if runtime.GOOS != "windows" {
