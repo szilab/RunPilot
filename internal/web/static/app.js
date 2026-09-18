@@ -186,6 +186,14 @@ function updateCommandEditorMode(prefix) {
   args.setAttribute("aria-disabled", String(inlineShell));
 }
 
+function trimInlineCommandQuotes(value) {
+  const command = value.trim();
+  if (command.length >= 2 && ((command.startsWith('"') && command.endsWith('"')) || (command.startsWith("'") && command.endsWith("'")))) {
+    return command.slice(1, -1);
+  }
+  return command;
+}
+
 function commandFromEditor(prefix) {
   const environment = {};
   const names = new Map();
@@ -212,7 +220,7 @@ function commandFromEditor(prefix) {
   setCommandError(prefix);
   const inlineShell = $(`${prefix}Interpreter`).value === "sh-inline";
   return {
-    path: $(`${prefix}Path`).value.trim(),
+    path: inlineShell ? trimInlineCommandQuotes($(`${prefix}Path`).value) : $(`${prefix}Path`).value.trim(),
     args: inlineShell ? [] : splitArgs($(`${prefix}Args`).value),
     workingDirectory: $(`${prefix}Cwd`).value.trim(),
     interpreter: $(`${prefix}Interpreter`).value,

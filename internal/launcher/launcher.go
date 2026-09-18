@@ -53,7 +53,7 @@ func Build(spec model.CommandSpec) (*exec.Cmd, error) {
 		if runtime.GOOS == "windows" {
 			return nil, fmt.Errorf("inline shell commands are only available on Unix-like systems")
 		}
-		cmd = exec.Command("sh", "-c", spec.Path)
+		cmd = exec.Command("sh", "-c", trimOuterQuotes(spec.Path))
 	case "python":
 		exe := "python.exe"
 		if runtime.GOOS != "windows" {
@@ -71,6 +71,14 @@ func Build(spec model.CommandSpec) (*exec.Cmd, error) {
 	cmd.Env = mergeEnvironment(os.Environ(), spec.Environment, runtime.GOOS == "windows")
 	platform.ConfigureCommand(cmd)
 	return cmd, nil
+}
+
+func trimOuterQuotes(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 2 && ((value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'')) {
+		return value[1 : len(value)-1]
+	}
+	return value
 }
 
 // mergeEnvironment returns inherited entries with configured values applied.
