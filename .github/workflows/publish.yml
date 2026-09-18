@@ -1,0 +1,89 @@
+name: Publish Linux AMD64 Release
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: write
+
+jobs:
+  publish-linux-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pushed commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: true
+
+      - name: Format check
+        run: test -z "$(gofmt -l .)"
+
+      - name: Test
+        run: go test ./...
+
+      - name: Race test
+        run: go test -race ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build Linux AMD64 binary
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w" -o dist/runpilot-linux-amd64 ./cmd/runpilot
+          sha256sum dist/runpilot-linux-amd64 > dist/runpilot-linux-amd64.sha256
+
+      - name: Set release metadata
+        id: release
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_NAME" == "main" ]]; then
+            echo "tag=main-latest" >> "$GITHUB_OUTPUT"
+            echo "title=RunPilot main latest" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=develop-latest" >> "$GITHUB_OUTPUT"
+            echo "title=RunPilot develop latest" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Move rolling release tag
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          git tag --force "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG" --force
+
+      - name: Create or update rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          TITLE: ${{ steps.release.outputs.title }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            if [[ "$PRERELEASE" == "true" ]]; then
+              gh release edit "$TAG" --title "$TITLE" --prerelease
+            else
+              gh release edit "$TAG" --title "$TITLE" --prerelease=false
+            fi
+          elif [[ "$PRERELEASE" == "true" ]]; then
+            gh release create "$TAG" --title "$TITLE" --notes "Rolling Linux AMD64 build from the develop branch." --prerelease --verify-tag
+          else
+            gh release create "$TAG" --title "$TITLE" --notes "Rolling Linux AMD64 build from the main branch." --verify-tag
+          fi
+
+          gh release upload "$TAG" \
+            dist/runpilot-linux-amd64 \
+            dist/runpilot-linux-amd64.sha256 \
+            --clobber
