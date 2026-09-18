@@ -56,6 +56,59 @@ Docker support attaches to an already functional external runtime and is limited
 
 See `ARCHITECTURE.md` for the detailed capability/integration model and guardrails.
 
+## Install On Linux
+
+Install the latest `main` release with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/szilab/RunPilot/main/install.sh | sh
+```
+
+Use a custom data directory or the latest `develop` prerelease with environment
+variables:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/szilab/RunPilot/main/install.sh | env RUNPILOT_DATA_DIR=/opt/runpilot-data sh
+curl -fsSL https://raw.githubusercontent.com/szilab/RunPilot/main/install.sh | env RUNPILOT_CHANNEL=develop sh
+```
+
+The installer downloads `runpilot-linux-amd64` from the rolling GitHub release,
+verifies its `.sha256` file when `sha256sum` is available, installs it to
+`$HOME/.local/bin/runpilot`, installs the Linux systemd user service, and starts
+it. Before making changes, it prints the selected release, install path, data
+directory, and service action, then asks for confirmation. Re-run the same
+command to update an existing user-service installation; an active RunPilot user
+service is stopped before the binary is replaced and then started again. Set
+`RUNPILOT_INSTALL_DIR`, `RUNPILOT_START_SERVICE=0`, `RUNPILOT_SKIP_SERVICE=1`,
+or `RUNPILOT_ASSUME_YES=1` to customize installer behavior. Non-interactive
+runs, including scheduled RunPilot tasks, exit before downloading unless
+`RUNPILOT_ASSUME_YES=1` is set. If a non-interactive run finds the RunPilot user
+service already active, it refuses to stop that service unless
+`RUNPILOT_ALLOW_SERVICE_RESTART=1` is also set; use `RUNPILOT_SKIP_SERVICE=1`
+for a scheduled binary-only update that should not restart the service running
+the task.
+
+### Automatic Updates From A RunPilot Task
+
+A RunPilot scheduled task can update the installed binary non-interactively and
+ask systemd to restart RunPilot after the task has had time to finish recording
+its result:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/szilab/RunPilot/main/install.sh | env RUNPILOT_ASSUME_YES=1 RUNPILOT_SKIP_SERVICE=1 sh && systemd-run --user --on-active=30s systemctl --user restart runpilot.service
+```
+
+Use `RUNPILOT_CHANNEL=develop` in the same command to track the develop rolling
+release. The deferred restart is important: restarting `runpilot.service`
+directly from the task can stop the RunPilot process before it records the final
+task status.
+
+Automatic self-updates can temporarily or permanently cut off web and terminal
+access if the downloaded binary is broken, the service unit is misconfigured, or
+the restart fails. Keep another way to reach the host, such as SSH, local console
+access, or a separate systemd user session, before enabling an unattended update
+task.
+
 ## Development
 
 ```bash

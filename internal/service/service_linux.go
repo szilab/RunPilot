@@ -165,7 +165,7 @@ func unitContents(executable, dataDir string, option daemon.Options) string {
 	if option.BasePath != "" {
 		args = append(args, "--base-path", unitQuote(option.BasePath))
 	}
-	return "[Unit]\nDescription=RunPilot Process Manager\n\n[Service]\nType=simple\nWorkingDirectory=" + unitQuote(dataDir) + "\nExecStart=" + strings.Join(args, " ") + "\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"
+	return "[Unit]\nDescription=RunPilot Process Manager\n\n[Service]\nType=simple\nWorkingDirectory=" + dataDir + "\nExecStart=" + strings.Join(args, " ") + "\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"
 }
 
 func unitQuote(value string) string {
