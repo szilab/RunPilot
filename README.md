@@ -4,9 +4,9 @@
   <img src="internal/web/static/runpilot-logo.png" width="120">
 </div>
 
-RunPilot is a lightweight Windows host-management application written in Go. One native Windows service manages configured workloads and operations and exposes an embedded local web UI.
+RunPilot is a lightweight Windows/Linux host-management application written in Go. One native service manages configured workloads and operations and exposes an embedded local web UI. Windows uses Windows Service Control Manager; Linux uses a systemd user service.
 
-RunPilot provides process supervision, scheduling, backup jobs, storage access and isolated software management through a coherent Windows management GUI.
+RunPilot provides process supervision, scheduling, backup jobs, storage access and isolated software management through a coherent management GUI.
 
 The project takes the useful operating model of Perch — one service, one dashboard, many managed processes — but uses its own implementation and broader typed capability/integration model.
 
@@ -18,7 +18,7 @@ RunPilot should integrate specialist tools such as Robocopy, Restic or future pa
 
 ## Capabilities
 
-- Native Windows service (`RunPilot Process Manager`)
+- Native service (`RunPilot Process Manager`) through Windows SCM or a Linux systemd user service
 - Long-running process supervision
 - `.exe`, `.bat`/`.cmd`, `.ps1` and `.py` launch support
 - Autostart and `never` / `on-failure` / `always` restart policies
@@ -31,7 +31,7 @@ RunPilot should integrate specialist tools such as Robocopy, Restic or future pa
 - Embedded web GUI and REST API
 - Overview dashboard with host CPU, memory, disk and workload health
 - Token-authenticated API bound to `127.0.0.1` by default
-- YAML configuration under `%ProgramData%\RunPilot`
+- YAML configuration under `%ProgramData%\RunPilot` on Windows or `$XDG_DATA_HOME/runpilot` / `~/.local/share/runpilot` on Linux
 - Software Management through a RunPilot-owned isolated Scoop provider
 - Interactive Terminal tabs backed by a Linux PTY or Windows ConPTY
 - Remote Access targets and sessions through Xpra, embedded-browser RDP, and VNC/noVNC providers
@@ -62,6 +62,15 @@ See `ARCHITECTURE.md` for the detailed capability/integration model and guardrai
 go test ./...
 go vet ./...
 go run ./cmd/runpilot run --data-dir ./runpilot-data
+```
+
+On Linux, install and start the user service with `runpilot service install` and
+`runpilot service start`. The service runs with the installing user's permissions
+and does not require a graphical login. To keep it running and start it at boot
+without an interactive login, enable lingering for that user:
+
+```bash
+sudo loginctl enable-linger <username>
 ```
 
 Open `http://127.0.0.1:9070`. On first start, `run` prints a newly generated API
@@ -106,7 +115,7 @@ substitute both handshake keys. Do not call this E2EE.
 ```
 
 Use the same flags with `service install` to persist them in the installed
-Windows service command line. With the example above, publish the application
+service command line. With the example above, publish the application
 through a reverse proxy at `https://mydomain.com/runpilot/`, forwarding that
 prefix unchanged to RunPilot. The UI, REST API, and Terminal WebSocket all use
 this one RunPilot listener and configured prefix. No terminal-specific port or
@@ -134,9 +143,9 @@ down its shell and process tree. Terminal bytes and commands are never saved by
 RunPilot.
 
 Terminal access is equivalent to arbitrary command execution as the account
-running RunPilot (for example `root`, `SYSTEM`, Administrator, or a dedicated
-service account). It is protected by the same API token boundary as process and
-job management. The browser first obtains a short-lived, single-use connection
+running RunPilot. On Linux this is the installing user's normal account; on
+Windows it is the configured service identity. It is protected by the same API
+token boundary as process and job management. The browser first obtains a short-lived, single-use connection
 ticket through the authenticated REST API; the permanent token is never placed
 in the WebSocket URL.
 

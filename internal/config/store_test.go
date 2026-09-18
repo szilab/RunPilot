@@ -44,14 +44,25 @@ func TestStorePersists(t *testing.T) {
 	}
 }
 
-func TestDefaultDataDirHonorsEnvironmentAndLinuxDefault(t *testing.T) {
+func TestDefaultDataDirHonorsEnvironmentAndLinuxDefaults(t *testing.T) {
 	t.Setenv("RUNPILOT_DATA_DIR", "/custom/runpilot")
 	if got := DefaultDataDir(); got != "/custom/runpilot" {
 		t.Fatalf("environment data directory = %q", got)
 	}
 	t.Setenv("RUNPILOT_DATA_DIR", "")
-	if runtime.GOOS == "linux" && DefaultDataDir() != "/var/lib/runpilot" {
-		t.Fatalf("Linux default = %q", DefaultDataDir())
+	if runtime.GOOS == "linux" {
+		t.Setenv("XDG_DATA_HOME", "/custom/data")
+		if got := DefaultDataDir(); got != filepath.Join("/custom/data", "runpilot") {
+			t.Fatalf("XDG data directory = %q", got)
+		}
+		t.Setenv("XDG_DATA_HOME", "")
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := DefaultDataDir(); got != filepath.Join(home, ".local", "share", "runpilot") {
+			t.Fatalf("Linux default = %q", got)
+		}
 	}
 }
 

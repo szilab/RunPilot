@@ -32,7 +32,13 @@ func DefaultDataDir() string {
 		}
 	}
 	if runtime.GOOS == "linux" {
-		return "/var/lib/runpilot"
+		if dataHome := os.Getenv("XDG_DATA_HOME"); dataHome != "" {
+			return filepath.Join(dataHome, "runpilot")
+		}
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, ".local", "share", "runpilot")
+		}
+		return filepath.Join(".", "runpilot-data")
 	}
 	return filepath.Join(".", "runpilot-data")
 }

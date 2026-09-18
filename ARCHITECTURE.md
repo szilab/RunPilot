@@ -2,7 +2,7 @@
 
 ## Product boundary
 
-RunPilot has one privileged native daemon: Windows Service Control Manager on Windows and systemd on Linux. The daemon owns process execution, scheduling, run history and the HTTP API. The browser is only a management client; it never launches workloads directly.
+RunPilot has one native daemon managed by the operating system: Windows Service Control Manager on Windows and a systemd user service on Linux. The daemon owns process execution, scheduling, run history and the HTTP API. The browser is only a management client; it never launches workloads directly.
 
 Core RunPilot functionality must remain platform-neutral. OS-specific functionality belongs behind small platform, service, or provider adapters selected by Go build constraints or runtime capability detection. The capability API tells clients which native service manager, interpreters, and Windows-only integrations are available.
 
@@ -50,7 +50,7 @@ MVP persistence is deliberately transparent:
 - `history.jsonl` — completed run records
 - `runs/<run-id>.log` — captured stdout/stderr
 
-Default location: `%ProgramData%\RunPilot` on Windows and `/var/lib/runpilot` for Linux daemon use. `RUNPILOT_DATA_DIR` is the highest-priority default override, while an explicit `--data-dir` remains available for foreground and service installation.
+Default location: `%ProgramData%\RunPilot` on Windows and `$XDG_DATA_HOME/runpilot` or `~/.local/share/runpilot` on Linux. `RUNPILOT_DATA_DIR` is the highest-priority default override, while an explicit `--data-dir` remains available for foreground and service installation. Linux service installation uses the current user's systemd unit directory and normal user permissions; `sudo loginctl enable-linger <user>` enables boot-time operation without an interactive login.
 
 SQLite is a sensible next persistence step when query requirements, retention and migration needs justify it. The REST/domain interfaces should remain stable when that migration happens.
 
