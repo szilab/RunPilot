@@ -89,3 +89,23 @@ jobs:
             dist/runpilot-linux-amd64.sha256 \
             dist/install.sh \
             --clobber
+
+      - name: Create immutable v1.0.0 release
+        if: github.ref_name == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_TAG: v1.0.0
+        shell: bash
+        run: |
+          if gh release view "$VERSION_TAG" >/dev/null 2>&1; then
+            echo "$VERSION_TAG already exists; leaving the immutable release unchanged."
+            exit 0
+          fi
+
+          gh release create "$VERSION_TAG" \
+            dist/runpilot-linux-amd64 \
+            dist/runpilot-linux-amd64.sha256 \
+            dist/install.sh \
+            --target "$GITHUB_SHA" \
+            --title "RunPilot v1.0.0" \
+            --generate-notes
