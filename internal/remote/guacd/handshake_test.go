@@ -131,10 +131,10 @@ func equalInstructions(got, want []Instruction) bool {
 
 func TestConnectRDPProtocolVersionNegotiation(t *testing.T) {
 	cases := []struct {
-		name       string
-		args       []string
+		name        string
+		args        []string
 		wantVersion string
-		steps      int
+		steps       int
 	}{
 		{name: "advertised supported version", args: []string{"VERSION_1_1_0", "hostname"}, wantVersion: "VERSION_1_1_0", steps: 5},
 		{name: "legacy without version", args: []string{"hostname"}, wantVersion: "", steps: 4},
