@@ -2,7 +2,6 @@ package plugins
 
 import (
 	"fmt"
-	"runtime"
 	"strings"
 )
 
@@ -23,11 +22,15 @@ type Manifest struct {
 	Name            string            `yaml:"name" json:"name"`
 	Version         string            `yaml:"version" json:"version"`
 	ProtocolVersion int               `yaml:"protocolVersion" json:"protocolVersion"`
-	Enabled         bool              `yaml:"enabled" json:"enabled"`
+	Description     string            `yaml:"description,omitempty" json:"description,omitempty"`
+	DefaultEnabled  bool              `yaml:"defaultEnabled,omitempty" json:"defaultEnabled"`
 	Capabilities    []string          `yaml:"capabilities" json:"capabilities"`
 	Executables     map[string]string `yaml:"executables" json:"executables"`
 	Args            []string          `yaml:"args,omitempty" json:"args,omitempty"`
 	Env             map[string]string `yaml:"env,omitempty" json:"-"`
+	// LegacyEnabled is accepted only to migrate the initial runtime manifests.
+	// New manifests must use defaultEnabled; enabled is never persisted here.
+	LegacyEnabled *bool `yaml:"enabled,omitempty" json:"-"`
 }
 
 func (m Manifest) Executable(goos, goarch string) (string, bool) {
@@ -69,16 +72,16 @@ func (m Manifest) Validate() error {
 		}
 		seen[capability] = struct{}{}
 	}
-	if _, ok := m.Executable(runtime.GOOS, runtime.GOARCH); !ok {
-		return fmt.Errorf("no executable configured for %s/%s", runtime.GOOS, runtime.GOARCH)
-	}
 	return nil
 }
 
 type Status struct {
-	Manifest  Manifest `json:"manifest"`
-	State     State    `json:"state"`
-	PID       int      `json:"pid,omitempty"`
-	StartedAt string   `json:"startedAt,omitempty"`
-	Message   string   `json:"message,omitempty"`
+	Manifest          Manifest `json:"manifest"`
+	Enabled           bool     `json:"enabled"`
+	PlatformSupported bool     `json:"platformSupported"`
+	Healthy           bool     `json:"healthy"`
+	State             State    `json:"state"`
+	PID               int      `json:"pid,omitempty"`
+	StartedAt         string   `json:"startedAt,omitempty"`
+	Message           string   `json:"message,omitempty"`
 }

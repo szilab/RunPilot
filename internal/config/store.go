@@ -147,6 +147,7 @@ func defaultConfig() model.Config {
 		Processes: []model.ProcessDefinition{},
 		Jobs:      []model.JobDefinition{},
 		Remote:    model.RemoteConfig{Guacd: model.DefaultGuacdConfig()},
+		Plugins:   map[string]model.PluginSettings{},
 	}
 	if runtime.GOOS == "windows" {
 		config.Software.Providers = []model.SoftwareProviderDefinition{{
@@ -169,6 +170,9 @@ func normalize(c *model.Config) {
 	}
 	if c.Server.Token == "" {
 		c.Server.Token = randomToken()
+	}
+	if c.Plugins == nil {
+		c.Plugins = map[string]model.PluginSettings{}
 	}
 	if runtime.GOOS == "windows" {
 		hasScoop := false

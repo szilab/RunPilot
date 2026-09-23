@@ -156,6 +156,16 @@ type Config struct {
 	Software      SoftwareConfig      `json:"software" yaml:"software"`
 	RemoteTargets []RemoteTarget      `json:"remoteTargets" yaml:"remoteTargets"`
 	Remote        RemoteConfig        `json:"remote,omitempty" yaml:"remote,omitempty"`
+	// Plugins contains mutable administrator choices. Plugin manifests are
+	// installation metadata and must never be rewritten when a user toggles a
+	// plugin.
+	Plugins map[string]PluginSettings `json:"plugins,omitempty" yaml:"plugins,omitempty"`
+}
+
+type PluginSettings struct {
+	// Enabled is a pointer so an absent setting continues to use the manifest's
+	// defaultEnabled value after an upgrade.
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 
 // RemoteConfig contains provider-wide settings. Destinations remain provider

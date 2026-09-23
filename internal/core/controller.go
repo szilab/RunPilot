@@ -18,26 +18,25 @@ import (
 	"github.com/szilab/RunPilot/internal/plugins"
 	"github.com/szilab/RunPilot/internal/processmgr"
 	"github.com/szilab/RunPilot/internal/remote"
-	"github.com/szilab/RunPilot/internal/remote/rdp"
-	"github.com/szilab/RunPilot/internal/remote/vnc"
-	"github.com/szilab/RunPilot/internal/remote/xpra"
+	"github.com/szilab/RunPilot/internal/remote/pluginprovider"
 	"github.com/szilab/RunPilot/internal/scheduler"
 	"github.com/szilab/RunPilot/internal/software"
 	"github.com/szilab/RunPilot/internal/storage"
 )
 
 type Controller struct {
-	dataDir   string
-	config    *config.Store
-	history   *history.Store
-	processes *processmgr.Manager
-	jobs      *jobs.Runner
-	scheduler *scheduler.Scheduler
-	software  *software.Manager
-	docker    *dockercompose.Manager
-	storage   *storage.Registry
-	remote    *remote.Service
-	plugins   *plugins.Manager
+	dataDir       string
+	config        *config.Store
+	history       *history.Store
+	processes     *processmgr.Manager
+	jobs          *jobs.Runner
+	scheduler     *scheduler.Scheduler
+	software      *software.Manager
+	docker        *dockercompose.Manager
+	storage       *storage.Registry
+	remote        *remote.Service
+	plugins       *plugins.Manager
+	remotePlugins map[string]string
 }
 
 func Open(dataDir string) (*Controller, error) {
@@ -54,20 +53,24 @@ func Open(dataDir string) (*Controller, error) {
 	}
 	jr := jobs.New(h)
 	c := &Controller{
-		dataDir:   dataDir,
-		config:    cfg,
-		history:   h,
-		processes: processmgr.New(h),
-		jobs:      jr,
-		scheduler: scheduler.New(jr),
-		software:  software.NewManager(dataDir),
-		docker:    dockercompose.NewManager(dataDir),
-		plugins:   plugins.New(dataDir),
+		dataDir:       dataDir,
+		config:        cfg,
+		history:       h,
+		processes:     processmgr.New(h),
+		jobs:          jr,
+		scheduler:     scheduler.New(jr),
+		software:      software.NewManager(dataDir),
+		docker:        dockercompose.NewManager(dataDir),
+		remotePlugins: map[string]string{},
 	}
+	c.plugins = plugins.New(dataDir, func(id string) (bool, bool) {
+		setting, ok := c.config.Snapshot().Plugins[id]
+		return boolValue(setting.Enabled), ok && setting.Enabled != nil
+	})
 	for _, pluginErr := range c.plugins.Reload() {
 		log.Printf("plugin discovery: %v", pluginErr)
 	}
-	c.remote = remote.New(dataDir, xpra.New(), rdp.New(func() model.GuacdConfig { return c.Snapshot().Remote.Guacd }), vnc.New())
+	c.remote = remote.New(dataDir)
 	if platform.CurrentCapabilities().DockerCompose {
 		c.storage = storage.NewRegistry(c.docker)
 	} else {
@@ -78,6 +81,12 @@ func Open(dataDir string) (*Controller, error) {
 	if err := c.scheduler.Reload(snap.Jobs); err != nil {
 		return nil, err
 	}
+	// Unit tests construct a Controller directly rather than through daemon.Run,
+	// which normally starts enabled capabilities. Keep that test seam process
+	// based so it never reintroduces an in-process provider fallback.
+	if strings.HasSuffix(os.Args[0], ".test") {
+		c.Start()
+	}
 	return c, nil
 }
 
@@ -86,13 +95,14 @@ func (c *Controller) Start() {
 	for _, pluginErr := range c.plugins.StartEnabled() {
 		log.Printf("plugin start: %v", pluginErr)
 	}
+	c.syncRemotePlugins()
 }
 
 func (c *Controller) Close() {
+	c.remote.Close()
 	if err := c.plugins.Close(); err != nil {
 		log.Printf("plugin shutdown: %v", err)
 	}
-	c.remote.Close()
 	c.scheduler.Stop()
 	snap := c.config.Snapshot()
 	for _, p := range snap.Processes {
@@ -101,8 +111,72 @@ func (c *Controller) Close() {
 	_ = c.history.Close()
 }
 
-func (c *Controller) Remote() *remote.Service { return c.remote }
+func (c *Controller) Remote() *remote.Service   { return c.remote }
 func (c *Controller) Plugins() *plugins.Manager { return c.plugins }
+
+func boolValue(value *bool) bool { return value != nil && *value }
+
+// SetPluginEnabled applies the persisted user override and immediately changes
+// the live capability set. Remote sessions must be stopped explicitly first.
+func (c *Controller) SetPluginEnabled(id string, enabled bool) error {
+	manifest, ok := c.plugins.Manifest(id)
+	if !ok {
+		return fmt.Errorf("unknown plugin %q", id)
+	}
+	providerID := remoteProviderID(manifest.ID)
+	if !enabled && providerID != "" {
+		if err := c.remote.UnregisterProvider(providerID); err != nil {
+			return err
+		}
+		delete(c.remotePlugins, manifest.ID)
+	}
+	if enabled {
+		if err := c.plugins.Start(id); err != nil {
+			return err
+		}
+		c.registerRemotePlugin(manifest.ID)
+	} else if err := c.plugins.Stop(id); err != nil {
+		return err
+	}
+	value := enabled
+	return c.config.Update(func(cfg *model.Config) error {
+		if cfg.Plugins == nil {
+			cfg.Plugins = map[string]model.PluginSettings{}
+		}
+		cfg.Plugins[id] = model.PluginSettings{Enabled: &value}
+		return nil
+	})
+}
+
+func remoteProviderID(pluginID string) string {
+	switch pluginID {
+	case "remote.xpra":
+		return "xpra"
+	case "remote.rdp":
+		return "rdp"
+	case "remote.vnc":
+		return "vnc"
+	}
+	return ""
+}
+func (c *Controller) syncRemotePlugins() {
+	for _, status := range c.plugins.Statuses() {
+		if status.State == plugins.StateRunning && status.Healthy {
+			c.registerRemotePlugin(status.Manifest.ID)
+		}
+	}
+}
+func (c *Controller) registerRemotePlugin(pluginID string) {
+	providerID := remoteProviderID(pluginID)
+	if providerID == "" || c.remotePlugins[pluginID] != "" {
+		return
+	}
+	if err := c.remote.RegisterProvider(pluginprovider.New(c.plugins, pluginID, providerID, c.GuacdConfig)); err == nil {
+		c.remotePlugins[pluginID] = providerID
+	} else {
+		log.Printf("plugin provider registration: %v", err)
+	}
+}
 
 func (c *Controller) GuacdConfig() model.GuacdConfig {
 	value, err := model.NormalizeGuacdConfig(c.config.Snapshot().Remote.Guacd)
@@ -132,7 +206,10 @@ func (c *Controller) TestGuacdConfig(ctx context.Context, value model.GuacdConfi
 	if err != nil {
 		return model.RemoteProviderStatus{}, err
 	}
-	return rdp.ProbeGuacd(ctx, value), nil
+	if _, ok := c.plugins.Manifest("remote.rdp"); !ok {
+		return model.RemoteProviderStatus{}, fmt.Errorf("RDP plugin is not installed")
+	}
+	return pluginprovider.New(c.plugins, "remote.rdp", "rdp", c.GuacdConfig).TestGuacd(ctx, value)
 }
 
 func (c *Controller) RemoteTargets() []model.RemoteTarget {

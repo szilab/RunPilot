@@ -1,77 +1,21 @@
 # RunPilot plugins
 
-RunPilot plugins are external executables managed by the RunPilot process. The core discovers them from `<dataDir>/plugins/<plugin>/plugin.yaml`, starts enabled plugins, reports runtime status, and stops managed plugin processes during shutdown.
+RunPilot's plugin manager is built in; first-party Remote provider runtimes are separate local processes. Remote targets, sessions, browser tickets, Guacamole/noVNC handling and the Remote UI remain core features. Xpra, RDP/guacd and VNC runtime behavior live behind the plugin boundary.
 
-The first plugin protocol version intentionally covers discovery and lifecycle only. Capability-specific RPC is added separately so the process boundary and manifest format can stabilize before Software, Backup, Files, and Remote providers are migrated.
-
-## Manifest
-
-Each plugin directory contains a `plugin.yaml` file and one or more platform executables.
+First-party source manifests are in `plugins/remote-{xpra,rdp,vnc}` and their executables are built from `cmd/runpilot-plugin-remote-*`. Releases install them next to the RunPilot executable under `plugins/`. Mutable enablement is stored in `runpilot.yaml`, not in these manifests.
 
 ```yaml
-apiVersion: runpilot/v1
-id: files.sftpgo
-name: SFTPGo
-version: 1.0.0
-protocolVersion: 1
-enabled: true
-
-capabilities:
-  - managed-service
-  - file-browser
-  - storage-source-consumer
-
-executables:
-  windows-amd64: runpilot-sftpgo-plugin.exe
-  linux-amd64: runpilot-sftpgo-plugin
-
-args: []
+plugins:
+  remote.xpra:
+    enabled: true
 ```
 
-Executable paths must be relative to the plugin directory. Absolute paths and paths that escape the plugin directory are rejected.
+An omitted override uses the manifest's `defaultEnabled`, preserving enabled Remote providers after upgrade. A plugin can be known but unavailable when it has no executable for the current platform; that is not a manifest error.
 
-Supported executable selectors are checked in this order:
+## Control protocol
 
-1. `<goos>-<goarch>`
-2. `<goos>`
-3. `default`
+The control plane is versioned independently (`protocolVersion: 1`) and is loopback-only. RunPilot gives each spawn a fresh 256-bit secret through its private process environment. Requests require that secret and expose only `info`, `health`, `capabilities`, shutdown, and the typed Remote operations needed for provider status and session lifecycle. Addresses and secrets are never returned by the public API or logged.
 
-## Runtime environment
+RDP and VNC plugins create one loopback transport bridge per authorized session; the core can dial only that endpoint. Xpra returns its private loopback HTTP endpoint. No browser input is accepted as an upstream address, so these bridges cannot act as general TCP proxies.
 
-RunPilot starts the plugin with its plugin directory as the working directory and adds:
-
-- `RUNPILOT_PLUGIN=1`
-- `RUNPILOT_PLUGIN_PROTOCOL=1`
-- `RUNPILOT_PLUGIN_ID=<manifest id>`
-
-Plugin stdout and stderr are appended to `plugin.log` inside the plugin directory.
-
-## API
-
-The authenticated RunPilot API exposes:
-
-- `GET /api/v1/plugins`
-- `POST /api/v1/plugins/rescan`
-- `POST /api/v1/plugins/{id}/start`
-- `POST /api/v1/plugins/{id}/stop`
-
-## Planned capability model
-
-The plugin boundary is intended for technology-specific integrations while core RunPilot functions remain built in.
-
-Built in:
-
-- process supervision
-- tasks and scheduling
-- Docker
-- terminal
-- plugin runtime
-
-Initial plugin candidates:
-
-- Software management
-- Backup providers
-- Files providers such as SFTPGo and FileBrowser Quantum
-- Remote provider implementations where the provider-specific boundary proves useful
-
-The core must not depend on a specific plugin implementation. Capability-specific contracts will be versioned independently of individual plugin versions.
+Plugin startup has a bounded readiness handshake. Crashes and failed readiness become a failed plugin state; stdout/stderr is retained in a bounded `plugin.log`. Disabling a Remote plugin is rejected while it owns an active session. RunPilot shutdown stops Remote sessions before plugin processes.

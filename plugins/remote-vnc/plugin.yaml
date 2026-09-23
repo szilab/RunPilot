@@ -1,0 +1,11 @@
+apiVersion: runpilot/v1
+id: remote.vnc
+name: VNC / noVNC
+description: VNC / noVNC Remote provider
+version: 1.0.0
+protocolVersion: 1
+capabilities: [remote-provider]
+defaultEnabled: true
+executables:
+  linux-amd64: runpilot-plugin-remote-vnc
+  windows-amd64: runpilot-plugin-remote-vnc.exe

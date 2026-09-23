@@ -94,6 +94,7 @@ func (s *Server) Handler() http.Handler {
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/v1/system", s.handleSystem)
 	api.HandleFunc("GET /api/v1/plugins", s.handlePlugins)
+	api.HandleFunc("PUT /api/v1/plugins/{id}", s.handlePluginUpdate)
 	api.HandleFunc("POST /api/v1/plugins/rescan", s.handlePluginRescan)
 	api.HandleFunc("POST /api/v1/plugins/{id}/start", s.handlePluginStart)
 	api.HandleFunc("POST /api/v1/plugins/{id}/stop", s.handlePluginStop)
@@ -242,10 +243,27 @@ func (s *Server) auth(next http.Handler) http.Handler {
 
 func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"root":            s.ctrl.Plugins().Root(),
 		"plugins":         s.ctrl.Plugins().Statuses(),
 		"discoveryErrors": s.ctrl.Plugins().DiscoveryErrors(),
 	})
+}
+
+func (s *Server) handlePluginUpdate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.Enabled == nil {
+		writeError(w, http.StatusBadRequest, errors.New("enabled is required"))
+		return
+	}
+	if err := s.ctrl.SetPluginEnabled(r.PathValue("id"), *body.Enabled); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"plugins": s.ctrl.Plugins().Statuses()})
 }
 
 func (s *Server) handlePluginRescan(w http.ResponseWriter, r *http.Request) {

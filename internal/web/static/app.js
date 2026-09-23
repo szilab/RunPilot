@@ -11,6 +11,7 @@ let overview = null;
 let systemInfo = null, terminalInfo = null, terminalTabs = [], activeTerminalID = "";
 let dockerRuntime = null, dockerProjects = [], dockerVolumes = [], dockerNetworks = [], dockerBusy = new Set(), dockerPendingContainerStates = new Map(), dockerProjectErrors = new Map(), dockerEditing = null, dockerAttachTerminal = null;
 let remoteProviders = [], remoteTargets = [], remoteSessions = [], remoteSessionID = "", remoteStartingTargets = new Set(), remoteRDPInteraction = null, remoteVNCInteraction = null, remotePendingTarget = null, remoteVNCPendingCredentials = null;
+let pluginStatuses = [], pluginBusy = new Set();
 let logTimer = null, toastTimer = null;
 let logSource = null;
 let refreshTimer = null;
@@ -27,6 +28,7 @@ const pageMeta = {
   terminal: ["Terminal", null],
   docker: ["Docker", "Create project"],
   remote: ["Remote Access", "Add target"],
+  settings: ["Settings", null],
 };
 
 async function api(path, options = {}) {
@@ -327,13 +329,14 @@ async function refresh() {
   if (refreshing || !token) return;
   refreshing = true;
   try {
-    const [p, j, o, st, sw, docker, remote] = await Promise.all([
+    const [p, j, o, st, sw, docker, remote, pluginSnapshot] = await Promise.all([
       api("api/v1/processes"),
       api("api/v1/jobs"),
       api("api/v1/overview"), api("api/v1/storage"),
       currentPage === "software" ? api("api/v1/software/providers") : Promise.resolve(null),
       currentPage === "docker" ? Promise.all([api("api/v1/docker/projects"), api("api/v1/docker/volumes"), api("api/v1/docker/networks")]) : Promise.resolve(null),
-      currentPage === "remote" ? Promise.all([api("api/v1/remote/providers"), api("api/v1/remote/targets"), api("api/v1/remote/sessions")]) : Promise.resolve(null)
+      currentPage === "remote" ? Promise.all([api("api/v1/remote/providers"), api("api/v1/remote/targets"), api("api/v1/remote/sessions")]) : Promise.resolve(null),
+      currentPage === "settings" ? api("api/v1/plugins") : Promise.resolve(null)
     ]);
     processes = p;
     jobs = j;
@@ -355,6 +358,7 @@ async function refresh() {
     if (currentPage === "software") renderSoftware();
     if (docker) applyDockerSnapshot(docker);
     if (remote) { [remoteProviders, remoteTargets, remoteSessions] = remote; renderRemote(); }
+    if (pluginSnapshot) { pluginStatuses = pluginSnapshot.plugins || []; renderPluginSettings(); }
     setConnected(true);
   } catch (e) {
     softwareLoading = false; softwareLoadingKey = "";
@@ -365,6 +369,22 @@ async function refresh() {
   } finally {
     refreshing = false;
   }
+}
+
+function renderPluginSettings() {
+  const root = $("pluginSettings"); if (!root) return;
+  if (!pluginStatuses.length) { root.innerHTML = `<div class="empty compact"><p>No plugins were discovered.</p></div>`; return; }
+  root.innerHTML = pluginStatuses.map(status => {
+    const manifest=status.manifest||{}, unsupported=!status.platformSupported, busy=pluginBusy.has(manifest.id), enabled=!!status.enabled;
+    const state=unsupported ? "unsupported" : status.state === "running" && status.healthy ? "running" : (status.message || status.state || "stopped");
+    return `<article class="row"><label class="check"><input type="checkbox" ${enabled?"checked":""} ${unsupported||busy?"disabled":""} onchange="togglePlugin('${escapeHtml(manifest.id)}',this.checked)"><span><strong>${escapeHtml(manifest.name||manifest.id)}</strong><span class="meta">${escapeHtml(manifest.description||((manifest.capabilities||[]).join(" · ")))} · v${escapeHtml(manifest.version||"")}</span></span></label><span class="status ${state === "running" ? "running" : state === "disabled" || state === "stopped" || state === "unsupported" ? "stopped" : "failure"}">${escapeHtml(busy ? "Updating" : state)}</span></article>`;
+  }).join("");
+}
+async function togglePlugin(id, enabled) {
+  if (pluginBusy.has(id)) return; pluginBusy.add(id); renderPluginSettings();
+  try { const response=await api(`api/v1/plugins/${encodeURIComponent(id)}`,{method:"PUT",body:JSON.stringify({enabled})}); pluginStatuses=response.plugins||pluginStatuses; }
+  catch(error) { toastError(error.message); }
+  finally { pluginBusy.delete(id); renderPluginSettings(); }
 }
 
 function remoteStatus(state) { return state === "available" ? "running" : state === "not-installed" || state === "unsupported" ? "stopped" : "failure"; }
@@ -1096,6 +1116,7 @@ function setPage(page) {
 	if (page === "software") renderSoftware();
 	if (page === "docker") renderDocker();
 	if (page === "remote") renderRemote();
+	if (page === "settings") renderPluginSettings();
 	if (page === "terminal" && terminalInfo?.available && terminalTabs.length === 0) newTerminal();
   refresh();
 }

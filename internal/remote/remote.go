@@ -97,10 +97,70 @@ func New(dataDir string, providers ...Provider) *Service {
 	return &Service{dataDir: dataDir, providers: p, providerOrder: order, sessions: map[string]*session{}}
 }
 
+// RegisterProvider makes a provider available without restarting RunPilot.
+// Replacing an existing ID is intentionally rejected to avoid moving active
+// sessions to a different runtime underneath the user.
+func (s *Service) RegisterProvider(provider Provider) error {
+	if provider == nil || strings.TrimSpace(provider.ID()) == "" {
+		return fmt.Errorf("invalid remote provider")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.providers[provider.ID()]; exists {
+		return fmt.Errorf("remote provider %q is already registered", provider.ID())
+	}
+	s.providers[provider.ID()] = provider
+	s.providerOrder = append(s.providerOrder, provider.ID())
+	return nil
+}
+
+// UnregisterProvider leaves configured targets untouched. Active sessions are
+// deliberately an explicit conflict rather than an implicit forced stop.
+func (s *Service) UnregisterProvider(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, item := range s.sessions {
+		if item.view.Provider == id && (item.view.State == model.RemoteSessionStarting || item.view.State == model.RemoteSessionRunning || item.view.State == model.RemoteSessionStopping) {
+			return fmt.Errorf("remote provider %q has active sessions; stop them before disabling the plugin", id)
+		}
+	}
+	if _, ok := s.providers[id]; !ok {
+		return nil
+	}
+	delete(s.providers, id)
+	order := s.providerOrder[:0]
+	for _, current := range s.providerOrder {
+		if current != id {
+			order = append(order, current)
+		}
+	}
+	s.providerOrder = order
+	return nil
+}
+
+func (s *Service) HasActiveSessions(provider string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, item := range s.sessions {
+		if item.view.Provider == provider && (item.view.State == model.RemoteSessionStarting || item.view.State == model.RemoteSessionRunning || item.view.State == model.RemoteSessionStopping) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) ProviderStatuses(ctx context.Context) []model.RemoteProviderStatus {
-	statuses := make([]model.RemoteProviderStatus, 0, len(s.providerOrder))
+	s.mu.RLock()
+	providers := make([]Provider, 0, len(s.providerOrder))
 	for _, id := range s.providerOrder {
-		statuses = append(statuses, s.providers[id].Status(ctx))
+		if provider := s.providers[id]; provider != nil {
+			providers = append(providers, provider)
+		}
+	}
+	s.mu.RUnlock()
+	statuses := make([]model.RemoteProviderStatus, 0, len(providers))
+	for _, provider := range providers {
+		statuses = append(statuses, provider.Status(ctx))
 	}
 	return statuses
 }
@@ -229,7 +289,9 @@ func (s *Service) ReleaseDial(id string, conn net.Conn) {
 }
 
 func (s *Service) Start(ctx context.Context, target model.RemoteTarget) (model.RemoteSession, error) {
+	s.mu.RLock()
 	provider := s.providers[target.Provider]
+	s.mu.RUnlock()
 	if provider == nil {
 		return model.RemoteSession{}, fmt.Errorf("%w: %s", ErrUnknownProvider, target.Provider)
 	}
