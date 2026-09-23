@@ -2,7 +2,7 @@
 
 ## Product boundary
 
-RunPilot has one native daemon managed by the operating system: Windows Service Control Manager on Windows and a systemd user service on Linux. First-party provider plugins are separate local child processes installed alongside it. The daemon owns process execution, scheduling, run history, plugin lifecycle and the HTTP API. The browser is only a management client; it never launches workloads directly.
+RunPilot has one native daemon managed by the operating system: Windows Service Control Manager on Windows and a systemd user service on Linux. First-party plugins are immutable packages installed below the data directory; backend modules run in-process through wazero and frontend modules are loaded by the embedded web UI. The daemon owns process execution, scheduling, run history, plugin lifecycle and the HTTP API. The browser is only a management client; it never launches workloads directly.
 
 Core RunPilot functionality must remain platform-neutral. OS-specific functionality belongs behind small platform, service, or provider adapters selected by Go build constraints or runtime capability detection. The capability API tells clients which native service manager, interpreters, and Windows-only integrations are available.
 

@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -94,10 +95,9 @@ func (s *Server) Handler() http.Handler {
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/v1/system", s.handleSystem)
 	api.HandleFunc("GET /api/v1/plugins", s.handlePlugins)
+	api.HandleFunc("GET /api/v1/plugins/runtime", s.handlePluginRuntime)
 	api.HandleFunc("PUT /api/v1/plugins/{id}", s.handlePluginUpdate)
 	api.HandleFunc("POST /api/v1/plugins/rescan", s.handlePluginRescan)
-	api.HandleFunc("POST /api/v1/plugins/{id}/start", s.handlePluginStart)
-	api.HandleFunc("POST /api/v1/plugins/{id}/stop", s.handlePluginStop)
 	api.HandleFunc("GET /api/v1/docker", s.handleDockerRuntime)
 	api.HandleFunc("GET /api/v1/docker/projects", s.handleDockerProjects)
 	api.HandleFunc("GET /api/v1/docker/volumes", s.handleDockerVolumes)
@@ -185,6 +185,7 @@ func (s *Server) Handler() http.Handler {
 	// A terminal connection is authenticated by its short-lived, single-use
 	// ticket. It intentionally does not accept the permanent API token in a URL.
 	mux.HandleFunc("GET /api/v1/terminal/connect", s.handleTerminalConnect)
+	mux.HandleFunc("GET /plugins/{id}/{path...}", s.handlePluginAsset)
 
 	sub, _ := fs.Sub(staticFS, "static")
 	static := http.FileServer(http.FS(sub))
@@ -248,6 +249,31 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handlePluginRuntime(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.ctrl.Plugins().FrontendExtensions())
+}
+
+func (s *Server) handlePluginAsset(w http.ResponseWriter, r *http.Request) {
+	id, relative := r.PathValue("id"), r.PathValue("path")
+	path, err := s.ctrl.Plugins().AssetPath(id, relative)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "plugin asset not found"})
+		return
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
+}
+
 func (s *Server) handlePluginUpdate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Enabled *bool `json:"enabled"`
@@ -267,7 +293,7 @@ func (s *Server) handlePluginUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePluginRescan(w http.ResponseWriter, r *http.Request) {
-	errs := s.ctrl.Plugins().Reload()
+	errs := s.ctrl.RescanPlugins()
 	messages := make([]string, 0, len(errs))
 	for _, err := range errs {
 		messages = append(messages, err.Error())
@@ -276,22 +302,6 @@ func (s *Server) handlePluginRescan(w http.ResponseWriter, r *http.Request) {
 		"plugins": s.ctrl.Plugins().Statuses(),
 		"errors":  messages,
 	})
-}
-
-func (s *Server) handlePluginStart(w http.ResponseWriter, r *http.Request) {
-	if err := s.ctrl.Plugins().Start(r.PathValue("id")); err != nil {
-		writeError(w, http.StatusConflict, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, s.ctrl.Plugins().Statuses())
-}
-
-func (s *Server) handlePluginStop(w http.ResponseWriter, r *http.Request) {
-	if err := s.ctrl.Plugins().Stop(r.PathValue("id")); err != nil {
-		writeError(w, http.StatusConflict, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, s.ctrl.Plugins().Statuses())
 }
 
 func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {

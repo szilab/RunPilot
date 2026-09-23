@@ -17,8 +17,13 @@ import (
 
 type Provider struct{ config func() model.GuacdConfig }
 
-func New(config func() model.GuacdConfig) *Provider { return &Provider{config: config} }
-func (p *Provider) ID() string                      { return "rdp" }
+func New(config func() model.GuacdConfig) *Provider {
+	if config == nil {
+		config = model.DefaultGuacdConfig
+	}
+	return &Provider{config: config}
+}
+func (p *Provider) ID() string { return "rdp" }
 func (p *Provider) settings() (model.GuacdConfig, error) {
 	return model.NormalizeGuacdConfig(p.config())
 }
@@ -46,14 +51,35 @@ func ProbeGuacd(ctx context.Context, config model.GuacdConfig) model.RemoteProvi
 }
 
 func (p *Provider) Start(_ context.Context, request remote.StartRequest) (remote.Runtime, error) {
+	config, err := p.settings()
+	if err != nil {
+		return remote.Runtime{}, err
+	}
+	return p.start(request, config)
+}
+
+// StartWithGuacd is used only by the plugin control server. It deliberately
+// receives its configuration by value so an unsaved probe cannot race or
+// mutate the configuration used by an active session.
+func (p *Provider) StartWithGuacd(_ context.Context, request remote.StartRequest, config model.GuacdConfig) (remote.Runtime, error) {
+	config, err := model.NormalizeGuacdConfig(config)
+	if err != nil {
+		return remote.Runtime{}, err
+	}
+	return p.start(request, config)
+}
+func (p *Provider) ProbeGuacd(ctx context.Context, config model.GuacdConfig) model.RemoteProviderStatus {
+	config, err := model.NormalizeGuacdConfig(config)
+	if err != nil {
+		return model.RemoteProviderStatus{ID: p.ID(), Name: "RDP / Guacamole", State: "configuration invalid", Message: err.Error(), Platform: "linux, windows", HTML5Available: true}
+	}
+	return ProbeGuacd(ctx, config)
+}
+func (p *Provider) start(request remote.StartRequest, config model.GuacdConfig) (remote.Runtime, error) {
 	if request.Target.Type != model.RemoteTargetDesktop {
 		return remote.Runtime{}, fmt.Errorf("RDP supports desktop sessions only")
 	}
 	if _, err := model.NormalizeRDPRemoteOptions(request.Target.RDP); err != nil {
-		return remote.Runtime{}, err
-	}
-	config, err := p.settings()
-	if err != nil {
 		return remote.Runtime{}, err
 	}
 	address := net.JoinHostPort(config.Host, strconv.Itoa(config.Port))

@@ -149,6 +149,14 @@ func (s *Service) HasActiveSessions(provider string) bool {
 	return false
 }
 
+// HasProvider reports whether a provider is presently registered. Configured
+// targets are intentionally independent of this live capability set.
+func (s *Service) HasProvider(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.providers[id] != nil
+}
+
 func (s *Service) ProviderStatuses(ctx context.Context) []model.RemoteProviderStatus {
 	s.mu.RLock()
 	providers := make([]Provider, 0, len(s.providerOrder))

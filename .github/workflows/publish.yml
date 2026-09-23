@@ -41,13 +41,12 @@ jobs:
           mkdir -p dist
           BUILD_VERSION="1.0.3-${GITHUB_REF_NAME}.${GITHUB_SHA::7}"
           go build -trimpath -ldflags="-s -w -X github.com/szilab/RunPilot/internal/version.Version=${BUILD_VERSION}" -o dist/runpilot-linux-amd64 ./cmd/runpilot
-          mkdir -p dist/bundle/plugins/remote-xpra dist/bundle/plugins/remote-rdp dist/bundle/plugins/remote-vnc
+          mkdir -p dist/bundle
           cp dist/runpilot-linux-amd64 dist/bundle/runpilot
-          go build -trimpath -ldflags="-s -w -X github.com/szilab/RunPilot/internal/version.Version=${BUILD_VERSION}" -o dist/bundle/plugins/remote-xpra/runpilot-plugin-remote-xpra ./cmd/runpilot-plugin-remote-xpra
-          go build -trimpath -ldflags="-s -w -X github.com/szilab/RunPilot/internal/version.Version=${BUILD_VERSION}" -o dist/bundle/plugins/remote-rdp/runpilot-plugin-remote-rdp ./cmd/runpilot-plugin-remote-rdp
-          go build -trimpath -ldflags="-s -w -X github.com/szilab/RunPilot/internal/version.Version=${BUILD_VERSION}" -o dist/bundle/plugins/remote-vnc/runpilot-plugin-remote-vnc ./cmd/runpilot-plugin-remote-vnc
-          for plugin in remote-xpra remote-rdp remote-vnc; do cp "plugins/$plugin/plugin.yaml" "dist/bundle/plugins/$plugin/"; done
-          tar -C dist/bundle -czf dist/runpilot-linux-amd64.tar.gz runpilot plugins
+          for plugin in remote-xpra remote-rdp remote-vnc; do go run ./cmd/plugin-build -out dist "./plugins/$plugin"; done
+          go run ./cmd/plugin-build -index dist/plugins-index.json ./plugins/remote-xpra ./plugins/remote-rdp ./plugins/remote-vnc
+          cp dist/*.rpplugin dist/plugins-index.json dist/bundle/
+          tar -C dist/bundle -czf dist/runpilot-linux-amd64.tar.gz runpilot *.rpplugin plugins-index.json
           sha256sum dist/runpilot-linux-amd64 > dist/runpilot-linux-amd64.sha256
           printf '%s\n' "$BUILD_VERSION" > dist/runpilot-linux-amd64.version
           cp install.sh dist/install.sh

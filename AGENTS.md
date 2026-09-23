@@ -1,6 +1,6 @@
 # RunPilot agent notes
 
-RunPilot is a Windows and Linux Go application with an embedded web UI. The core remains one native executable; installed first-party provider plugins are deliberately separate loopback-only child processes shipped beside it.
+RunPilot is a Windows and Linux Go application with an embedded web UI. The core remains one native executable; installed first-party provider plugins are immutable packages with optional in-process WASM backends and frontend extensions.
 
 ## Priorities
 - Preserve the separation between process supervision, scheduled jobs, backup engines, persistence and HTTP/UI layers.
@@ -14,7 +14,7 @@ RunPilot is a Windows and Linux Go application with an embedded web UI. The core
 - Docker support is Linux-only and restricted to explicit Compose-project operations plus fixed, managed-Compose-container lifecycle, logs, and PTY terminal actions. Keep managed projects under `<dataDir>/compose`, leave external Compose projects read-only, and never add a generic Docker command API or automatic Docker privilege escalation.
 - Docker volumes are lifecycle-managed only in the Docker domain. Storage exposes one `docker-volumes` virtual location plus `local`; it accesses volume contents only through short-lived Docker helper containers, never Docker host mountpoints, and preserves read-only access while running containers use a volume. Storage locations are runtime capabilities, not user-managed configuration records. Backup engines remain provider-neutral.
 - Docker network support is limited to discovery, named bridge-network creation, and deletion after a no-container-reference check. Do not add arbitrary network options, container attachment controls, or generic Docker networking APIs.
-- Remote targets, sessions, tickets, browser transports, diagnostics and UI are core. Technology-specific Xpra, RDP/guacd and VNC runtime implementations are first-party plugins; never recreate an in-process provider fallback.
+- Remote targets, sessions, tickets, browser transports, diagnostics and UI are core. Technology-specific Xpra, RDP/guacd and VNC runtime implementations are first-party plugins loaded through the versioned WASM host ABI; never add child-process plugin control HTTP or native Go plugin loading.
 
 ## Validation
 Before finishing a change run:
