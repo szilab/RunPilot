@@ -93,6 +93,10 @@ func (s *Server) Handler() http.Handler {
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/v1/system", s.handleSystem)
+	api.HandleFunc("GET /api/v1/plugins", s.handlePlugins)
+	api.HandleFunc("POST /api/v1/plugins/rescan", s.handlePluginRescan)
+	api.HandleFunc("POST /api/v1/plugins/{id}/start", s.handlePluginStart)
+	api.HandleFunc("POST /api/v1/plugins/{id}/stop", s.handlePluginStop)
 	api.HandleFunc("GET /api/v1/docker", s.handleDockerRuntime)
 	api.HandleFunc("GET /api/v1/docker/projects", s.handleDockerProjects)
 	api.HandleFunc("GET /api/v1/docker/volumes", s.handleDockerVolumes)
@@ -234,6 +238,42 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"root":            s.ctrl.Plugins().Root(),
+		"plugins":         s.ctrl.Plugins().Statuses(),
+		"discoveryErrors": s.ctrl.Plugins().DiscoveryErrors(),
+	})
+}
+
+func (s *Server) handlePluginRescan(w http.ResponseWriter, r *http.Request) {
+	errs := s.ctrl.Plugins().Reload()
+	messages := make([]string, 0, len(errs))
+	for _, err := range errs {
+		messages = append(messages, err.Error())
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"plugins": s.ctrl.Plugins().Statuses(),
+		"errors":  messages,
+	})
+}
+
+func (s *Server) handlePluginStart(w http.ResponseWriter, r *http.Request) {
+	if err := s.ctrl.Plugins().Start(r.PathValue("id")); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.ctrl.Plugins().Statuses())
+}
+
+func (s *Server) handlePluginStop(w http.ResponseWriter, r *http.Request) {
+	if err := s.ctrl.Plugins().Stop(r.PathValue("id")); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.ctrl.Plugins().Statuses())
 }
 
 func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
