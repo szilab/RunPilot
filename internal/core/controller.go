@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/szilab/RunPilot/internal/jobs"
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/platform"
+	"github.com/szilab/RunPilot/internal/plugins"
 	"github.com/szilab/RunPilot/internal/processmgr"
 	"github.com/szilab/RunPilot/internal/remote"
 	"github.com/szilab/RunPilot/internal/remote/rdp"
@@ -35,6 +37,7 @@ type Controller struct {
 	docker    *dockercompose.Manager
 	storage   *storage.Registry
 	remote    *remote.Service
+	plugins   *plugins.Manager
 }
 
 func Open(dataDir string) (*Controller, error) {
@@ -59,6 +62,10 @@ func Open(dataDir string) (*Controller, error) {
 		scheduler: scheduler.New(jr),
 		software:  software.NewManager(dataDir),
 		docker:    dockercompose.NewManager(dataDir),
+		plugins:   plugins.New(dataDir),
+	}
+	for _, pluginErr := range c.plugins.Reload() {
+		log.Printf("plugin discovery: %v", pluginErr)
 	}
 	c.remote = remote.New(dataDir, xpra.New(), rdp.New(func() model.GuacdConfig { return c.Snapshot().Remote.Guacd }), vnc.New())
 	if platform.CurrentCapabilities().DockerCompose {
@@ -76,9 +83,15 @@ func Open(dataDir string) (*Controller, error) {
 
 func (c *Controller) Start() {
 	c.processes.StartAutostart()
+	for _, pluginErr := range c.plugins.StartEnabled() {
+		log.Printf("plugin start: %v", pluginErr)
+	}
 }
 
 func (c *Controller) Close() {
+	if err := c.plugins.Close(); err != nil {
+		log.Printf("plugin shutdown: %v", err)
+	}
 	c.remote.Close()
 	c.scheduler.Stop()
 	snap := c.config.Snapshot()
@@ -89,6 +102,7 @@ func (c *Controller) Close() {
 }
 
 func (c *Controller) Remote() *remote.Service { return c.remote }
+func (c *Controller) Plugins() *plugins.Manager { return c.plugins }
 
 func (c *Controller) GuacdConfig() model.GuacdConfig {
 	value, err := model.NormalizeGuacdConfig(c.config.Snapshot().Remote.Guacd)
