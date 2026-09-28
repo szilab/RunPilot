@@ -1,8 +1,8 @@
 # RunPilot plugins
 
-RunPilot plugins are immutable `.rpplugin` ZIP archives installed below `<dataDir>/plugins/<id>/<version>`. Mutable plugin data belongs below `<dataDir>/plugin-data/<id>` and enablement is persisted in `runpilot.yaml`.
+RunPilot plugins are immutable `.rpplugin` packages installed below `<dataDir>/plugins/<id>/<version>`. Mutable data belongs below `<dataDir>/plugin-data/<id>`. Plugin enablement is framework configuration.
 
-A package contains:
+A package may contain:
 
 ```text
 plugin.yaml
@@ -11,26 +11,113 @@ web/plugin.js         # optional
 web/plugin.css        # optional
 ```
 
-The manifest uses `apiVersion: runpilot.plugin/v1`, declares `requires.runpilotApi`, capabilities and permissions, and may include a backend, a frontend, or both. Backend modules execute in RunPilot through the pure-Go wazero runtime. The ABI is versioned independently from plugin versions and uses data-oriented JSON operations. Plugins do not receive filesystem handles, native Go pointers, child processes, loopback control sockets, or unrestricted host access.
+A plugin may provide a backend, GUI contributions, settings, or any useful combination. Feature pages and navigation entries belong to plugins rather than core.
 
-Host operations are mediated by a narrow API. The manager checks declared permissions before privileged operations such as process, network, and plugin configuration access. Calls have bounded contexts; traps, invalid responses, initialization failures, and timeouts mark the plugin failed without preventing RunPilot startup.
+## Manifest and compatibility
 
-## Lifecycle
+The manifest uses a versioned plugin API and declares metadata, compatibility and optional entry points. A plugin may support both Windows and Linux or only one platform. Incompatible plugins remain installed but are not activated.
 
-The backend downloads the official first-party catalog from GitHub, verifies the package size and SHA-256, validates the manifest, rejects unsafe ZIP paths, and installs through a temporary directory followed by an atomic move. The browser never downloads GitHub assets directly. Installed, enabled, loaded, incompatible, failed, update-available, and restart-required are separate states.
+There is no per-plugin permission list in the target architecture. All loaded plugins may use all published host capabilities. RunPilot normally runs unprivileged, so the service account's OS permissions remain authoritative.
 
-Enabling or disabling a plugin only changes the desired state in `runpilot.yaml`; activation is restart-only. The Settings page can batch changes and reports `Restart required`. No hot loading or unloading is performed.
+## Backend: WebAssembly
 
-Enabled frontend modules are returned by `/api/v1/plugins/runtime` and loaded as ES modules from `/plugins/<id>/...`. A module exports `activate(runpilot)`. Plugin CSS must be scoped to its own root and may use RunPilot CSS tokens. The frontend runtime, not core Remote rendering, owns provider-specific UI registration.
+Backend modules execute inside RunPilot through wazero. WASM is the binary runtime format, not the required source language: plugins may be authored in Go/TinyGo, Rust, C/C++ or another language targeting the supported WASM ABI.
+
+The ABI is language-neutral and data-oriented. Plugins receive no native Go pointers or direct access to RunPilot internals. The backend lifecycle remains intentionally small:
+
+```text
+runpilot_init
+runpilot_call
+runpilot_shutdown
+```
+
+Calls exchange versioned structured data. Traps, malformed responses, initialization failures and timeouts must fail the plugin operation without taking down RunPilot.
+
+## Host capability API
+
+Backend plugins use RunPilot host capabilities for OS and framework operations:
+
+```text
+host.process.*
+host.fs.*
+host.network.*
+host.scheduler.*
+host.storage.*
+host.system.*
+host.config.*
+host.log.*
+```
+
+Every loaded plugin can call every published capability. Capabilities are an ABI boundary, not a per-plugin authorization system. Keep them explicit and stable; avoid generic syscall escape hatches. Capability implementations still validate arguments and RunPilot invariants.
+
+## Browser integration
+
+Enabled frontend modules export an activation entry point:
+
+```javascript
+export function activate(runpilot) {
+    // Register pages, navigation, settings and Overview contributions.
+}
+```
+
+The frontend runtime exposes versioned extension APIs such as:
+
+```text
+runpilot.ui
+runpilot.navigation
+runpilot.overview
+runpilot.settings
+runpilot.ws
+```
+
+Feature frontend code must not depend on private RunPilot JavaScript implementation details.
+
+## WebSocket protocol
+
+Interactive browser/server communication uses the single authenticated RunPilot WebSocket. Plugins do not create feature-specific REST APIs.
+
+Example request:
+
+```json
+{"id":"42","plugin":"system","method":"status.get","params":{}}
+```
+
+Example event:
+
+```json
+{"plugin":"system","event":"status.changed","data":{}}
+```
+
+The common protocol owns correlation, structured errors, timeouts and event routing. Streaming features should extend the same WebSocket framing rather than create independent feature transports.
+
+## GUI contributions
+
+A plugin frontend may register navigation items, complete pages, Settings sections, Overview cards and supporting dialogs/components. The core owns only the application shell and extension hosts; it must not contain provider-specific rendering.
+
+## Shared UI and styling
+
+Plugins should use the RunPilot shared UI library wherever practical. Shared controls automatically follow the active visual style.
+
+Custom CSS may use public semantic design tokens for surfaces, text, borders, spacing, radii and related properties. Plugins must not hard-code assumptions about the default style or light/dark mode.
+
+Style selection is framework-owned. System/Light/Dark color scheme is separate from the selected style. The architecture is prepared for future non-executable `.rptheme` packages containing metadata and CSS/token overrides; themes are deliberately separate from WASM plugins.
+
+## Overview and Settings
+
+Overview is an extension surface: cards are registered by plugins and core does not know their feature semantics.
+
+Settings is a core shell. Framework sections cover RunPilot, Appearance and plugin management; plugins register their own settings sections and own their schema/meaning/editor.
+
+## Package lifecycle
+
+The plugin manager downloads trusted catalog entries, verifies package size and SHA-256, validates manifests, rejects unsafe ZIP paths and installs atomically.
+
+Installed, enabled, loaded, incompatible, failed, update-available and restart-required remain distinct states. Enable/disable changes desired state; activation remains restart-based unless a future requirement justifies safe hot loading.
 
 ## Development and release
 
-First-party sources live in `plugins/remote-xpra`, `plugins/remote-rdp`, and `plugins/remote-vnc`. Build an archive with:
+First-party plugins live under `plugins/<plugin-id>` and build into deterministic `.rpplugin` archives. The package builder must fail when a manifest declares an entry point missing from the package.
 
-```text
-go run ./cmd/plugin-build ./plugins/remote-xpra -out dist
-```
+The first complete reference implementation should be a small `system` plugin proving a real WASM backend, host capability calls, WebSocket RPC/events, a plugin-owned page, shared UI, Settings contribution, Overview cards, platform compatibility, packaging and restart activation.
 
-The release workflow publishes RunPilot binaries, `.rpplugin` archives, and a catalog for `main-latest` or `develop-latest`. Development package loading is opt-in through an installed package directory; production never executes arbitrary source-tree files.
-
-The current ABI wrapper is intentionally small. Remote provider-specific WASM modules still need to be supplied by the first-party plugin build before those providers can be loaded in production.
+Only after this vertical slice is stable should existing RunPilot features be migrated one by one.
