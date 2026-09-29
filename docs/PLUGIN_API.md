@@ -1,301 +1,268 @@
-# RunPilot plugin API v1
+# RunPilot plugin contracts
 
-This document records the implemented Phase 1 contracts. It is deliberately
-small: package installation, the WASM ABI, the generic protocol envelopes and
-the capability bridge are stable enough to build against. Feature migration,
-the browser WebSocket endpoint and frontend extension hosts are implemented; feature migrations remain separate work.
+This document is the technical reference for the implemented plugin contracts.
+For architecture and migration direction see [ARCHITECTURE.md](ARCHITECTURE.md);
+for package authoring see [PLUGINS.md](PLUGINS.md); for publication and catalog
+behavior see [PLUGIN_REGISTRY.md](PLUGIN_REGISTRY.md).
 
-## Package manifest
+## Version domains
 
-`plugin.yaml` is decoded strictly. Its supported fields are `apiVersion`, `id`,
-`name`, `version`, `description`, `requires`, `platforms`, `backend` and
-`frontend`.
+The following versions are deliberately independent:
+
+- manifest schema: `apiVersion: runpilot.plugin/v1`;
+- raw WASM ABI: `requires.runpilotApi` (currently ABI 1 or 2);
+- backend contract: SemVer range, host currently `1.0.0`;
+- frontend contract: SemVer range, host currently `1.0.0`;
+- plugin package: independent strict SemVer.
+
+The manifest schema name does not imply raw WASM ABI 1.
+
+## Manifest
+
+`plugin.yaml` is decoded strictly. Supported top-level fields are
+`apiVersion`, `id`, `name`, `version`, `description`, `requires`,
+`platforms`, `backend`, and `frontend`.
 
 ```yaml
 apiVersion: runpilot.plugin/v1
-id: example.hello
-name: Hello
-version: 1.0.0
+id: example
+name: Example
+version: 1.2.0
 requires:
   backend: ">=1.0.0 <2.0.0"
   frontend: ">=1.0.0 <2.0.0"
-  runpilotApi: 1
-platforms: [linux, windows] # omitted means platform-independent
+  runpilotApi: 2
+platforms: [linux, windows]
 backend:
   module: backend/plugin.wasm
 frontend:
   module: web/plugin.js
-  stylesheet: web/plugin.css # optional
+  stylesheet: web/plugin.css
 ```
 
-`backend` and `frontend` are independently optional. Platforms may only be
-`linux` and/or `windows`. A package installed on another platform is recorded
-as `incompatible`, not `failed`, and is not activated. The old `permissions`
-field is intentionally unsupported. All loaded plugins may use every host
-capability that RunPilot publishes; the OS identity of RunPilot is the security
-boundary.
+Backend and frontend are optional independently. Their matching contract range
+is required when the component exists. A backend also declares a supported raw
+WASM ABI. Omitted `platforms` means platform-independent.
 
-Every declared module or stylesheet must exist in the archive. The builder and
-installer reject packages that do not meet that requirement; installation also
-retains ZIP traversal, checksum and atomic-install protections.
+Declared assets must exist in the package. Package validation also rejects
+unsafe paths, duplicate/reserved entries, symlinks, oversize archives and
+incompatible platform/contract requirements.
 
-## WASM ABI
+## WASM lifecycle
 
-The manifest schema is `runpilot.plugin/v1`. Raw WASM ABI 1 and 2 are supported,
-selected by `requires.runpilotApi`. Unsupported ABIs are incompatible and cannot
-load; future catalog versions remain visible with an incompatibility reason.
-The following allocation convention describes ABI 1; ABI 2 is documented below.
+Backend modules execute through wazero. RunPilot serializes lifecycle entry per
+loaded module, so ordinary plugin in-memory state does not need concurrent
+access protection.
 
-Each backend exports linear memory plus these functions:
+The lifecycle exports are:
+
+```text
+runpilot_init
+runpilot_call
+runpilot_shutdown
+runpilot_event     # optional
+```
+
+Calls are bounded by the runtime timeout. Missing exports, wrong signatures,
+traps, malformed JSON and timeouts become controlled plugin failures rather
+than process failures.
+
+### ABI 1 compatibility
+
+ABI 1 uses the original linear-memory allocation convention:
 
 ```text
 runpilot_alloc(size: i32) -> i32
-runpilot_init(pointer: i32, length: i32) -> i64
-runpilot_call(pointer: i32, length: i32) -> i64
-runpilot_shutdown(pointer: i32, length: i32) -> i64
+runpilot_init(ptr: i32, len: i32) -> i64
+runpilot_call(ptr: i32, len: i32) -> i64
+runpilot_shutdown(ptr: i32, len: i32) -> i64
+runpilot_event(ptr: i32, len: i32) -> i64   # optional
 ```
 
-RunPilot serializes a JSON request, asks `runpilot_alloc` for space and writes
-the bytes to module linear memory. Lifecycle functions return an `i64` with the
-response pointer in the high 32 bits and response byte length in the low 32
-bits. The plugin allocates that response with `runpilot_alloc`; RunPilot copies
-it before the next call. Responses must be valid JSON. This convention works
-with TinyGo, Rust and other WASM toolchains and does not expose native pointers
-or Go objects.
+The returned `i64` packs response pointer and length. The host copies the
+response before the next lifecycle call. This path remains isolated for
+compatibility and is not the preferred first-party ABI.
 
-`runpilot_init` and `runpilot_shutdown` receive `{"apiVersion":1}`.
-`runpilot_call` receives:
+### ABI 2
 
-```json
-{"apiVersion":1,"operation":"status.get","request":{}}
-```
-
-Missing exports, wrong signatures, traps, malformed buffers/JSON, failed
-initialization and timed-out calls become controlled plugin failures. Calls are
-bounded to five seconds by default. A timeout terminates the affected WASM
-execution rather than the RunPilot process.
-
-First-party backends use TinyGo 0.38.0 with the `wasm-unknown` target. TinyGo
-is a build-time dependency only: normal installations receive a prebuilt
-`backend/plugin.wasm`. `go generate ./plugins/system/backend` builds the
-source-based System reference and gives an actionable error when TinyGo is not
-available. `internal/pluginapi` is an optional Go convenience layer over this
-language-neutral ABI, not a second host interface.
-
-Instances retain state for their loaded lifetime. RunPilot serializes all
-entry into one instance, including the optional callback export:
+ABI 2 is the preferred first-party path. Lifecycle exports receive one opaque
+invocation handle and return no value:
 
 ```text
-runpilot_event(pointer: i32, length: i32) -> i64
+runpilot_init(handle: i32)
+runpilot_call(handle: i32)
+runpilot_shutdown(handle: i32)
+runpilot_event(handle: i32)   # optional
 ```
 
-The event receives the same envelope as `runpilot_call`; `operation` is a
-generic event name and `request` is event JSON. Delivery is bounded by the
-normal call timeout. A trap fails that delivery without affecting other
-plugins; shutdown stops new calls before closing the instance.
-
-## ABI v2 host infrastructure
-
-The runtime accepts `requires.runpilotApi: 2` and dispatches it to a separate
-ABI v2 adapter. ABI v2 is active for the System reference plugin; ABI v1
-remains supported for existing plugins and compatibility fixtures.
-The v2 lifecycle exports are `runpilot_init(i32 handle)`,
-`runpilot_call(i32 handle)`, `runpilot_event(i32 handle)` (optional), and
-`runpilot_shutdown(i32 handle)`, each returning no value. A declared v2 module
-must use these signatures; the runtime never falls back to ABI v1.
-
-Each lifecycle call gets an opaque, nonzero invocation handle. The host owns
-that invocation's input and output bytes and removes the invocation after the
-call, including when the call fails or traps. Imports are exposed through the
-`runpilot` module:
+Each invocation owns host-side input/output state. The `runpilot` import
+module exposes:
 
 ```text
 input_len(handle: i32) -> i32
 input_read(handle: i32, dstPtr: i32, dstLen: i32) -> i32
 output_write(handle: i32, srcPtr: i32, srcLen: i32) -> i32
+
 host_call(handle: i32, reqPtr: i32, reqLen: i32) -> i32
 response_len(handle: i32, response: i32) -> i32
 response_read(handle: i32, response: i32, dstPtr: i32, dstLen: i32) -> i32
 response_drop(handle: i32, response: i32) -> i32
 ```
 
-Length and handle-producing imports return zero on invalid input or transport
-failure; `output_write` and `response_drop` return one on success and zero on
-failure. Input/output and capability payloads are limited to 16 MiB. One
-output may be written per invocation. Capability errors remain structured
-JSON responses, separate from ABI transport failures. Response handles belong
-to their invocation and are removed automatically when it ends; explicit
-drop returns zero for an invalid or already-dropped handle.
+Lifecycle and capability payloads are limited to 16 MiB. One lifecycle output
+may be written per invocation. Capability response handles are scoped to the
+invocation and are cleaned automatically when it ends.
 
-> Any pointer supplied by WASM to an ABI-v2 host import is valid only for that
-> synchronous import call. The host copies the referenced bytes before
-> returning and never retains the pointer or a view backed by WASM linear
-> memory.
+The ownership rule is simple:
 
-ABI v2 host imports are not exposed through ABI-v1 modules, whose retained
-allocator and packed-buffer behavior remains isolated in the v1 adapter.
+> A pointer passed across ABI 2 is valid only for that synchronous import call.
+> The receiving side copies the bytes before returning and never retains the
+> pointer or a memory-backed view.
 
-First-party TinyGo code should use `internal/pluginapi` rather than raw imports
-or linear-memory offsets. The v2 SDK provides `ReadInput(handle, &value)`,
-`WriteOutput(handle, value)`, and `CallHost(method, params, &result)`. It copies
-input locally, copies outputs and capability requests during the import, reads
-responses into local slices, and drops each response handle before
-`CallHost` returns. `pluginapi.Error` preserves the capability code, message,
-and optional structured details; `pluginapi.ABIError` identifies transport
-and protocol failures.
+The first-party TinyGo SDK in `internal/pluginapi` wraps the raw ABI with
+`ReadInput`, `WriteOutput`, and `CallHost`. Capability errors retain a
+stable code/message/details object; ABI transport failures are reported
+separately. First-party backend code should use the SDK rather than manipulate
+linear-memory pointers or response handles directly.
 
-A minimal v2 lifecycle implementation looks like:
+The nonpublic System fixture is the reference ABI-2 implementation.
 
-```go
-package main
+## Lifecycle envelope
 
-import "github.com/szilab/RunPilot/internal/pluginapi"
-
-type failure struct {
-    Error *pluginapi.Error `json:"error"`
-}
-
-//export runpilot_call
-func runpilot_call(handle uint32) {
-    var call struct {
-        Operation string `json:"operation"`
-    }
-    if err := pluginapi.ReadInput(handle, &call); err != nil {
-        _ = pluginapi.WriteOutput(handle, failure{Error: &pluginapi.Error{Code: "invalid_argument", Message: err.Error()}})
-        return
-    }
-    if call.Operation == "status.get" {
-        var status map[string]any
-        if err := pluginapi.CallHost("system.status", map[string]any{}, &status); err != nil {
-            if capabilityErr, ok := pluginapi.AsCapabilityError(err); ok {
-                _ = pluginapi.WriteOutput(handle, failure{Error: capabilityErr})
-            } else {
-                _ = pluginapi.WriteOutput(handle, failure{Error: &pluginapi.Error{Code: "abi_error", Message: err.Error()}})
-            }
-            return
-        }
-        _ = pluginapi.WriteOutput(handle, status)
-    }
-}
-```
-
-The host serializes lifecycle entry into each module. The System backend is the
-first production TinyGo plugin using these SDK calls. Its build uses TinyGo
-0.38.0 with the conservative collector so temporary JSON buffers can be
-reclaimed during repeated lifecycle calls.
-
-## Capability bridge
-
-Backends may import:
-
-```text
-runpilot.host_call(pointer: i32, length: i32) -> i64
-```
-
-It uses the same memory and packed-response convention. Its request envelope
-is:
+RunPilot sends JSON lifecycle input containing the raw ABI/lifecycle API version
+plus operation data. A normal call is conceptually:
 
 ```json
-{"apiVersion":1,"capability":"log.write","params":{"message":"started"}}
+{"apiVersion":2,"operation":"status.get","request":{}}
 ```
 
-Responses are either `{"ok":true,"result":...}` or
-`{"ok":false,"error":{"code":"...","message":"..."}}`. Phase 1
-publishes `log.write`, `config.get`, `config.set`, `system.status`, and the
-plugin-namespaced `storage.get` / `storage.set` JSON key-value operations; all other namespaces are
-reserved for real future operations:
+`runpilot_event` uses the same envelope: `operation` is the generic event
+name and `request` is its payload.
 
-```text
-host.system.* host.config.* host.log.* host.process.* host.fs.*
-host.network.* host.scheduler.* host.storage.*
+## Host capability protocol
+
+Capability requests use JSON:
+
+```json
+{"apiVersion":1,"capability":"system.status","params":{}}
 ```
 
-There is no generic execution, syscall or raw-host capability. Inputs are
-decoded strictly and errors stay structured.
+Responses are:
+
+```json
+{"ok":true,"result":{}}
+```
+
+or:
+
+```json
+{"ok":false,"error":{"code":"...","message":"...","details":{}}}
+```
+
+The capability protocol version is separate from the raw WASM ABI.
+
+Implemented generic capability work includes logging, host status,
+plugin-namespaced JSON storage, plugin-owned scheduler registrations, asynchronous
+process execution/status/termination, and browser event publication. Config
+hooks exist in the host interface but are not yet a general plugin configuration
+service. Add new capability methods only for real reusable plugin needs.
+
+### Scheduler callbacks
+
+`scheduler.register` registers an ID, existing RunPilot schedule definition,
+callback name and optional data. IDs are scoped to the calling plugin.
+`scheduler.remove` and `scheduler.list` use the same scope.
+
+A fire is delivered through `runpilot_event` as a generic scheduler event.
+Registrations are runtime state; a plugin should reconstruct them from its own
+durable state during initialization.
+
+### Processes
+
+`process.start` accepts command, arguments, working directory and environment
+and returns an opaque plugin-owned process ID. Status and termination are
+owner-scoped.
+
+Stdout/stderr and exit are delivered through `runpilot_event`. Output uses
+bounded queues; overflow is intentionally lossy rather than blocking a child
+process or growing memory without bound.
+
+### Browser publication
+
+`events.publish` publishes a plugin event through the shared application
+WebSocket. Core supplies the plugin ID. There is no offline replay; disconnected
+clients retain no backlog and slow-client queues are bounded.
 
 ## Browser protocol
 
-The common protocol envelope is versioned separately as browser protocol v1.
-The future authenticated application WebSocket will route:
+The authenticated application WebSocket is `GET api/v1/ws`. The browser first
+obtains a short-lived single-use ticket from authenticated
+`POST api/v1/ws/ticket`; the connection reuses RunPilot's optional payload
+encryption handshake.
+
+Request:
 
 ```json
-{"id":"42","plugin":"system","method":"status.get","params":{}}
+{"id":"42","plugin":"example","method":"items.list","params":{}}
 ```
 
-Successful responses are `{"id":"42","result":{}}`; errors are
-`{"id":"42","error":{"code":"unknown_plugin","message":"..."}}`.
-Events use `{"plugin":"system","event":"status.changed","data":{}}`.
-The implemented parser rejects malformed/unknown envelope fields and the
-dispatcher provides correlation, unknown-plugin errors, bounded calls and
-plugin-failure isolation. The authenticated WebSocket transport, cancellation
-and binary/stream frames are intentionally Phase 2 work; existing REST and
-specialized transport endpoints remain until their migrations.
+Success:
 
-## Frontend and design system direction
+```json
+{"id":"42","result":{}}
+```
 
-Frontend modules export `activate(runpilot)`. The stable public namespace is
-being shaped around `runpilot.ui`, `runpilot.navigation`, `runpilot.overview`,
-`runpilot.settings` and `runpilot.ws`; registration hosts are not implemented
-in Phase 1. Existing first-party Remote packages retain their temporary legacy
-compatibility hook until Remote migration, and new plugins must not depend on
-it or on private application globals.
+Error:
 
-Core owns the shell, navigation container, Settings/Overview hosts, shared UI
-library and theme engine. Plugins will own feature pages, menu entries, cards,
-settings and feature dialogs. Public custom CSS uses semantic tokens such as
-`--rp-surface`, `--rp-surface-elevated`, `--rp-text`, `--rp-text-muted`,
-`--rp-border`, `--rp-space-*` and `--rp-radius-*`; it must not assume a concrete
-style or scheme. Style (typography, density, radii and components) is separate
-from System/Light/Dark scheme. `.rptheme` packages remain a future,
-non-executable metadata-and-CSS format.
+```json
+{"id":"42","error":{"code":"unknown_plugin","message":"..."}}
+```
 
-## Implemented reference transport and system plugin
+Event:
 
-The authenticated common application WebSocket is `GET api/v1/ws`. A browser
-first requests a short-lived, single-use ticket through authenticated `POST
-api/v1/ws/ticket`; the connection then uses the existing optional encrypted
-payload handshake. It routes the request/response/event envelopes above,
-including malformed-message, unknown-plugin and plugin-failure errors.
+```json
+{"plugin":"example","event":"items.changed","data":{}}
+```
 
-The public browser surface now implements `runpilot.ws.call(plugin, method,
-params)`, `runpilot.ws.on(plugin, event, listener)`, and small registration
-hosts for navigation, Overview and Settings. It reconnects automatically and
-does not expose the raw WebSocket to plugins.
+The common dispatcher provides correlation, structured errors, bounded calls,
+plugin-failure isolation and event routing. Existing legacy feature REST
+endpoints remain only while those features have not yet migrated.
 
-## Asynchronous capabilities
+## Frontend extension API
 
-`scheduler.register` accepts `{id,schedule,callback,data}` (the existing
-interval, daily, and cron schedule forms); IDs are scoped to the calling
-plugin. `scheduler.remove` and `scheduler.list` operate only in that scope.
-Firing is delivered as `runpilot_event` operation `scheduler.fired` with the
-registration ID, callback, and data. Registrations are runtime-only and a
-plugin reconstructs them from its storage after initialization.
+Frontend modules export:
 
-`process.start` accepts `command`, `args`, `workingDirectory`, and
-`environment`, returning an opaque managed ID. `process.status` and
-`process.terminate` are owner-scoped. Output and termination arrive through
-`runpilot_event` as `process.stdout`, `process.stderr`, and `process.exit`.
-Each output stream has an 8-chunk queue (8 KiB chunks); new chunks are dropped
-when a plugin cannot consume them, rather than blocking the child or growing
-memory. Completed status is retained briefly for status/event delivery.
+```javascript
+export function activate(runpilot) {
+    // register plugin contributions
+}
+```
 
-`events.publish` accepts `{event,data}` and sends the normal `{plugin,event,data}`
-envelope to all current shared-WebSocket clients. The host supplies the plugin
-ID; there is no replay or offline backlog and slow client queues are dropped.
-Calls and `runpilot_event` remain serialized per WASM instance; scheduler and
-process work never run while WASM is entered.
+The public surface is:
 
-The nonpublic `system` technical reference package uses the normal installer and runtime,
-not a core bypass. Its real `backend/plugin.wasm` is reproducibly generated by
-`go generate ./plugins/system/backend` using TinyGo 0.38.0. It
-calls `host.system.status`, which publishes hostname, OS/architecture, CPU,
-memory and filesystem metrics through the existing platform collectors.
+```text
+runpilot.ws
+runpilot.navigation
+runpilot.overview
+runpilot.settings
+runpilot.ui
+```
 
-## Independent compatibility contracts
+Plugins use `runpilot.ws.call()` for RPC and `runpilot.ws.on()` for events
+instead of opening their own application WebSocket. Navigation/pages, Overview
+cards and Settings sections are registered through the corresponding extension
+hosts.
 
-Package versions are strict SemVer. `requires.backend` and `requires.frontend`
-contain SemVer ranges for the declared components; current host contracts are
-both `1.0.0`. `requires.runpilotApi` retains its historical name solely for raw
-WASM ABI selection (1 or 2), independent of those contracts and of RunPilot's
-application version. System is a nonpublic technical fixture, not a production
-feature plugin. See [PLUGIN_REGISTRY.md](PLUGIN_REGISTRY.md).
+Core owns the shell and design system. Plugin CSS should use public semantic
+tokens. System/Light/Dark is a color-scheme choice separate from the selected
+style. Executable theme plugins are not part of the contract.
+
+## First-party build contract
+
+First-party WASM backends use TinyGo 0.38.0 with the repository's
+`wasm-unknown` build settings and are shipped precompiled inside
+`.rpplugin` packages. TinyGo is build-time tooling only.
+
+The System package is a nonpublic reference fixture for ABI, host capability,
+WebSocket and frontend-extension tests. It uses ABI 2 and is excluded from the
+public catalog; it should not grow into the permanent host-monitoring feature.
