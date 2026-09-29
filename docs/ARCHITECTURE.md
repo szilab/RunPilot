@@ -1,77 +1,96 @@
 # RunPilot architecture
 
-## Product direction
+## Direction
 
-RunPilot is a lightweight Windows/Linux **plugin host and management framework**. The core provides the runtime, browser shell, shared UI system, WebSocket transport and host capabilities required by plugins. Product features such as Tasks, Docker, Storage, Terminal, Software Management and Remote Access are plugins rather than core domains.
+RunPilot is a lightweight Windows/Linux host-management application that is
+being refactored into a small **plugin host and management framework**.
 
 > **RunPilot provides the framework; plugins provide the features.**
 
-RunPilot normally runs as an unprivileged user. Plugins can only cause host-side operations through RunPilot and remain bounded by the operating-system permissions of the RunPilot service account. RunPilot does not add a second per-plugin authorization model.
+The target core owns infrastructure that multiple features need: plugin
+installation/runtime, versioned host capabilities, one authenticated application
+WebSocket, the web shell, shared UI/theme primitives, and framework settings.
+Tasks, Storage, Docker, Terminal, Software, Backup and Remote Access belong in
+plugins once their migrations reach parity.
+
+The migration is incremental. Those features still exist in the legacy core
+today and must remain operational until the equivalent plugin path is implemented
+and tested. New architecture work must not use that transitional state as a
+reason to add more feature semantics to core.
 
 ## Core boundary
 
-The core contains only:
+Target core responsibilities are:
 
-- plugin package installation, validation, catalog/update handling and lifecycle;
-- WebAssembly backend runtime;
-- a versioned host capability API;
-- one authenticated browser/server WebSocket transport;
-- the web application shell and navigation host;
-- shared GUI components and design tokens;
-- Overview and Settings extension hosts;
-- theme/style selection and application;
-- framework configuration and plugin management.
+- immutable `.rpplugin` package validation, installation and lifecycle;
+- catalog-based plugin discovery/update handling;
+- wazero backend runtime with explicit raw WASM ABI versions;
+- narrow host capabilities for process, scheduler, storage, system and similar
+  generic operations;
+- one authenticated browser/server application WebSocket;
+- web shell, navigation host, Overview and Settings extension hosts;
+- shared frontend components, semantic design tokens and appearance handling;
+- framework configuration and plugin enablement.
 
-The core must not contain product-specific knowledge such as Docker containers, backup repositories, scheduled tasks, terminals, Xpra, RDP, VNC or package managers.
-
-The current codebase is in the incremental transition: those legacy domains
-remain operational until a plugin reaches parity. Phase 1 freezes framework
-contracts only; it does not yet remove or migrate feature implementations.
-
-```text
-RunPilot Core
-├── Plugin Runtime
-│   ├── .rpplugin install/update
-│   ├── WASM runtime
-│   ├── lifecycle
-│   └── platform compatibility
-├── Capability Host
-│   ├── process / filesystem / network
-│   ├── scheduler / storage / system
-│   └── config / logging
-├── WebSocket Transport
-└── Web Shell
-    ├── navigation + shared UI
-    ├── Overview + Settings hosts
-    └── Theme Engine
-```
+Core must not permanently understand domain concepts such as Task, Docker
+container, backup repository, terminal session type, Xpra target or Scoop
+package. Generic engines may remain in core when they are exposed as reusable
+host capabilities.
 
 ## Plugin model
 
-A plugin may contain three kinds of contribution:
+First-party plugin source lives in this repository, normally below
+`plugins/<id>/`, but each plugin is a logically independent package with its
+own SemVer version and release lifecycle.
 
-1. **Backend** — optional WASM using RunPilot host capabilities.
-2. **GUI** — optional JavaScript/CSS owning navigation entries, pages, Overview cards and specialized UI.
-3. **Settings** — plugin-owned settings rendered inside the common Settings shell.
+A plugin may contain any combination of:
 
-A plugin may be platform-independent, Linux-only or Windows-only. Compatibility is declared in its manifest; incompatible plugins are not activated.
+```text
+plugin.yaml
+backend/plugin.wasm   # optional
+web/plugin.js         # optional
+web/plugin.css        # optional
+```
 
-The WASM runtime supports explicit ABI v1 and ABI v2 manifest dispatch. The
-System reference plugin now uses ABI v2 through the first-party TinyGo SDK.
-ABI-v2 lifecycle inputs and outputs use host-owned invocation handles, and
-capability responses use invocation-scoped handles with synchronous copying.
-ABI v1 remains supported for existing plugins and its retained allocation
-behavior stays isolated in the v1 adapter. High-volume asynchronous
-scheduler/process callback validation remains pending before Tasks migration.
+Backend modules run in-process through wazero. First-party backends are compiled
+with TinyGo and shipped as prebuilt WASM; TinyGo is never a production runtime
+dependency. Frontend modules register pages, navigation, Overview contributions
+and Settings sections through the public frontend API.
+
+Plugins may be platform-independent, Linux-only or Windows-only. Incompatible
+packages can remain installed but are not activated. Enablement is desired state;
+activation is intentionally restart-based rather than hot-loaded.
+
+## Version domains
+
+These versions are independent and must not be collapsed into one number:
+
+| Domain | Current role |
+| --- | --- |
+| RunPilot version | Native application release |
+| Raw WASM ABI | Binary calling convention; v1 and v2 are currently supported |
+| Backend contract | Host capability/runtime compatibility; currently `1.0.0` |
+| Frontend contract | Public browser extension compatibility; currently `1.0.0` |
+| Plugin version | Independent SemVer release of one plugin |
+
+Plugin manifests use SemVer ranges for backend/frontend contracts and
+`requires.runpilotApi` only for the raw WASM ABI. Compatibility is therefore
+based on contracts, not on the RunPilot application version.
+
+ABI v1 remains for compatibility. ABI v2 is the preferred first-party path:
+lifecycle data and capability responses are host-owned and copied synchronously,
+so the host never retains pointers or slices backed by WASM linear memory after
+an ABI import returns. The nonpublic System fixture exercises ABI v2 and the
+TinyGo SDK.
 
 ## Host capabilities
 
-WASM modules do not receive native Go objects, unrestricted memory access or direct access to RunPilot internals. Host functionality is exposed through a small versioned API, expected to grow around real needs:
+Plugins do not receive Go objects, raw handles or unrestricted access to
+RunPilot internals. Generic functionality is exposed through explicit host
+capabilities such as:
 
 ```text
 host.process.*
-host.fs.*
-host.network.*
 host.scheduler.*
 host.storage.*
 host.system.*
@@ -79,120 +98,103 @@ host.config.*
 host.log.*
 ```
 
-All loaded plugins may use all published capabilities. There is intentionally no manifest permission matrix. The OS account running RunPilot remains the security boundary.
+Additional families such as filesystem or network access should be added only
+when a real plugin needs a narrow, reusable operation. Do not add generic
+syscall/command escape hatches.
 
-Capabilities must nevertheless be narrow, explicit and stable. Avoid generic syscall-style escape hatches and validate inputs at the capability boundary.
+There is intentionally no per-plugin permission matrix. Plugins are trusted
+packages and operate within the OS permissions of the RunPilot service account.
+Capability implementations still validate inputs, ownership and RunPilot
+invariants.
 
-RPC and generic host callbacks are serialized per loaded WASM instance. This
-lets plugins retain ordinary in-memory state while asynchronous host work stays
-outside a WASM call. First-party backends are built with TinyGo and shipped as
-precompiled WASM; RunPilot never requires the compiler at runtime.
+## Browser and frontend model
 
-## Browser/server communication
-
-RunPilot uses one authenticated WebSocket connection for browser/server application communication. Feature-specific REST APIs are not part of the target architecture.
-
-A request identifies a plugin and method:
+Application RPC and plugin events use the common authenticated WebSocket. A
+request identifies a plugin and method:
 
 ```json
-{"id":"42","plugin":"docker","method":"containers.list","params":{}}
+{"id":"42","plugin":"tasks","method":"tasks.list","params":{}}
 ```
 
-Responses use the same correlation ID; plugins may also publish asynchronous events. The protocol owns structured errors, timeouts, event routing and cancellation where useful. Binary or streaming workloads should extend the same WebSocket with framed binary messages rather than introduce feature-specific transports.
+Responses use the same correlation ID; asynchronous events use the same
+connection. Static HTML/JS/CSS and plugin assets remain ordinary HTTP resources.
+Legacy feature REST endpoints may remain during migration, but new plugin
+features must not create feature-specific REST APIs or WebSockets.
 
-## GUI ownership
-
-The web shell owns layout mechanics, not feature pages. Plugins register navigation entries and complete pages. An empty installation may contain only framework-owned surfaces such as Overview, Settings and plugin management.
-
-Feature-specific rendering must not be hard-coded into the core shell.
-
-## Shared GUI library
-
-RunPilot provides a shared frontend design system. Plugins should use common components such as Card, Button, Badge, Table, Modal, FormField, Tabs, EmptyState, confirmation and notification controls whenever practical.
-
-The frontend API should expose stable extension surfaces such as:
+The public frontend surface is built around:
 
 ```text
-runpilot.ui
+runpilot.ws
 runpilot.navigation
 runpilot.overview
 runpilot.settings
-runpilot.ws
+runpilot.ui
 ```
 
-Custom plugin CSS is allowed for specialized UI, but it must consume public design tokens instead of hard-coding the application style.
+Core owns layout and visual primitives; plugins own feature pages and feature
+semantics. Plugin CSS should use public semantic design tokens rather than
+hard-code RunPilot's current colors or spacing.
 
-## Theme and style system
+Overview is an extension host rather than a fixed dashboard. Host CPU/memory/disk
+presentation is planned as widget contributions; the current System package is a
+technical fixture, not the intended user-facing System feature.
 
-Visual style is a core service and must be replaceable without changing feature plugins. Plugins must not assume concrete colors, fonts, spacing, border radii, shadows or light/dark backgrounds.
+## Plugin publication and installation
 
-Style and color scheme are separate concepts. A **style** controls typography, density, spacing, component shape and visual character; a **color scheme** selects System, Light or Dark within the active style.
+The main repository is also the source repository for first-party plugins, but
+plugin releases are independent from application releases.
 
-The first implementation may ship only RunPilot Default, but it must use the same public token contract that future external styles can override.
+GitHub Releases store immutable
+`plugin-<id>-v<version>` artifacts. A generated `plugin-catalog` release
+publishes `catalog.json`. RunPilot reads that catalog, selects the newest
+platform/contract-compatible version, verifies SHA-256 and package metadata, and
+uses the existing atomic installer.
 
-A future non-executable theme package may look like:
+Settings exposes installed/available/update/incompatible state plus explicit
+install, update, enable/disable and uninstall operations. New installations are
+not silently enabled, updates are not automatic, and activation remains pinned
+until restart. Mutable `plugin-data/<id>` is retained on uninstall.
 
-```text
-my-theme.rptheme
-├── theme.yaml
-└── theme.css
-```
+Publication policy is repository-owned. The System fixture and incomplete Remote
+scaffolds are intentionally excluded from the public catalog.
 
-Themes are not normal WASM plugins and execute neither backend code nor JavaScript.
+Operational details belong in [PLUGIN_REGISTRY.md](PLUGIN_REGISTRY.md); plugin
+authoring belongs in [PLUGINS.md](PLUGINS.md); raw ABI/protocol details belong
+in [PLUGIN_API.md](PLUGIN_API.md).
 
-## Overview
+## Migration direction
 
-Overview is a core layout/extension host; its cards are plugin contributions. Host metrics presentation is planned through plugin/widget contributions; the current System technical fixture is not a permanent production feature. Docker and task contributions remain future migrations. The core does not understand card semantics.
+The next work is feature migration, not further expansion of the core plugin
+framework. Migrate one feature at a time and remove its legacy core/API code only
+after plugin parity and automated regression coverage.
 
-## Settings
+Current intended order:
 
-Settings is a core shell with framework-owned sections for RunPilot, Appearance and plugin management. Plugins register their own settings sections. Plugins own feature-specific schemas and editors; the core provides persistence primitives and common presentation.
+1. Tasks and execution history;
+2. Storage;
+3. Docker;
+4. Terminal;
+5. Software and backup integrations;
+6. Remote providers (one provider at a time).
 
-## Persistence
+The async ABI-v2 process/scheduler/event path should remain covered by real-WASM
+race/integration tests before stateful feature migrations depend on it.
 
-Framework configuration and plugin enablement remain under the RunPilot data directory. Mutable plugin data belongs below a plugin-scoped data location. Plugins should use host storage/config capabilities rather than depend on internal file layouts.
+The widget contribution model should be designed when the first real widgets are
+implemented, rather than by expanding the System fixture now.
 
-## Security model
+## Security and guardrails
 
-RunPilot normally runs without root/Administrator privileges. The service account's OS permissions are authoritative. WASM still isolates plugin memory and prevents direct coupling to Go internals, but it is not intended as a per-plugin trust policy.
-
-Host capabilities must validate inputs and preserve RunPilot invariants. Browser/server authentication applies to the shared WebSocket.
-
-Plugin schedules and ad-hoc processes are generic runtime capabilities, not
-feature proxies. Scheduler callbacks and process output are routed back through
-the serialized WASM event entry point, while browser publication uses the
-existing application WebSocket fanout with bounded, lossy per-client queues.
-
-## Architectural guardrails
-
-1. Keep feature semantics out of core whenever they can live in a plugin.
-2. Prefer a small stable capability API over Go internals or generic syscalls.
-3. Do not add per-plugin permission complexity without a concrete future requirement.
-4. Keep browser/server application communication on the common WebSocket.
-5. Make navigation pages, plugin settings and Overview cards plugin-owned.
-6. Keep shared layout, UI components and theme tokens core-owned.
-7. Never hard-code the default visual style into feature plugins.
-8. Preserve Windows/Linux support and declare plugin platform constraints explicitly.
-9. Migrate incrementally; remove old core implementations only after plugin parity and tests.
-10. Treat the plugin API, WebSocket protocol, capability API and design tokens as versioned public contracts.
-
-## Plugin publication and discovery
-
-First-party plugin source remains in this repository, but plugin SemVer releases
-are independent of the native application. Backend and frontend contract versions
-are explicitly `1.0.0`; raw WASM ABI 1/2 remains a separate calling convention.
-Manifests declare component contract ranges and platform support.
-
-Immutable `plugin-<id>-v<version>` GitHub releases store packages, checksums and
-publication records. A generated mutable `plugin-catalog/catalog.json` groups
-published versions. Repository tooling validates and deterministically regenerates
-it; one configurable first-party registry is supported. The client distinguishes
-latest published from latest compatible and verifies downloaded packages before
-using the existing atomic installer. Settings manages explicit installation,
-updates, enablement and removal, with startup-pinned activation and retained plugin
-data. No hot loading or automatic updates occur.
-
-System is retained solely as a nonpublic ABI/frontend integration fixture. Fresh
-startup no longer installs it; application releases no longer bundle plugins.
-Tasks and existing feature domains are not migrated by registry work. See
-[PLUGIN_REGISTRY.md](PLUGIN_REGISTRY.md) for schema, trust model and operations.
+- RunPilot normally runs without root/Administrator privileges; the service
+  account is the primary OS security boundary.
+- Keep host capabilities narrow and versioned.
+- Do not add per-plugin permissions without a concrete future requirement.
+- Do not add root/Admin escalation, native Go plugins or generic syscalls.
+- Keep browser application traffic on the common WebSocket.
+- Keep plugin frontend code on public extension APIs and design tokens.
+- Preserve Windows/Linux behavior and explicit platform compatibility.
+- Preserve existing legacy feature behavior while it is still the production
+  implementation.
+- Prefer incremental migrations over simultaneous rewrites.
+- Keep themes non-executable; a future theme package should be CSS/metadata, not
+  another WASM plugin.
