@@ -6,55 +6,47 @@
 
 RunPilot is a lightweight Windows/Linux host-management application written in Go. One native service manages configured workloads and operations and exposes an embedded local web UI. Windows uses Windows Service Control Manager; Linux uses a systemd user service.
 
-RunPilot provides process supervision, scheduling, backup jobs, storage access and isolated software management through a coherent management GUI.
+The current release provides process supervision, scheduling, backups, storage,
+software management, Terminal and Remote Access. The architecture is
+incrementally moving these product features out of the legacy core and into
+independently versioned plugins.
 
-The project takes the useful operating model of Perch — one service, one dashboard, many managed processes — but uses its own implementation and broader typed capability/integration model.
+> **RunPilot provides the framework; plugins provide the features.**
 
-A central architectural rule is:
-
-> **RunPilot manages tools and workloads; it does not become those tools.**
-
-RunPilot should integrate specialist tools such as Robocopy, Restic or future package/runtime providers instead of reimplementing their core semantics.
+Existing functionality remains in place until its plugin replacement reaches
+parity. First-party plugin source stays in this repository, while plugin
+packages are versioned and published independently through the GitHub-backed
+plugin catalog.
 
 ## Capabilities
 
-- Native service (`RunPilot Process Manager`) through Windows SCM or a Linux systemd user service
-- Long-running process supervision
-- `.exe`, `.bat`/`.cmd`, `.ps1` and `.py` launch support
-- Autostart and `never` / `on-failure` / `always` restart policies
-- Exponential restart backoff
-- Interval, daily and cron scheduled jobs
-- Manual job execution
+- Native service through Windows SCM or a Linux systemd user service
+- Long-running process supervision with restart policies and backoff
+- Interval, daily and cron scheduled jobs plus manual execution
 - Typed backup jobs using Robocopy, Restic and rdiff-backup
-- Robocopy copy/update and mirror modes
 - Captured stdout/stderr and execution history
-- Embedded web GUI and REST API
-- Overview dashboard with host CPU, memory, disk and workload health
-- Token-authenticated API bound to `127.0.0.1` by default
-- YAML configuration under `%ProgramData%\RunPilot` on Windows or `$XDG_DATA_HOME/runpilot` / `~/.local/share/runpilot` on Linux
-- Software Management through a RunPilot-owned isolated Scoop provider
-- Interactive Terminal tabs backed by a Linux PTY or Windows ConPTY
-- Remote Access targets and sessions through Xpra, embedded-browser RDP, and VNC/noVNC providers
+- Local and Docker-backed storage access
+- Software Management through the RunPilot-owned Scoop provider
+- Interactive Terminal tabs backed by Linux PTY or Windows ConPTY
+- Remote Access through Xpra, embedded-browser RDP and VNC/noVNC providers
+- Embedded authenticated web UI
+- Plugin package/runtime support with independent backend/frontend contracts
+- GitHub-backed plugin catalog with explicit install/update/enable lifecycle
 
-## Product direction
+## Architecture direction
 
-RunPilot separates user-facing capabilities from external tool integrations.
+The target core is a small plugin host: package/runtime management, versioned
+host capabilities, one authenticated application WebSocket, the web shell,
+shared UI/theme primitives and framework settings. Tasks, Storage, Docker,
+Terminal, Software, Backup and Remote Access migrate incrementally to plugins.
 
-Planned/possible capabilities include:
+Host CPU/memory/disk presentation is planned as widget contributions rather
+than expanding the nonpublic System ABI fixture into a permanent feature.
 
-- **Tasks** — one user-facing view for continuous commands, scheduled commands and typed scheduled backups.
-- **Storage** — the always-available Local filesystem plus Docker volumes discovered at runtime.
-- **Software** — install, upgrade and remove portable applications through the RunPilot-owned Scoop provider; WinGet may be a future provider for conventional Windows software.
-- **Terminal** — short-lived interactive local shells in the web UI, using native PTY/ConPTY support rather than command execution pipes.
-- **Health** — shared execution history, logs and host/workload status; logs remain available from their task.
-
-An external integration may serve more than one capability. Restic currently provides backup execution, native retention and repository checking; repository browsing, historical versions and restore remain separate follow-up work.
-
-RunPilot should not emulate unsupported backend features merely to make integrations look identical. If Robocopy does not provide versioned repository semantics, versioned backup should use a tool that natively provides them rather than adding a home-grown backup format to RunPilot.
-
-Docker support attaches to an already functional external runtime and is limited to explicit Compose projects, Compose-labelled containers, named volumes, and named networks. Provisioning WSL, installing or operating Docker daemons, generic Docker execution, or recreating Docker orchestration are not part of the RunPilot product boundary.
-
-See `ARCHITECTURE.md` for the detailed capability/integration model and guardrails.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the architectural source of
+truth, [docs/PLUGINS.md](docs/PLUGINS.md) for plugin development, and
+[docs/PLUGIN_REGISTRY.md](docs/PLUGIN_REGISTRY.md) for publication and
+installation.
 
 ## Install On Linux
 
