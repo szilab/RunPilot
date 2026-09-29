@@ -99,7 +99,7 @@ type pdhFmtCounterValueItem struct {
 
 func HostStatus() model.HostStatus {
 	hostname, err := os.Hostname()
-	status := model.HostStatus{OS: runtime.GOOS, Hostname: hostname, Disks: []model.DiskStatus{}}
+	status := model.HostStatus{OS: runtime.GOOS, Architecture: runtime.GOARCH, Hostname: hostname, Disks: []model.DiskStatus{}}
 	if err != nil {
 		status.Error = fmt.Sprintf("read hostname: %v", err)
 	}

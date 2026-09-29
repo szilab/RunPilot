@@ -450,6 +450,7 @@ type DiskStatus struct {
 
 type HostStatus struct {
 	OS                string       `json:"os"`
+	Architecture      string       `json:"architecture"`
 	Hostname          string       `json:"hostname"`
 	CPUPercent        float64      `json:"cpuPercent"`
 	CPUAveragePercent float64      `json:"cpuAveragePercent"`

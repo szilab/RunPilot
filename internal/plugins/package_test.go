@@ -11,13 +11,12 @@ import (
 
 func TestManifestValidate(t *testing.T) {
 	manifest := Manifest{
-		APIVersion:   PluginAPIVersion,
-		ID:           "remote.xpra",
-		Name:         "Xpra",
-		Version:      "1.0.0",
-		Requires:     Requires{RunPilotAPI: PluginABIVersion},
-		Capabilities: []Capability{{Type: "remote-provider", ID: "xpra"}},
-		Backend:      &BackendManifest{Module: "backend/plugin.wasm"},
+		APIVersion: PluginAPIVersion,
+		ID:         "remote.xpra",
+		Name:       "Xpra",
+		Version:    "1.0.0",
+		Requires:   Requires{RunPilotAPI: PluginABIVersion},
+		Backend:    &BackendManifest{Module: "backend/plugin.wasm"},
 	}
 	if err := manifest.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
@@ -25,9 +24,39 @@ func TestManifestValidate(t *testing.T) {
 }
 
 func TestManifestRejectsUnsupportedAPI(t *testing.T) {
-	manifest := Manifest{APIVersion: PluginAPIVersion, ID: "test", Name: "Test", Version: "1", Requires: Requires{RunPilotAPI: PluginABIVersion + 1}, Capabilities: []Capability{{Type: "test", ID: "test"}}, Backend: &BackendManifest{Module: "backend/plugin.wasm"}}
+	manifest := Manifest{APIVersion: PluginAPIVersion, ID: "test", Name: "Test", Version: "1", Requires: Requires{RunPilotAPI: PluginABIVersion + 1}, Backend: &BackendManifest{Module: "backend/plugin.wasm"}}
 	if err := manifest.Validate(); err == nil {
 		t.Fatal("Validate() accepted an unsupported API")
+	}
+}
+
+func TestManifestPlatforms(t *testing.T) {
+	manifest := Manifest{APIVersion: PluginAPIVersion, ID: "test", Name: "Test", Version: "1", Requires: Requires{RunPilotAPI: PluginABIVersion}, Platforms: []string{"linux"}}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("linux manifest rejected: %v", err)
+	}
+	if !manifest.Compatible("linux") || manifest.Compatible("windows") {
+		t.Fatal("platform compatibility is incorrect")
+	}
+	manifest.Platforms = []string{"windows"}
+	if err := manifest.Validate(); err != nil || !manifest.Compatible("windows") || manifest.Compatible("linux") {
+		t.Fatalf("windows platform compatibility is incorrect: %v", err)
+	}
+	manifest.Platforms = []string{"darwin"}
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("unsupported platform accepted")
+	}
+}
+
+func TestInstallPackageRejectsMissingDeclaredAssets(t *testing.T) {
+	packagePath := writePackage(t, map[string]string{"plugin.yaml": validManifest})
+	if _, err := InstallPackage(t.TempDir(), packagePath, ""); err == nil {
+		t.Fatal("package with missing backend was accepted")
+	}
+	frontend := "apiVersion: runpilot.plugin/v1\nid: test.frontend\nname: Test\nversion: 1\nrequires:\n  runpilotApi: 1\nfrontend:\n  module: web/plugin.js\n  stylesheet: web/plugin.css\n"
+	packagePath = writePackage(t, map[string]string{"plugin.yaml": frontend, "web/plugin.js": "export function activate() {}"})
+	if _, err := InstallPackage(t.TempDir(), packagePath, ""); err == nil {
+		t.Fatal("package with missing frontend stylesheet was accepted")
 	}
 }
 
@@ -62,7 +91,7 @@ func TestInstallPackageVerifiesChecksumAndInstallsAtomically(t *testing.T) {
 	}
 }
 
-const validManifest = "apiVersion: runpilot.plugin/v1\nid: remote.xpra\nname: Xpra\nversion: 1.0.0\nrequires:\n  runpilotApi: 1\ncapabilities:\n  - type: remote-provider\n    id: xpra\nbackend:\n  module: backend/plugin.wasm\n"
+const validManifest = "apiVersion: runpilot.plugin/v1\nid: remote.xpra\nname: Xpra\nversion: 1.0.0\nrequires:\n  runpilotApi: 1\nbackend:\n  module: backend/plugin.wasm\n"
 
 func writePackage(t *testing.T, entries map[string]string) string {
 	t.Helper()

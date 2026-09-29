@@ -37,6 +37,12 @@ Define and document:
 
 Keep contracts deliberately small. Remove the target architecture's per-plugin permission matrix and introduce no new feature-specific REST APIs.
 
+Phase 1 implementation: package manifests, platform status, declared-asset
+validation, a linear-memory WASM ABI, a minimal `log`/`config` capability
+bridge, browser protocol envelopes and semantic style tokens are now present.
+The WebSocket transport and frontend registration hosts remain in their later
+phases; existing product APIs and Remote compatibility stay in place meanwhile.
+
 ## Phase 2 — WebSocket transport
 
 Replace feature-facing browser REST calls with a common authenticated WebSocket dispatcher.
@@ -54,6 +60,13 @@ Implement only capabilities required by real plugins, starting with the referenc
 There is no per-plugin permission enforcement. All capabilities are available to loaded plugins subject to the RunPilot process account's OS permissions and capability-level validation.
 
 Acceptance: WASM calls host functions without native Go coupling; errors are structured; calls are bounded; tests cover traps, timeouts and invalid payloads.
+
+The first source-based backend milestone is complete for System: TinyGo 0.38.0
+produces a `wasm-unknown` module through the normal ABI, including state
+retained across calls and the serialized optional `runpilot_event` callback.
+Plugin-namespaced JSON key/value storage is available through `host.storage`.
+Generic scheduler, process, and browser-event capabilities remain prerequisites
+for the Tasks migration.
 
 ## Phase 4 — themeable shared GUI
 

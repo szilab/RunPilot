@@ -3,6 +3,7 @@ package scheduler
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/szilab/RunPilot/internal/model"
 )
@@ -18,6 +19,36 @@ func TestDailyExpression(t *testing.T) {
 	}
 	if !strings.Contains(got, "daily 03:15") {
 		t.Fatalf("unexpected expression %q", got)
+	}
+}
+
+func TestPluginRegistrationOwnershipAndRemoval(t *testing.T) {
+	s := New(nil)
+	defer s.Stop()
+	fired := make(chan PluginSchedule, 1)
+	value := PluginSchedule{Owner: "one", ID: "same", Callback: "tick", Schedule: model.ScheduleSpec{Type: model.ScheduleInterval, IntervalSeconds: 1}}
+	if err := s.RegisterPlugin(value, func(v PluginSchedule) { fired <- v }); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RegisterPlugin(value, func(PluginSchedule) {}); err == nil {
+		t.Fatal("duplicate ID accepted")
+	}
+	if err := s.RegisterPlugin(PluginSchedule{Owner: "two", ID: "same", Callback: "tick", Schedule: value.Schedule}, func(PluginSchedule) {}); err != nil {
+		t.Fatalf("other owner: %v", err)
+	}
+	select {
+	case got := <-fired:
+		if got.ID != value.ID {
+			t.Fatalf("fired %#v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("schedule did not fire")
+	}
+	if !s.RemovePlugin("one", "same") {
+		t.Fatal("remove failed")
+	}
+	if len(s.ListPlugin("one")) != 0 || len(s.ListPlugin("two")) != 1 {
+		t.Fatal("owner isolation lost")
 	}
 }
 

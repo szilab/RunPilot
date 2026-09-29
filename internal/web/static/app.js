@@ -13,6 +13,9 @@ let dockerRuntime = null, dockerProjects = [], dockerVolumes = [], dockerNetwork
 let remoteProviders = [], remoteTargets = [], remoteSessions = [], remoteSessionID = "", remoteStartingTargets = new Set(), remoteRDPInteraction = null, remoteVNCInteraction = null, remotePendingTarget = null, remoteVNCPendingCredentials = null;
 let pluginStatuses = [], pluginBusy = new Set();
 let pluginExtensions = new Map();
+const pluginNavigation = new Map(), pluginOverview = new Map(), pluginSettings = new Map();
+let applicationSocket = null, applicationSocketPromise = null, applicationSequence = 0;
+const applicationPending = new Map(), applicationListeners = new Map();
 let logTimer = null, toastTimer = null;
 let logSource = null;
 let refreshTimer = null;
@@ -31,6 +34,29 @@ const pageMeta = {
   remote: ["Remote Access", "Add target"],
   settings: ["Settings", null],
 };
+
+function applicationWebSocketURL(ticket) { const url=new URL("api/v1/ws",document.baseURI); url.protocol=url.protocol === "https:" ? "wss:" : "ws:"; url.searchParams.set("ticket",ticket); return url; }
+async function connectApplicationSocket() {
+  if (applicationSocket?.readyState === WebSocket.OPEN) return applicationSocket;
+  if (applicationSocketPromise) return applicationSocketPromise;
+  applicationSocketPromise=(async()=>{
+    const ticket=await api("api/v1/ws/ticket",{method:"POST"});
+    const socket=new RunPilotSecureWebSocket(applicationWebSocketURL(ticket.ticket),systemInfo?.websocketPayloadMode||"disabled");
+    await new Promise((resolve,reject)=>{ const timer=setTimeout(()=>reject(new Error("application WebSocket timed out")),10000); socket.onopen=()=>{clearTimeout(timer);resolve();}; socket.onerror=()=>{clearTimeout(timer);reject(new Error("application WebSocket connection failed"));}; });
+    socket.onmessage=event=>{ let message; try { message=JSON.parse(event.data); } catch { return; } if (message.id) { const pending=applicationPending.get(message.id); if (!pending) return; applicationPending.delete(message.id); clearTimeout(pending.timer); if(message.error){const error=new Error(message.error.message||"Plugin request failed");error.code=message.error.code;pending.reject(error);}else pending.resolve(message.result); return; } if(message.plugin&&message.event) for(const listener of applicationListeners.get(`${message.plugin}:${message.event}`)||[]) listener(message.data); };
+    socket.onclose=()=>{ if(applicationSocket===socket) { applicationSocket=null; applicationSocketPromise=null; for(const [id,pending] of applicationPending){clearTimeout(pending.timer);pending.reject(new Error("application WebSocket disconnected"));applicationPending.delete(id);} setTimeout(()=>connectApplicationSocket().catch(()=>{}),1000); } };
+    applicationSocket=socket; applicationSocketPromise=null; return socket;
+  })();
+  try{return await applicationSocketPromise;}catch(error){applicationSocketPromise=null;throw error;}
+}
+const pluginWS=Object.freeze({
+  call: async (plugin,method,params={})=>{ const socket=await connectApplicationSocket(); const id=String(++applicationSequence); return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{applicationPending.delete(id);reject(new Error("plugin request timed out"));},10000); applicationPending.set(id,{resolve,reject,timer}); socket.send(JSON.stringify({id,plugin,method,params}));}); },
+  on: (plugin,event,listener)=>{ const key=`${plugin}:${event}`, listeners=applicationListeners.get(key)||new Set(); listeners.add(listener); applicationListeners.set(key,listeners); return ()=>{listeners.delete(listener);if(!listeners.size)applicationListeners.delete(key);}; },
+});
+function pluginUI() { return Object.freeze({ escape: escapeHtml, toast, Card: ({title="",body="",className=""}={})=>{const card=document.createElement("article");card.className=`metric ${className}`;card.innerHTML=`<span>${escapeHtml(title)}</span>${body}`;return card;}, SectionTitle: title=>{const head=document.createElement("div");head.className="section-head";head.innerHTML=`<h2>${escapeHtml(title)}</h2>`;return head;}, EmptyState: ({title="Nothing here",message=""}={})=>{const root=document.createElement("div");root.className="empty";root.innerHTML=`<h2>${escapeHtml(title)}</h2><p>${escapeHtml(message)}</p>`;return root;} }); }
+function registerPluginNavigation(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginNavigation.has(entry.id)||$(entry.id+"Page")) throw new Error("invalid or duplicate plugin navigation entry"); const button=document.createElement("button");button.className="nav";button.type="button";button.dataset.page=entry.id;button.title=entry.title||entry.id;button.innerHTML=`<span class="nav-icon">${escapeHtml(entry.icon||"•")}</span><span class="nav-label">${escapeHtml(entry.title||entry.id)}</span>`;document.querySelector("nav").insertBefore(button,$('[data-page="settings"]'));const page=document.createElement("section");page.id=entry.id+"Page";page.className="page";document.querySelector("main").append(page);pluginNavigation.set(entry.id,{...entry,button,page,extension});button.addEventListener("click",()=>setPage(entry.id));}
+function registerPluginOverview(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginOverview.has(entry.id)) throw new Error("invalid or duplicate overview card"); pluginOverview.set(entry.id,{...entry,extension}); }
+function registerPluginSettings(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginSettings.has(entry.id)) throw new Error("invalid or duplicate settings section"); pluginSettings.set(entry.id,{...entry,extension}); }
 
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
@@ -71,21 +97,26 @@ function setConnected(ok) {
 }
 
 function applyTheme(theme) {
-  const isDark = theme === "dark";
+  const scheme = ["system","light","dark"].includes(theme) ? theme : "system";
+  const isDark = scheme === "system" ? matchMedia("(prefers-color-scheme: dark)").matches : scheme === "dark";
+  document.documentElement.dataset.style = "runpilot-default";
   document.documentElement.dataset.theme = isDark ? "dark" : "light";
-  localStorage.setItem(themeStorageKey, isDark ? "dark" : "light");
+  document.documentElement.dataset.scheme = scheme;
+  localStorage.setItem(themeStorageKey, scheme);
   const toggle = $("themeToggle");
   toggle.setAttribute("aria-pressed", String(isDark));
-  toggle.title = isDark ? "Switch to light theme" : "Switch to dark theme";
-  toggle.innerHTML = isDark ? "☀ <span>Light theme</span>" : "☾ <span>Dark theme</span>";
+  toggle.title = `Color scheme: ${scheme}. Click to change.`;
+  toggle.innerHTML = `${isDark ? "☾" : "☀"} <span>${scheme === "system" ? "System theme" : `${scheme[0].toUpperCase()+scheme.slice(1)} theme`}</span>`;
 }
 
 function initializeTheme() {
   const saved = localStorage.getItem(themeStorageKey);
-  applyTheme(saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+  applyTheme(saved || "system");
   $("themeToggle").addEventListener("click", () => {
-    applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+    const current=document.documentElement.dataset.scheme||"system";
+    applyTheme(current === "system" ? "light" : current === "light" ? "dark" : "system");
   });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if(document.documentElement.dataset.scheme === "system") applyTheme("system"); });
 }
 
 function setSidebarCollapsed(collapsed) {
@@ -378,7 +409,10 @@ async function loadPluginExtensions(extensions) {
   const active = new Set((extensions || []).map(extension => extension.id));
   for (const [id, loaded] of pluginExtensions) {
     if (!active.has(id)) {
-      loaded.root?.remove();
+      if (typeof loaded.root === "function") loaded.root(); else loaded.root?.remove();
+      for (const [key, entry] of pluginNavigation) if (entry.extension === id) { entry.button.remove(); entry.page.remove(); pluginNavigation.delete(key); }
+      for (const [key, entry] of pluginOverview) if (entry.extension === id) pluginOverview.delete(key);
+      for (const [key, entry] of pluginSettings) if (entry.extension === id) pluginSettings.delete(key);
       pluginExtensions.delete(id);
     }
   }
@@ -393,12 +427,16 @@ async function loadPluginExtensions(extensions) {
     }
     const module = await import(extension.module);
     if (typeof module.activate !== "function") throw new Error(`Plugin ${extension.id} does not export activate()`);
-    const runpilot = {
-      api,
-      remote: {
-        registerProviderUI: metadata => window.RunPilotRemoteUI?.registerProvider(extension.id, metadata),
-      },
-    };
+    const runpilot = Object.freeze({
+      ui: pluginUI(),
+      navigation: Object.freeze({ register: entry => registerPluginNavigation(extension.id, entry) }),
+      overview: Object.freeze({ register: entry => registerPluginOverview(extension.id, entry), render: renderOverview }),
+      settings: Object.freeze({ register: entry => registerPluginSettings(extension.id, entry) }),
+      ws: pluginWS,
+      // Temporary first-party Remote compatibility while that core feature has
+      // not migrated. It is intentionally not part of the public plugin API.
+      remote: Object.freeze({ registerProviderUI: metadata => window.RunPilotRemoteUI?.registerProvider(extension.id, metadata) }),
+    });
     pluginExtensions.set(extension.id, { module, root: await module.activate(runpilot) });
   }
 }
@@ -410,6 +448,8 @@ function renderPluginSettings() {
     const manifest=status.manifest||{}, busy=pluginBusy.has(manifest.id), enabled=!!status.enabled, state=status.message || status.state || "installed";
     return `<article class="row"><label class="check"><input type="checkbox" ${enabled?"checked":""} ${busy?"disabled":""} onchange="togglePlugin('${escapeHtml(manifest.id)}',this.checked)"><span><strong>${escapeHtml(manifest.name||manifest.id)}</strong><span class="meta">${escapeHtml(manifest.description||((manifest.capabilities||[]).map(capability => capability.type || capability).join(" · ")))} · v${escapeHtml(manifest.version||"")}</span></span></label><span class="status ${enabled ? "running" : "stopped"}">${escapeHtml(busy ? "Updating" : state)}${status.restartRequired ? " · Restart required" : ""}</span></article>`;
   }).join("");
+  const featureRoot=$("pluginFeatureSettings"); featureRoot.replaceChildren();
+  for (const entry of pluginSettings.values()) { try { const section=document.createElement("section"); section.className="overview-section"; const content=entry.render(); if(content) section.append(content); featureRoot.append(section); } catch(error) { console.error(`plugin settings ${entry.id}`,error); } }
 }
 async function togglePlugin(id, enabled) {
   if (pluginBusy.has(id)) return; pluginBusy.add(id); renderPluginSettings();
@@ -562,26 +602,11 @@ async function openVNCRemoteSession(session) {
 
 function renderOverview() {
   if (!overview) return;
-  const host = overview.host || {};
-  const memoryUsed = Math.max(0, (host.memoryTotalBytes || 0) - (host.memoryFreeBytes || 0));
   $("overviewMetrics").innerHTML = [
-    utilizationMetric("CPU", host.cpuPercent, host.cpuAveragePercent, "blue"),
-    utilizationMetric("GPU", host.gpuPercent, host.gpuAveragePercent, "pink", host.gpuAvailable),
-    `<div class="metric"><span>Memory</span><strong>${escapeHtml(`${fmtBytes(memoryUsed)} / ${fmtBytes(host.memoryTotalBytes)}`)}</strong>${meter(percent(memoryUsed, host.memoryTotalBytes), "violet")}</div>`,
     ["Tasks", `${overview.runningTasks || 0} running / ${overview.taskCount || 0}`, percent(overview.runningTasks || 0, overview.taskCount || 0), "green"],
   ].map(metric => Array.isArray(metric) ? `<div class="metric"><span>${metric[0]}</span><strong>${escapeHtml(metric[1])}</strong>${meter(metric[2], metric[3])}</div>` : metric).join("");
-
-  const disks = host.disks || [];
-  $("diskDetails").innerHTML = disks.length ? disks.map(disk => {
-    const used = Math.max(0, (disk.totalBytes || 0) - (disk.freeBytes || 0));
-    const usedPercent = percent(used, disk.totalBytes);
-    return `<article class="disk-card">
-      <h3>${escapeHtml(disk.path)}</h3>
-      <div class="disk-summary"><span>${fmtBytes(disk.freeBytes)} free from ${fmtBytes(disk.totalBytes)}</span><strong>${fmtPercent(usedPercent)} used</strong></div>
-      ${meter(usedPercent, usedPercent >= 90 ? "red" : "blue")}
-    </article>`;
-  }).join("") : `<div class="empty compact"><h2>No disk metrics</h2><p>Disk information is not available.</p></div>`;
-  $("diskDetails").classList.toggle("disk-grid", disks.length > 0);
+  for (const entry of pluginOverview.values()) { try { const node=entry.render(); if(node) $("overviewMetrics").append(node); } catch(error) { console.error(`plugin overview ${entry.id}`,error); } }
+  $("diskDetails").closest("section").classList.add("hidden");
 
   const issues = overview.issues || [];
   $("issueCount").textContent = issues.length ? `${issues.length} issue${issues.length === 1 ? "" : "s"}` : "No issues";
@@ -1137,7 +1162,8 @@ function setPage(page) {
   document.querySelectorAll(".nav").forEach(n => n.classList.toggle("active", n.dataset.page === page));
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
   $(`${page}Page`).classList.add("active");
-  const [title, action] = pageMeta[page];
+  const registered = pluginNavigation.get(page);
+  const [title, action] = pageMeta[page] || [registered?.title || page, null];
   $("pageTitle").textContent = title;
   $("primaryAction").textContent = action || "";
   $("primaryAction").classList.toggle("hidden", !action);
@@ -1149,6 +1175,7 @@ function setPage(page) {
 	if (page === "remote") renderRemote();
 	if (page === "settings") renderPluginSettings();
 	if (page === "terminal" && terminalInfo?.available && terminalTabs.length === 0) newTerminal();
+	if (registered) { registered.page.replaceChildren(); registered.render(registered.page); }
   refresh();
 }
 
@@ -1399,6 +1426,7 @@ $("loginForm").addEventListener("submit", async e => {
     $("loginDialog").close();
     setConnected(true);
     await loadTerminalInfo();
+    await connectApplicationSocket();
     await refresh();
     startAutoRefresh();
     startConnectionMonitor();
@@ -1418,6 +1446,7 @@ $("loginForm").addEventListener("submit", async e => {
   }
   setConnected(false);
   startConnectionMonitor();
+  try { await connectApplicationSocket(); } catch (e) { toast(e.message); }
   await refresh();
   const requestedSession = new URLSearchParams(location.search).get("remoteSession");
   if (requestedSession) { setPage("remote"); await openRemoteSession(requestedSession); }

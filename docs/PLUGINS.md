@@ -19,6 +19,12 @@ The manifest uses a versioned plugin API and declares metadata, compatibility an
 
 There is no per-plugin permission list in the target architecture. All loaded plugins may use all published host capabilities. RunPilot normally runs unprivileged, so the service account's OS permissions remain authoritative.
 
+The implemented manifest accepts an optional `platforms` list containing only
+`linux` and `windows`; omitting it means platform-independent. Declared backend
+and frontend files must be present in a package. The legacy `permissions` field
+is no longer accepted. The precise package, ABI, capability and envelope
+contracts are in [PLUGIN_API.md](PLUGIN_API.md).
+
 ## Backend: WebAssembly
 
 Backend modules execute inside RunPilot through wazero. WASM is the binary runtime format, not the required source language: plugins may be authored in Go/TinyGo, Rust, C/C++ or another language targeting the supported WASM ABI.
@@ -32,6 +38,15 @@ runpilot_shutdown
 ```
 
 Calls exchange versioned structured data. Traps, malformed responses, initialization failures and timeouts must fail the plugin operation without taking down RunPilot.
+
+The v1 ABI's concrete linear-memory allocation and packed-buffer convention is
+implemented and documented in [PLUGIN_API.md](PLUGIN_API.md).
+
+First-party backend sources are built with TinyGo 0.38.0. The checked-in
+System plugin is the reference source implementation: run
+`go generate ./plugins/system/backend` before packaging it. TinyGo is never a
+runtime dependency. The optional `runpilot_event` ABI export receives generic
+host callbacks and is serialized with normal plugin calls.
 
 ## Host capability API
 
@@ -71,6 +86,10 @@ runpilot.ws
 ```
 
 Feature frontend code must not depend on private RunPilot JavaScript implementation details.
+
+The public namespaces and ownership boundary are defined now, but their
+registration hosts are Phase 5 work. Existing Remote frontend compatibility is
+temporary and is not a public API for new plugins.
 
 ## WebSocket protocol
 
@@ -121,3 +140,17 @@ First-party plugins live under `plugins/<plugin-id>` and build into deterministi
 The first complete reference implementation should be a small `system` plugin proving a real WASM backend, host capability calls, WebSocket RPC/events, a plugin-owned page, shared UI, Settings contribution, Overview cards, platform compatibility, packaging and restart activation.
 
 Only after this vertical slice is stable should existing RunPilot features be migrated one by one.
+
+## Reference system plugin
+
+The bundled `system` plugin is installed and activated through the normal
+`.rpplugin` validation and wazero runtime path. It provides the first plugin
+page and Overview cards through the shared frontend extension API, and obtains
+host metrics only via `host.system.status`. Generate its checked-in WASM module
+with `go generate ./plugins/system/backend`, then package it normally with
+`go run ./cmd/plugin-build plugins/system`.
+
+The fresh-install System package embeds the checked-in, source-derived WASM
+artifact used by `plugins/system/backend/plugin.wasm`; it is not a handwritten
+fallback. A test compares the embedded bytes with that build artifact, so
+end-user installation never requires TinyGo.

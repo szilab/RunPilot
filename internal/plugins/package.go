@@ -46,6 +46,9 @@ func InstallPackage(root, packagePath, expectedSHA256 string) (Manifest, error) 
 	if err != nil {
 		return Manifest{}, err
 	}
+	if err := validateArchiveAssets(archive.File, manifest); err != nil {
+		return Manifest{}, err
+	}
 	tempRoot, err := os.MkdirTemp(root, ".install-")
 	if err != nil {
 		return Manifest{}, err
@@ -99,6 +102,42 @@ func InstallPackage(root, packagePath, expectedSHA256 string) (Manifest, error) 
 		return Manifest{}, fmt.Errorf("activate plugin package: %w", err)
 	}
 	return manifest, nil
+}
+
+// ValidatePackageAssets makes declared entry points part of the immutable
+// package contract. A manifest must never point at an asset that was omitted
+// from the archive.
+func ValidatePackageAssets(manifest Manifest, exists func(string) bool) error {
+	for _, asset := range manifestAssets(manifest) {
+		if !exists(asset) {
+			return fmt.Errorf("plugin package is missing declared asset %q", asset)
+		}
+	}
+	return nil
+}
+
+func manifestAssets(manifest Manifest) []string {
+	var assets []string
+	if manifest.Backend != nil {
+		assets = append(assets, manifest.Backend.Module)
+	}
+	if manifest.Frontend != nil {
+		assets = append(assets, manifest.Frontend.Module)
+		if manifest.Frontend.Stylesheet != "" {
+			assets = append(assets, manifest.Frontend.Stylesheet)
+		}
+	}
+	return assets
+}
+
+func validateArchiveAssets(entries []*zip.File, manifest Manifest) error {
+	files := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		if !entry.FileInfo().IsDir() {
+			files[entry.Name] = true
+		}
+	}
+	return ValidatePackageAssets(manifest, func(name string) bool { return files[name] })
 }
 
 func manifestFromArchive(entries []*zip.File) (Manifest, error) {

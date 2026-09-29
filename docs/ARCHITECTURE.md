@@ -24,6 +24,10 @@ The core contains only:
 
 The core must not contain product-specific knowledge such as Docker containers, backup repositories, scheduled tasks, terminals, Xpra, RDP, VNC or package managers.
 
+The current codebase is in the incremental transition: those legacy domains
+remain operational until a plugin reaches parity. Phase 1 freezes framework
+contracts only; it does not yet remove or migrate feature implementations.
+
 ```text
 RunPilot Core
 ├── Plugin Runtime
@@ -70,6 +74,11 @@ host.log.*
 All loaded plugins may use all published capabilities. There is intentionally no manifest permission matrix. The OS account running RunPilot remains the security boundary.
 
 Capabilities must nevertheless be narrow, explicit and stable. Avoid generic syscall-style escape hatches and validate inputs at the capability boundary.
+
+RPC and generic host callbacks are serialized per loaded WASM instance. This
+lets plugins retain ordinary in-memory state while asynchronous host work stays
+outside a WASM call. First-party backends are built with TinyGo and shipped as
+precompiled WASM; RunPilot never requires the compiler at runtime.
 
 ## Browser/server communication
 
@@ -140,6 +149,11 @@ Framework configuration and plugin enablement remain under the RunPilot data dir
 RunPilot normally runs without root/Administrator privileges. The service account's OS permissions are authoritative. WASM still isolates plugin memory and prevents direct coupling to Go internals, but it is not intended as a per-plugin trust policy.
 
 Host capabilities must validate inputs and preserve RunPilot invariants. Browser/server authentication applies to the shared WebSocket.
+
+Plugin schedules and ad-hoc processes are generic runtime capabilities, not
+feature proxies. Scheduler callbacks and process output are routed back through
+the serialized WASM event entry point, while browser publication uses the
+existing application WebSocket fanout with bounded, lossy per-client queues.
 
 ## Architectural guardrails
 

@@ -39,6 +39,12 @@ func buildPackage(source, output string) error {
 	if err := manifest.Validate(); err != nil {
 		return err
 	}
+	if err := plugins.ValidatePackageAssets(manifest, func(asset string) bool {
+		info, err := os.Stat(filepath.Join(source, filepath.FromSlash(asset)))
+		return err == nil && !info.IsDir()
+	}); err != nil {
+		return err
+	}
 	if filepath.Ext(output) != ".rpplugin" {
 		output = filepath.Join(output, manifest.ID+"-"+manifest.Version+".rpplugin")
 	}
@@ -127,6 +133,7 @@ func readManifest(source string) plugins.Manifest {
 	}
 	var manifest plugins.Manifest
 	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
+	decoder.KnownFields(true)
 	if err := decoder.Decode(&manifest); err != nil {
 		fail(err.Error())
 	}

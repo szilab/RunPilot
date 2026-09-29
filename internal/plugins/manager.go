@@ -111,7 +111,9 @@ func (m *Manager) Statuses() []Status {
 	for _, plugin := range m.plugins {
 		enabled := m.enabled(plugin.manifest)
 		state := StateInstalled
-		if enabled {
+		if !plugin.manifest.CompatibleHere() {
+			state = StateIncompatible
+		} else if enabled {
 			state = StateEnabled
 		}
 		if plugin.message != nil {
@@ -150,6 +152,18 @@ func (m *Manager) Manifest(id string) (Manifest, bool) {
 	return plugin.manifest, true
 }
 
+// PackageDir returns the immutable installed package directory. It is used by
+// the generic runtime loader; callers must not derive paths from plugin IDs.
+func (m *Manager) PackageDir(id string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	plugin := m.plugins[id]
+	if plugin == nil {
+		return "", false
+	}
+	return plugin.dir, true
+}
+
 func (m *Manager) AssetPath(id, relative string) (string, error) {
 	m.mu.RLock()
 	plugin := m.plugins[id]
@@ -180,7 +194,7 @@ func (m *Manager) FrontendExtensions() []FrontendExtension {
 	defer m.mu.RUnlock()
 	result := make([]FrontendExtension, 0, len(m.plugins))
 	for id, plugin := range m.plugins {
-		if !m.enabled(plugin.manifest) || plugin.manifest.Frontend == nil {
+		if !m.enabled(plugin.manifest) || !plugin.manifest.CompatibleHere() || plugin.manifest.Frontend == nil {
 			continue
 		}
 		result = append(result, FrontendExtension{ID: id, Module: "/plugins/" + id + "/" + plugin.manifest.Frontend.Module, Stylesheet: stylesheetURL(id, plugin.manifest.Frontend.Stylesheet)})

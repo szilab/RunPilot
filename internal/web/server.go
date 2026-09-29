@@ -35,20 +35,22 @@ import (
 var staticFS embed.FS
 
 type Server struct {
-	ctrl              *core.Controller
-	basePath          string
-	tickets           map[string]downloadTicket
-	ticketMu          sync.Mutex
-	terminal          *terminal.Manager
-	terminalTickets   map[string]terminalTicket
-	terminalTicketMu  sync.Mutex
-	remoteTickets     map[string]remoteClientTicket
-	remoteTicketMu    sync.Mutex
-	transportTickets  map[string]remoteTransportTicket
-	transportTicketMu sync.Mutex
-	rdpCredentials    map[string]rdpCredentials
-	rdpCredentialMu   sync.Mutex
-	docker            *dockercompose.Manager
+	ctrl                *core.Controller
+	basePath            string
+	tickets             map[string]downloadTicket
+	ticketMu            sync.Mutex
+	terminal            *terminal.Manager
+	terminalTickets     map[string]terminalTicket
+	terminalTicketMu    sync.Mutex
+	remoteTickets       map[string]remoteClientTicket
+	remoteTicketMu      sync.Mutex
+	transportTickets    map[string]remoteTransportTicket
+	transportTicketMu   sync.Mutex
+	rdpCredentials      map[string]rdpCredentials
+	rdpCredentialMu     sync.Mutex
+	applicationTickets  map[string]time.Time
+	applicationTicketMu sync.Mutex
+	docker              *dockercompose.Manager
 }
 type terminalTicket struct {
 	Shell        string
@@ -80,7 +82,7 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, terminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), terminalTickets: map[string]terminalTicket{}, remoteTickets: map[string]remoteClientTicket{}, transportTickets: map[string]remoteTransportTicket{}, rdpCredentials: map[string]rdpCredentials{}, docker: ctrl.Docker()}, nil
+	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, terminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), terminalTickets: map[string]terminalTicket{}, remoteTickets: map[string]remoteClientTicket{}, transportTickets: map[string]remoteTransportTicket{}, rdpCredentials: map[string]rdpCredentials{}, applicationTickets: map[string]time.Time{}, docker: ctrl.Docker()}, nil
 }
 
 func (s *Server) BasePath() string { return s.basePath }
@@ -94,6 +96,7 @@ func (s *Server) Handler() http.Handler {
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/v1/system", s.handleSystem)
+	api.HandleFunc("POST /api/v1/ws/ticket", s.handleApplicationTicket)
 	api.HandleFunc("GET /api/v1/plugins", s.handlePlugins)
 	api.HandleFunc("GET /api/v1/plugins/runtime", s.handlePluginRuntime)
 	api.HandleFunc("PUT /api/v1/plugins/{id}", s.handlePluginUpdate)
@@ -176,6 +179,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/v1/software/providers/{id}/refresh", s.handleSoftwareRefresh)
 
 	mux.Handle("/api/", s.auth(api))
+	mux.HandleFunc("GET /api/v1/ws", s.handleApplicationWS)
 	// The embedded upstream HTML5 client cannot attach a Bearer header to every
 	// asset and WebSocket request. It receives only a scoped, HttpOnly,
 	// path-scoped cookie after an authenticated client-ticket request.

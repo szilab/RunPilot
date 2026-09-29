@@ -16,10 +16,107 @@ type Scheduler struct {
 	cancel chan struct{}
 	wg     sync.WaitGroup
 	runner *jobs.Runner
+	plugin map[string]*pluginSchedule
 }
 
 func New(runner *jobs.Runner) *Scheduler {
-	return &Scheduler{runner: runner}
+	return &Scheduler{runner: runner, plugin: map[string]*pluginSchedule{}}
+}
+
+// PluginSchedule is a small, data-only registration. IDs are unique within an
+// owner; Scheduler keeps the owner namespace private to callers.
+type PluginSchedule struct {
+	Owner, ID, Callback string
+	Schedule            model.ScheduleSpec
+	Data                []byte
+}
+type pluginSchedule struct {
+	value  PluginSchedule
+	cancel chan struct{}
+	done   chan struct{}
+}
+
+// RegisterPlugin reuses the scheduler's existing schedule compiler while
+// keeping callbacks outside its timing loop. The callback must return quickly.
+func (s *Scheduler) RegisterPlugin(value PluginSchedule, fire func(PluginSchedule)) error {
+	if strings.TrimSpace(value.Owner) == "" || strings.TrimSpace(value.ID) == "" || strings.TrimSpace(value.Callback) == "" {
+		return fmt.Errorf("plugin schedule owner, id, and callback are required")
+	}
+	next, err := compile(value.Schedule)
+	if err != nil {
+		return err
+	}
+	key := value.Owner + "\x00" + value.ID
+	s.mu.Lock()
+	if _, exists := s.plugin[key]; exists {
+		s.mu.Unlock()
+		return fmt.Errorf("schedule %q already exists", value.ID)
+	}
+	item := &pluginSchedule{value: value, cancel: make(chan struct{}), done: make(chan struct{})}
+	s.plugin[key] = item
+	s.mu.Unlock()
+	go func() {
+		defer close(item.done)
+		for {
+			delay := time.Until(next(time.Now()))
+			if delay < 0 {
+				delay = time.Second
+			}
+			timer := time.NewTimer(delay)
+			select {
+			case <-item.cancel:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return
+			case <-timer.C:
+				go fire(value)
+			}
+		}
+	}()
+	return nil
+}
+func (s *Scheduler) RemovePlugin(owner, id string) bool {
+	key := owner + "\x00" + id
+	s.mu.Lock()
+	item := s.plugin[key]
+	if item != nil {
+		delete(s.plugin, key)
+	}
+	s.mu.Unlock()
+	if item == nil {
+		return false
+	}
+	close(item.cancel)
+	<-item.done
+	return true
+}
+func (s *Scheduler) RemovePluginOwner(owner string) {
+	s.mu.Lock()
+	ids := make([]string, 0)
+	for key := range s.plugin {
+		if strings.HasPrefix(key, owner+"\x00") {
+			ids = append(ids, strings.TrimPrefix(key, owner+"\x00"))
+		}
+	}
+	s.mu.Unlock()
+	for _, id := range ids {
+		s.RemovePlugin(owner, id)
+	}
+}
+func (s *Scheduler) ListPlugin(owner string) []PluginSchedule {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []PluginSchedule{}
+	for _, item := range s.plugin {
+		if item.value.Owner == owner {
+			out = append(out, item.value)
+		}
+	}
+	return out
 }
 
 func (s *Scheduler) Reload(defs []model.JobDefinition) error {
@@ -70,6 +167,15 @@ func (s *Scheduler) loop(cancel <-chan struct{}, item scheduledJob) {
 }
 
 func (s *Scheduler) Stop() {
+	s.mu.Lock()
+	owners := map[string]bool{}
+	for key := range s.plugin {
+		owners[strings.SplitN(key, "\x00", 2)[0]] = true
+	}
+	s.mu.Unlock()
+	for owner := range owners {
+		s.RemovePluginOwner(owner)
+	}
 	s.mu.Lock()
 	cancel := s.cancel
 	s.cancel = nil

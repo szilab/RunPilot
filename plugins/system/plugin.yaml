@@ -1,11 +1,13 @@
 apiVersion: runpilot.plugin/v1
-id: remote.xpra
-name: Xpra
-description: Xpra remote access provider
+id: system
+name: System
+description: Host status and resource usage
 version: 1.0.0
 requires:
   runpilotApi: 1
-platforms: [linux]
+platforms: [linux, windows]
+backend:
+  module: backend/plugin.wasm
 frontend:
   module: web/plugin.js
   stylesheet: web/plugin.css

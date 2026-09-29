@@ -5,10 +5,6 @@ description: VNC remote access provider
 version: 1.0.0
 requires:
   runpilotApi: 1
-capabilities:
-  - type: remote-provider
-    id: vnc
 frontend:
   module: web/plugin.js
   stylesheet: web/plugin.css
-permissions: [network, plugin-config]

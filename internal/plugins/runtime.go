@@ -1,11 +1,14 @@
 package plugins
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tetratelabs/wazero"
@@ -13,21 +16,76 @@ import (
 )
 
 const (
-	DefaultCallTimeout = 5 * time.Second
-	exportInit         = "runpilot_init"
-	exportCall         = "runpilot_call"
-	exportShutdown     = "runpilot_shutdown"
+	DefaultCallTimeout   = 5 * time.Second
+	exportInit           = "runpilot_init"
+	exportCall           = "runpilot_call"
+	exportShutdown       = "runpilot_shutdown"
+	exportEvent          = "runpilot_event"
+	exportAlloc          = "runpilot_alloc"
+	exportReset          = "runpilot_reset"
+	hostModuleName       = "runpilot"
+	CapabilityAPIVersion = 1
 )
 
-// Host is the narrow data-oriented ABI surface exposed to a backend module.
-// Implementations must enforce permissions before performing privileged work.
+// Host is the small data-only capability surface published in Phase 1. It is
+// not a permission interface: every loaded plugin can use every published
+// capability. Implementations still validate inputs and preserve invariants.
 type Host interface {
 	Log(context.Context, string) error
 	ConfigGet(context.Context, string) (json.RawMessage, error)
 	ConfigSet(context.Context, string, json.RawMessage) error
+	SystemStatus(context.Context) (json.RawMessage, error)
+}
+
+// StorageHost is optional so embedders that only publish a subset of
+// capabilities remain source compatible. Values are JSON and are isolated by
+// the runtime-supplied plugin ID; plugins never receive a host filesystem path.
+type StorageHost interface {
+	StorageGet(context.Context, string, string) (json.RawMessage, error)
+	StorageSet(context.Context, string, string, json.RawMessage) error
+}
+type SchedulerHost interface {
+	ScheduleRegister(context.Context, string, json.RawMessage) (json.RawMessage, error)
+	ScheduleRemove(context.Context, string, string) error
+	ScheduleList(context.Context, string) (json.RawMessage, error)
+}
+type ProcessHost interface {
+	ProcessStart(context.Context, string, json.RawMessage) (json.RawMessage, error)
+	ProcessStatus(context.Context, string, string) (json.RawMessage, error)
+	ProcessTerminate(context.Context, string, string) (json.RawMessage, error)
+}
+type EventHost interface {
+	PublishEvent(context.Context, string, string, json.RawMessage) error
+}
+
+// LifecycleHost releases owner-scoped asynchronous work when a runtime stops.
+type LifecycleHost interface{ PluginStopped(string) }
+
+// CapabilityError is stable data returned across the WASM boundary. It never
+// exposes Go errors, pointers, handles, or implementation types.
+type CapabilityError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type capabilityRequest struct {
+	APIVersion int             `json:"apiVersion"`
+	Capability string          `json:"capability"`
+	Params     json.RawMessage `json:"params"`
+}
+type capabilityResponse struct {
+	OK     bool             `json:"ok"`
+	Result json.RawMessage  `json:"result,omitempty"`
+	Error  *CapabilityError `json:"error,omitempty"`
+}
+type lifecycleRequest struct {
+	APIVersion int             `json:"apiVersion"`
+	Operation  string          `json:"operation,omitempty"`
+	Request    json.RawMessage `json:"request,omitempty"`
 }
 
 type Runtime struct {
+	mu       sync.Mutex // wazero instances are entered serially by design.
 	context  context.Context
 	runtime  wazero.Runtime
 	compiled wazero.CompiledModule
@@ -36,29 +94,44 @@ type Runtime struct {
 	host     Host
 }
 
+// LoadRuntime loads one backend and invokes runpilot_init. The module must
+// export linear memory, runpilot_alloc(i32)->i32 and each lifecycle function as
+// (i32 pointer, i32 length)->i64. The i64 packs output pointer in its high 32
+// bits and output length in its low 32 bits.
 func LoadRuntime(ctx context.Context, packageDir string, manifest Manifest, host Host) (*Runtime, error) {
+	if err := manifest.Validate(); err != nil {
+		return nil, err
+	}
 	if manifest.Backend == nil {
 		return nil, fmt.Errorf("plugin %q has no backend", manifest.ID)
 	}
-	modulePath := packageDir + "/" + manifest.Backend.Module
-	wasm, err := os.ReadFile(modulePath)
+	wasm, err := os.ReadFile(filepath.Join(packageDir, filepath.FromSlash(manifest.Backend.Module)))
 	if err != nil {
+		return nil, fmt.Errorf("read plugin %q backend: %w", manifest.ID, err)
+	}
+	runtime := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithCloseOnContextDone(true))
+	loaded := &Runtime{context: ctx, runtime: runtime, manifest: manifest, host: host}
+	if err := loaded.instantiateHost(ctx); err != nil {
+		_ = runtime.Close(ctx)
 		return nil, err
 	}
-	runtime := wazero.NewRuntime(ctx)
 	compiled, err := runtime.CompileModule(ctx, wasm)
 	if err != nil {
 		_ = runtime.Close(ctx)
 		return nil, fmt.Errorf("compile plugin %q: %w", manifest.ID, err)
 	}
+	loaded.compiled = compiled
 	module, err := runtime.InstantiateModule(ctx, compiled, wazero.NewModuleConfig().WithName(manifest.ID))
 	if err != nil {
-		_ = compiled.Close(ctx)
-		_ = runtime.Close(ctx)
+		_ = loaded.Close(ctx)
 		return nil, fmt.Errorf("initialize plugin %q: %w", manifest.ID, err)
 	}
-	loaded := &Runtime{context: ctx, runtime: runtime, compiled: compiled, module: module, manifest: manifest, host: host}
-	if _, err := loaded.call(ctx, exportInit, nil); err != nil {
+	loaded.module = module
+	if err := loaded.validateABI(); err != nil {
+		_ = loaded.Close(ctx)
+		return nil, err
+	}
+	if _, err := loaded.invoke(ctx, exportInit, lifecycleRequest{APIVersion: PluginABIVersion}); err != nil {
 		_ = loaded.Close(ctx)
 		return nil, err
 	}
@@ -69,46 +142,390 @@ func (r *Runtime) Call(ctx context.Context, operation string, request any, respo
 	if strings.TrimSpace(operation) == "" {
 		return fmt.Errorf("plugin operation is required")
 	}
-	payload, err := json.Marshal(map[string]any{"operation": operation, "request": request})
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return fmt.Errorf("marshal plugin request: %w", err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	result, err := r.invoke(ctx, exportCall, lifecycleRequest{APIVersion: PluginABIVersion, Operation: operation, Request: payload})
 	if err != nil {
 		return err
 	}
-	result, err := r.call(ctx, exportCall, payload)
-	if err != nil {
-		return err
-	}
-	if response != nil && len(result) != 0 {
+	if response != nil {
 		if err := json.Unmarshal(result, response); err != nil {
-			return fmt.Errorf("plugin returned invalid JSON: %w", err)
+			return fmt.Errorf("plugin %q returned invalid JSON: %w", r.manifest.ID, err)
 		}
 	}
 	return nil
 }
 
-func (r *Runtime) call(parent context.Context, name string, payload []byte) ([]byte, error) {
+// Event delivers a generic host-originated event to a loaded plugin. Calls and
+// events are serialized per runtime, so plugin authors need not make module
+// state concurrently safe. The host never holds this lock while performing
+// process I/O or scheduler work.
+func (r *Runtime) Event(ctx context.Context, event string, data any) error {
+	if strings.TrimSpace(event) == "" {
+		return fmt.Errorf("plugin event is required")
+	}
+	if r.module.ExportedFunction(exportEvent) == nil {
+		return fmt.Errorf("plugin %q does not support host events", r.manifest.ID)
+	}
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshal plugin event: %w", err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, err = r.invoke(ctx, exportEvent, lifecycleRequest{APIVersion: PluginABIVersion, Operation: event, Request: payload})
+	return err
+}
+
+func (r *Runtime) invoke(parent context.Context, name string, value any) ([]byte, error) {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(parent, DefaultCallTimeout)
 	defer cancel()
+	if reset := r.module.ExportedFunction(exportReset); reset != nil {
+		if _, err := reset.Call(ctx); err != nil {
+			return nil, fmt.Errorf("plugin %q reset allocator: %w", r.manifest.ID, err)
+		}
+	}
+	pointer, err := r.allocate(ctx, uint32(len(payload)))
+	if err != nil {
+		return nil, fmt.Errorf("plugin %q %s input: %w", r.manifest.ID, name, err)
+	}
+	if len(payload) != 0 && !r.module.Memory().Write(pointer, payload) {
+		return nil, fmt.Errorf("plugin %q %s input exceeds linear memory", r.manifest.ID, name)
+	}
 	function := r.module.ExportedFunction(name)
 	if function == nil {
 		return nil, fmt.Errorf("plugin %q does not export %s", r.manifest.ID, name)
 	}
-	// ABI v1 reserves the function boundary for scalar values. A module that
-	// does not implement the expected signature is rejected rather than guessed.
-	if len(function.Definition().ParamTypes()) != 0 || len(function.Definition().ResultTypes()) > 1 {
-		return nil, fmt.Errorf("plugin %q has invalid %s ABI", r.manifest.ID, name)
-	}
-	if _, err := function.Call(ctx); err != nil {
+	result, err := function.Call(ctx, uint64(pointer), uint64(len(payload)))
+	if err != nil {
 		return nil, fmt.Errorf("plugin %q %s failed: %w", r.manifest.ID, name, err)
 	}
-	return nil, nil
+	if len(result) != 1 {
+		return nil, fmt.Errorf("plugin %q has invalid %s ABI", r.manifest.ID, name)
+	}
+	outputPointer, outputLength := unpackBuffer(result[0])
+	output, ok := r.module.Memory().Read(outputPointer, outputLength)
+	if !ok {
+		return nil, fmt.Errorf("plugin %q %s returned an invalid linear-memory buffer", r.manifest.ID, name)
+	}
+	output = append([]byte(nil), output...) // plugin owns mutable WASM memory after return.
+	if !json.Valid(output) {
+		return nil, fmt.Errorf("plugin %q %s returned malformed JSON", r.manifest.ID, name)
+	}
+	return output, nil
+}
+
+func (r *Runtime) validateABI() error {
+	if r.module.Memory() == nil {
+		return fmt.Errorf("plugin %q does not export linear memory", r.manifest.ID)
+	}
+	if err := r.requireFunction(exportAlloc, []api.ValueType{api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}); err != nil {
+		return err
+	}
+	for _, name := range []string{exportInit, exportCall, exportShutdown} {
+		if err := r.requireFunction(name, []api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI64}); err != nil {
+			return err
+		}
+	}
+	if event := r.module.ExportedFunction(exportEvent); event != nil {
+		if err := r.requireFunction(exportEvent, []api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI64}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (r *Runtime) requireFunction(name string, params, results []api.ValueType) error {
+	function := r.module.ExportedFunction(name)
+	if function == nil {
+		return fmt.Errorf("plugin %q does not export %s", r.manifest.ID, name)
+	}
+	definition := function.Definition()
+	if !sameValueTypes(definition.ParamTypes(), params) || !sameValueTypes(definition.ResultTypes(), results) {
+		return fmt.Errorf("plugin %q has invalid %s ABI", r.manifest.ID, name)
+	}
+	return nil
+}
+func sameValueTypes(got, want []api.ValueType) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+func (r *Runtime) allocate(ctx context.Context, length uint32) (uint32, error) {
+	result, err := r.module.ExportedFunction(exportAlloc).Call(ctx, uint64(length))
+	if err != nil || len(result) != 1 {
+		if err == nil {
+			err = fmt.Errorf("invalid allocator result")
+		}
+		return 0, err
+	}
+	return uint32(result[0]), nil
+}
+func packBuffer(pointer, length uint32) uint64   { return uint64(pointer)<<32 | uint64(length) }
+func unpackBuffer(value uint64) (uint32, uint32) { return uint32(value >> 32), uint32(value) }
+
+func (r *Runtime) instantiateHost(ctx context.Context) error {
+	_, err := r.runtime.NewHostModuleBuilder(hostModuleName).NewFunctionBuilder().WithFunc(r.hostCall).Export("host_call").Instantiate(ctx)
+	if err != nil {
+		return fmt.Errorf("initialize RunPilot capability host: %w", err)
+	}
+	return nil
+}
+
+// hostCall is imported as runpilot.host_call(i32, i32)->i64. It exchanges JSON
+// through the plugin's linear memory using the same allocator/result convention.
+func (r *Runtime) hostCall(ctx context.Context, module api.Module, pointer, length uint32) uint64 {
+	request, ok := module.Memory().Read(pointer, length)
+	if !ok {
+		return r.writeHostResponse(ctx, module, capabilityFailure("invalid_argument", "capability request exceeds linear memory"))
+	}
+	return r.writeHostResponse(ctx, module, r.dispatchCapability(ctx, request))
+}
+func (r *Runtime) writeHostResponse(ctx context.Context, module api.Module, response capabilityResponse) uint64 {
+	payload, err := json.Marshal(response)
+	if err != nil {
+		return 0
+	}
+	allocator := module.ExportedFunction(exportAlloc)
+	if allocator == nil {
+		return 0
+	}
+	result, err := allocator.Call(ctx, uint64(len(payload)))
+	if err != nil || len(result) != 1 {
+		return 0
+	}
+	pointer := uint32(result[0])
+	if len(payload) != 0 && !module.Memory().Write(pointer, payload) {
+		return 0
+	}
+	return packBuffer(pointer, uint32(len(payload)))
+}
+func (r *Runtime) dispatchCapability(ctx context.Context, payload []byte) capabilityResponse {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var request capabilityRequest
+	if err := decoder.Decode(&request); err != nil || decoder.More() {
+		return capabilityFailure("invalid_argument", "capability request must be a valid envelope")
+	}
+	if request.APIVersion != CapabilityAPIVersion {
+		return capabilityFailure("unsupported_api", fmt.Sprintf("capability API version %d is not supported", request.APIVersion))
+	}
+	if r.host == nil {
+		return capabilityFailure("unavailable", "RunPilot capability host is unavailable")
+	}
+	switch request.Capability {
+	case "log.write":
+		var args struct {
+			Message string `json:"message"`
+		}
+		if err := decodeParams(request.Params, &args); err != nil || strings.TrimSpace(args.Message) == "" {
+			return capabilityFailure("invalid_argument", "log.write requires a non-empty message")
+		}
+		if err := r.host.Log(ctx, args.Message); err != nil {
+			return capabilityFailure("failed", "log.write failed")
+		}
+		return capabilitySuccess(nil)
+	case "config.get":
+		var args struct {
+			Key string `json:"key"`
+		}
+		if err := decodeParams(request.Params, &args); err != nil || strings.TrimSpace(args.Key) == "" {
+			return capabilityFailure("invalid_argument", "config.get requires a key")
+		}
+		value, err := r.host.ConfigGet(ctx, args.Key)
+		if err != nil {
+			return capabilityFailure("failed", "config.get failed")
+		}
+		return capabilitySuccess(value)
+	case "config.set":
+		var args struct {
+			Key   string          `json:"key"`
+			Value json.RawMessage `json:"value"`
+		}
+		if err := decodeParams(request.Params, &args); err != nil || strings.TrimSpace(args.Key) == "" || !json.Valid(args.Value) {
+			return capabilityFailure("invalid_argument", "config.set requires a key and JSON value")
+		}
+		if err := r.host.ConfigSet(ctx, args.Key, args.Value); err != nil {
+			return capabilityFailure("failed", "config.set failed")
+		}
+		return capabilitySuccess(nil)
+	case "system.status":
+		if len(request.Params) != 0 && string(request.Params) != "{}" && string(request.Params) != "null" {
+			return capabilityFailure("invalid_argument", "system.status does not accept parameters")
+		}
+		value, err := r.host.SystemStatus(ctx)
+		if err != nil {
+			return capabilityFailure("failed", "system.status failed")
+		}
+		if !json.Valid(value) {
+			return capabilityFailure("failed", "system.status returned invalid JSON")
+		}
+		return capabilitySuccess(value)
+	case "storage.get":
+		var args struct {
+			Key string `json:"key"`
+		}
+		if err := decodeParams(request.Params, &args); err != nil || !validStorageKey(args.Key) {
+			return capabilityFailure("invalid_argument", "storage.get requires a valid key")
+		}
+		storage, ok := r.host.(StorageHost)
+		if !ok {
+			return capabilityFailure("unavailable", "plugin storage is unavailable")
+		}
+		value, err := storage.StorageGet(ctx, r.manifest.ID, args.Key)
+		if err != nil {
+			return capabilityFailure("failed", "storage.get failed")
+		}
+		return capabilitySuccess(value)
+	case "storage.set":
+		var args struct {
+			Key   string          `json:"key"`
+			Value json.RawMessage `json:"value"`
+		}
+		if err := decodeParams(request.Params, &args); err != nil || !validStorageKey(args.Key) || !json.Valid(args.Value) {
+			return capabilityFailure("invalid_argument", "storage.set requires a valid key and JSON value")
+		}
+		storage, ok := r.host.(StorageHost)
+		if !ok {
+			return capabilityFailure("unavailable", "plugin storage is unavailable")
+		}
+		if err := storage.StorageSet(ctx, r.manifest.ID, args.Key, args.Value); err != nil {
+			return capabilityFailure("failed", "storage.set failed")
+		}
+		return capabilitySuccess(nil)
+	case "scheduler.register":
+		scheduler, ok := r.host.(SchedulerHost)
+		if !ok {
+			return capabilityFailure("unavailable", "scheduler is unavailable")
+		}
+		value, err := scheduler.ScheduleRegister(ctx, r.manifest.ID, request.Params)
+		if err != nil {
+			return capabilityFailure("failed", "scheduler.register failed")
+		}
+		return capabilitySuccess(value)
+	case "scheduler.remove":
+		var args struct {
+			ID string `json:"id"`
+		}
+		if err := decodeParams(request.Params, &args); err != nil || strings.TrimSpace(args.ID) == "" {
+			return capabilityFailure("invalid_argument", "scheduler.remove requires id")
+		}
+		scheduler, ok := r.host.(SchedulerHost)
+		if !ok {
+			return capabilityFailure("unavailable", "scheduler is unavailable")
+		}
+		if err := scheduler.ScheduleRemove(ctx, r.manifest.ID, args.ID); err != nil {
+			return capabilityFailure("failed", "scheduler.remove failed")
+		}
+		return capabilitySuccess(nil)
+	case "scheduler.list":
+		scheduler, ok := r.host.(SchedulerHost)
+		if !ok {
+			return capabilityFailure("unavailable", "scheduler is unavailable")
+		}
+		value, err := scheduler.ScheduleList(ctx, r.manifest.ID)
+		if err != nil {
+			return capabilityFailure("failed", "scheduler.list failed")
+		}
+		return capabilitySuccess(value)
+	case "process.start":
+		process, ok := r.host.(ProcessHost)
+		if !ok {
+			return capabilityFailure("unavailable", "process manager is unavailable")
+		}
+		value, err := process.ProcessStart(ctx, r.manifest.ID, request.Params)
+		if err != nil {
+			return capabilityFailure("failed", "process.start failed")
+		}
+		return capabilitySuccess(value)
+	case "process.status", "process.terminate":
+		var args struct {
+			ID string `json:"id"`
+		}
+		if err := decodeParams(request.Params, &args); err != nil || strings.TrimSpace(args.ID) == "" {
+			return capabilityFailure("invalid_argument", request.Capability+" requires id")
+		}
+		process, ok := r.host.(ProcessHost)
+		if !ok {
+			return capabilityFailure("unavailable", "process manager is unavailable")
+		}
+		var value json.RawMessage
+		var err error
+		if request.Capability == "process.status" {
+			value, err = process.ProcessStatus(ctx, r.manifest.ID, args.ID)
+		} else {
+			value, err = process.ProcessTerminate(ctx, r.manifest.ID, args.ID)
+		}
+		if err != nil {
+			return capabilityFailure("failed", request.Capability+" failed")
+		}
+		return capabilitySuccess(value)
+	case "events.publish":
+		var args struct {
+			Event string          `json:"event"`
+			Data  json.RawMessage `json:"data"`
+		}
+		if err := decodeParams(request.Params, &args); err != nil || strings.TrimSpace(args.Event) == "" || !json.Valid(args.Data) {
+			return capabilityFailure("invalid_argument", "events.publish requires event and JSON data")
+		}
+		events, ok := r.host.(EventHost)
+		if !ok {
+			return capabilityFailure("unavailable", "event publication is unavailable")
+		}
+		if err := events.PublishEvent(ctx, r.manifest.ID, args.Event, args.Data); err != nil {
+			return capabilityFailure("failed", "events.publish failed")
+		}
+		return capabilitySuccess(nil)
+	default:
+		return capabilityFailure("unknown_capability", "capability is not published by this RunPilot version")
+	}
+}
+
+func validStorageKey(key string) bool {
+	if key == "" || len(key) > 128 {
+		return false
+	}
+	for _, r := range key {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
+}
+func decodeParams(raw json.RawMessage, destination any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(destination)
+}
+func capabilitySuccess(value json.RawMessage) capabilityResponse {
+	if value == nil {
+		value = json.RawMessage("null")
+	}
+	return capabilityResponse{OK: true, Result: value}
+}
+func capabilityFailure(code, message string) capabilityResponse {
+	return capabilityResponse{OK: false, Error: &CapabilityError{Code: code, Message: message}}
 }
 
 func (r *Runtime) Close(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var shutdownErr error
 	if r.module != nil {
-		if function := r.module.ExportedFunction(exportShutdown); function != nil {
-			_, shutdownErr = function.Call(ctx)
-		}
+		_, shutdownErr = r.invoke(ctx, exportShutdown, lifecycleRequest{APIVersion: PluginABIVersion})
 		_ = r.module.Close(ctx)
 	}
 	if r.compiled != nil {
@@ -116,6 +533,9 @@ func (r *Runtime) Close(ctx context.Context) error {
 	}
 	if r.runtime != nil {
 		_ = r.runtime.Close(ctx)
+	}
+	if host, ok := r.host.(LifecycleHost); ok {
+		host.PluginStopped(r.manifest.ID)
 	}
 	return shutdownErr
 }

@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 )
 
@@ -13,18 +14,12 @@ const (
 type State string
 
 const (
-	StateAvailable    State = "available"
 	StateInstalled    State = "installed"
 	StateEnabled      State = "enabled"
 	StateLoaded       State = "loaded"
 	StateIncompatible State = "incompatible"
 	StateFailed       State = "failed"
 )
-
-type Capability struct {
-	Type string `yaml:"type" json:"type"`
-	ID   string `yaml:"id" json:"id"`
-}
 
 type BackendManifest struct {
 	Module string `yaml:"module" json:"module"`
@@ -35,16 +30,15 @@ type FrontendManifest struct {
 }
 
 type Manifest struct {
-	APIVersion   string            `yaml:"apiVersion" json:"apiVersion"`
-	ID           string            `yaml:"id" json:"id"`
-	Name         string            `yaml:"name" json:"name"`
-	Version      string            `yaml:"version" json:"version"`
-	Description  string            `yaml:"description,omitempty" json:"description,omitempty"`
-	Requires     Requires          `yaml:"requires" json:"requires"`
-	Capabilities []Capability      `yaml:"capabilities" json:"capabilities"`
-	Backend      *BackendManifest  `yaml:"backend,omitempty" json:"backend,omitempty"`
-	Frontend     *FrontendManifest `yaml:"frontend,omitempty" json:"frontend,omitempty"`
-	Permissions  []string          `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	APIVersion  string            `yaml:"apiVersion" json:"apiVersion"`
+	ID          string            `yaml:"id" json:"id"`
+	Name        string            `yaml:"name" json:"name"`
+	Version     string            `yaml:"version" json:"version"`
+	Description string            `yaml:"description,omitempty" json:"description,omitempty"`
+	Requires    Requires          `yaml:"requires" json:"requires"`
+	Platforms   []string          `yaml:"platforms,omitempty" json:"platforms,omitempty"`
+	Backend     *BackendManifest  `yaml:"backend,omitempty" json:"backend,omitempty"`
+	Frontend    *FrontendManifest `yaml:"frontend,omitempty" json:"frontend,omitempty"`
 }
 
 type Requires struct {
@@ -67,22 +61,17 @@ func (m Manifest) Validate() error {
 	if m.Requires.RunPilotAPI != PluginABIVersion {
 		return fmt.Errorf("plugin API version %d is not supported; RunPilot requires %d", m.Requires.RunPilotAPI, PluginABIVersion)
 	}
-	if len(m.Capabilities) == 0 {
-		return fmt.Errorf("at least one capability is required")
-	}
 	seen := map[string]struct{}{}
-	for _, capability := range m.Capabilities {
-		if !validID(capability.Type) || !validID(capability.ID) {
-			return fmt.Errorf("invalid capability %q/%q", capability.Type, capability.ID)
+	for _, platform := range m.Platforms {
+		platform = strings.ToLower(strings.TrimSpace(platform))
+		if platform != "windows" && platform != "linux" {
+			return fmt.Errorf("unsupported platform %q (supported: windows, linux)", platform)
 		}
-		key := capability.Type + ":" + capability.ID
+		key := platform
 		if _, ok := seen[key]; ok {
-			return fmt.Errorf("duplicate capability %q", key)
+			return fmt.Errorf("duplicate platform %q", key)
 		}
 		seen[key] = struct{}{}
-	}
-	if m.Backend == nil && m.Frontend == nil {
-		return fmt.Errorf("backend or frontend is required")
 	}
 	if m.Backend != nil && !safePackagePath(m.Backend.Module) {
 		return fmt.Errorf("invalid backend module path %q", m.Backend.Module)
@@ -92,6 +81,22 @@ func (m Manifest) Validate() error {
 	}
 	return nil
 }
+
+// Compatible reports whether this package can be activated on the current OS.
+// An empty platforms list means platform-independent.
+func (m Manifest) Compatible(goos string) bool {
+	if len(m.Platforms) == 0 {
+		return true
+	}
+	for _, platform := range m.Platforms {
+		if strings.EqualFold(platform, goos) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Manifest) CompatibleHere() bool { return m.Compatible(runtime.GOOS) }
 
 type Status struct {
 	Manifest         Manifest `json:"manifest"`
