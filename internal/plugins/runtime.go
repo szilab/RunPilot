@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -92,6 +93,7 @@ type Runtime struct {
 	module   api.Module
 	manifest Manifest
 	host     Host
+	v2       *abiV2State
 }
 
 // LoadRuntime loads one backend and invokes runpilot_init. The module must
@@ -102,6 +104,9 @@ func LoadRuntime(ctx context.Context, packageDir string, manifest Manifest, host
 	if err := manifest.Validate(); err != nil {
 		return nil, err
 	}
+	if err := manifest.CompatibilityError(runtime.GOOS); err != nil {
+		return nil, err
+	}
 	if manifest.Backend == nil {
 		return nil, fmt.Errorf("plugin %q has no backend", manifest.ID)
 	}
@@ -110,7 +115,7 @@ func LoadRuntime(ctx context.Context, packageDir string, manifest Manifest, host
 		return nil, fmt.Errorf("read plugin %q backend: %w", manifest.ID, err)
 	}
 	runtime := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithCloseOnContextDone(true))
-	loaded := &Runtime{context: ctx, runtime: runtime, manifest: manifest, host: host}
+	loaded := &Runtime{context: ctx, runtime: runtime, manifest: manifest, host: host, v2: newABIV2State()}
 	if err := loaded.instantiateHost(ctx); err != nil {
 		_ = runtime.Close(ctx)
 		return nil, err
@@ -131,7 +136,7 @@ func LoadRuntime(ctx context.Context, packageDir string, manifest Manifest, host
 		_ = loaded.Close(ctx)
 		return nil, err
 	}
-	if _, err := loaded.invoke(ctx, exportInit, lifecycleRequest{APIVersion: PluginABIVersion}); err != nil {
+	if _, err := loaded.invoke(ctx, exportInit, lifecycleRequest{APIVersion: loaded.manifest.Requires.RunPilotAPI}); err != nil {
 		_ = loaded.Close(ctx)
 		return nil, err
 	}
@@ -148,7 +153,7 @@ func (r *Runtime) Call(ctx context.Context, operation string, request any, respo
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	result, err := r.invoke(ctx, exportCall, lifecycleRequest{APIVersion: PluginABIVersion, Operation: operation, Request: payload})
+	result, err := r.invoke(ctx, exportCall, lifecycleRequest{APIVersion: r.manifest.Requires.RunPilotAPI, Operation: operation, Request: payload})
 	if err != nil {
 		return err
 	}
@@ -177,11 +182,18 @@ func (r *Runtime) Event(ctx context.Context, event string, data any) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, err = r.invoke(ctx, exportEvent, lifecycleRequest{APIVersion: PluginABIVersion, Operation: event, Request: payload})
+	_, err = r.invoke(ctx, exportEvent, lifecycleRequest{APIVersion: r.manifest.Requires.RunPilotAPI, Operation: event, Request: payload})
 	return err
 }
 
 func (r *Runtime) invoke(parent context.Context, name string, value any) ([]byte, error) {
+	if r.manifest.Requires.RunPilotAPI == PluginABIVersion2 {
+		return r.invokeV2(parent, name, value)
+	}
+	return r.invokeV1(parent, name, value)
+}
+
+func (r *Runtime) invokeV1(parent context.Context, name string, value any) ([]byte, error) {
 	payload, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
@@ -224,6 +236,9 @@ func (r *Runtime) invoke(parent context.Context, name string, value any) ([]byte
 }
 
 func (r *Runtime) validateABI() error {
+	if r.manifest.Requires.RunPilotAPI == PluginABIVersion2 {
+		return r.validateABIV2()
+	}
 	if r.module.Memory() == nil {
 		return fmt.Errorf("plugin %q does not export linear memory", r.manifest.ID)
 	}
@@ -278,7 +293,19 @@ func packBuffer(pointer, length uint32) uint64   { return uint64(pointer)<<32 | 
 func unpackBuffer(value uint64) (uint32, uint32) { return uint32(value >> 32), uint32(value) }
 
 func (r *Runtime) instantiateHost(ctx context.Context) error {
-	_, err := r.runtime.NewHostModuleBuilder(hostModuleName).NewFunctionBuilder().WithFunc(r.hostCall).Export("host_call").Instantiate(ctx)
+	builder := r.runtime.NewHostModuleBuilder(hostModuleName)
+	if r.manifest.Requires.RunPilotAPI == PluginABIVersion {
+		builder.NewFunctionBuilder().WithFunc(r.hostCall).Export("host_call")
+	} else {
+		builder.NewFunctionBuilder().WithFunc(r.v2InputLen).Export("input_len")
+		builder.NewFunctionBuilder().WithFunc(r.v2InputRead).Export("input_read")
+		builder.NewFunctionBuilder().WithFunc(r.v2OutputWrite).Export("output_write")
+		builder.NewFunctionBuilder().WithFunc(r.v2ResponseLen).Export("response_len")
+		builder.NewFunctionBuilder().WithFunc(r.v2ResponseRead).Export("response_read")
+		builder.NewFunctionBuilder().WithFunc(r.v2ResponseDrop).Export("response_drop")
+		builder.NewFunctionBuilder().WithFunc(r.v2HostCall).Export("host_call")
+	}
+	_, err := builder.Instantiate(ctx)
 	if err != nil {
 		return fmt.Errorf("initialize RunPilot capability host: %w", err)
 	}
@@ -525,7 +552,7 @@ func (r *Runtime) Close(ctx context.Context) error {
 	defer r.mu.Unlock()
 	var shutdownErr error
 	if r.module != nil {
-		_, shutdownErr = r.invoke(ctx, exportShutdown, lifecycleRequest{APIVersion: PluginABIVersion})
+		_, shutdownErr = r.invoke(ctx, exportShutdown, lifecycleRequest{APIVersion: r.manifest.Requires.RunPilotAPI})
 		_ = r.module.Close(ctx)
 	}
 	if r.compiled != nil {

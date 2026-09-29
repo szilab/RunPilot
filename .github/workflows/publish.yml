@@ -28,7 +28,7 @@ jobs:
         with:
           tinygo-version: "0.38.0"
 
-      - name: Build first-party System WASM
+      - name: Build System ABI test fixture
         run: go generate ./plugins/system/backend
 
       - name: Format check
@@ -50,10 +50,7 @@ jobs:
           go build -trimpath -ldflags="-s -w -X github.com/szilab/RunPilot/internal/version.Version=${BUILD_VERSION}" -o dist/runpilot-linux-amd64 ./cmd/runpilot
           mkdir -p dist/bundle
           cp dist/runpilot-linux-amd64 dist/bundle/runpilot
-          for plugin in system remote-xpra remote-rdp remote-vnc; do go run ./cmd/plugin-build -out dist "./plugins/$plugin"; done
-          go run ./cmd/plugin-build -index dist/plugins-index.json ./plugins/system ./plugins/remote-xpra ./plugins/remote-rdp ./plugins/remote-vnc
-          cp dist/*.rpplugin dist/plugins-index.json dist/bundle/
-          tar -C dist/bundle -czf dist/runpilot-linux-amd64.tar.gz runpilot *.rpplugin plugins-index.json
+          tar -C dist/bundle -czf dist/runpilot-linux-amd64.tar.gz runpilot
           sha256sum dist/runpilot-linux-amd64 > dist/runpilot-linux-amd64.sha256
           printf '%s\n' "$BUILD_VERSION" > dist/runpilot-linux-amd64.version
           cp install.sh dist/install.sh

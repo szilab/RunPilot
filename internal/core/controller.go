@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -79,21 +80,6 @@ func Open(dataDir string) (*Controller, error) {
 		setting, ok := c.config.Snapshot().Plugins[id]
 		return boolValue(setting.Enabled), ok && setting.Enabled != nil
 	})
-	if err := plugins.EnsureReferenceSystem(c.plugins.Root()); err != nil {
-		return nil, fmt.Errorf("install bundled system plugin: %w", err)
-	}
-	if err := c.config.Update(func(cfg *model.Config) error {
-		if cfg.Plugins == nil {
-			cfg.Plugins = map[string]model.PluginSettings{}
-		}
-		if _, exists := cfg.Plugins["system"]; !exists {
-			enabled := true
-			cfg.Plugins["system"] = model.PluginSettings{Enabled: &enabled}
-		}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
 	for _, pluginErr := range c.plugins.Reload() {
 		log.Printf("plugin discovery: %v", pluginErr)
 	}
@@ -104,6 +90,7 @@ func Open(dataDir string) (*Controller, error) {
 	if err := c.loadPluginRuntimes(); err != nil {
 		return nil, err
 	}
+	c.plugins.FreezeActivation()
 	if platform.CurrentCapabilities().DockerCompose {
 		c.storage = storage.NewRegistry(c.docker)
 	} else {
@@ -198,9 +185,14 @@ func boolValue(value *bool) bool { return value != nil && *value }
 func (c *Controller) SetPluginEnabled(id string, enabled bool) error {
 	c.pluginMu.Lock()
 	defer c.pluginMu.Unlock()
-	_, ok := c.plugins.Manifest(id)
+	manifest, ok := c.plugins.Manifest(id)
 	if !ok {
 		return fmt.Errorf("unknown plugin %q", id)
+	}
+	if enabled {
+		if err := manifest.CompatibilityError(runtime.GOOS); err != nil {
+			return err
+		}
 	}
 	value := enabled
 	if err := c.config.Update(func(cfg *model.Config) error {
@@ -216,15 +208,12 @@ func (c *Controller) SetPluginEnabled(id string, enabled bool) error {
 	return nil
 }
 
-// RescanPlugins discovers plugins and starts/registrations enabled entries as
-// one controller-level operation; discovery alone cannot create a split state.
+// RescanPlugins refreshes installed packages without changing active runtimes.
 func (c *Controller) RescanPlugins() []error {
 	c.pluginMu.Lock()
 	defer c.pluginMu.Unlock()
 	errs := c.plugins.Reload()
-	if err := c.loadPluginRuntimes(); err != nil {
-		errs = append(errs, err)
-	}
+	c.plugins.SetRestartRequired(true)
 	return errs
 }
 
@@ -255,10 +244,9 @@ func (c *Controller) loadPluginRuntimes() error {
 		}
 		runtime, err := plugins.LoadRuntime(context.Background(), dir, status.Manifest, controllerPluginHost{controller: c})
 		if err != nil {
-			for _, item := range loaded {
-				_ = item.Close(context.Background())
-			}
-			return fmt.Errorf("load plugin %q: %w", status.Manifest.ID, err)
+			c.plugins.SetFailure(status.Manifest.ID, err)
+			log.Printf("load plugin %q: %v", status.Manifest.ID, err)
+			continue
 		}
 		loaded[status.Manifest.ID] = runtime
 	}

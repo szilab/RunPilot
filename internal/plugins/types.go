@@ -2,13 +2,15 @@ package plugins
 
 import (
 	"fmt"
+	"path"
 	"runtime"
 	"strings"
 )
 
 const (
-	PluginAPIVersion = "runpilot.plugin/v1"
-	PluginABIVersion = 1
+	PluginAPIVersion  = "runpilot.plugin/v1"
+	PluginABIVersion  = 1
+	PluginABIVersion2 = 2
 )
 
 type State string
@@ -42,7 +44,10 @@ type Manifest struct {
 }
 
 type Requires struct {
-	RunPilotAPI int `yaml:"runpilotApi" json:"runpilotApi"`
+	// RunPilotAPI is the legacy field name for the raw WASM ABI, not an application version.
+	RunPilotAPI int    `yaml:"runpilotApi,omitempty" json:"runpilotApi,omitempty"`
+	Backend     string `yaml:"backend,omitempty" json:"backend,omitempty"`
+	Frontend    string `yaml:"frontend,omitempty" json:"frontend,omitempty"`
 }
 
 func (m Manifest) Validate() error {
@@ -55,11 +60,20 @@ func (m Manifest) Validate() error {
 	if strings.TrimSpace(m.Name) == "" {
 		return fmt.Errorf("plugin name is required")
 	}
-	if strings.TrimSpace(m.Version) == "" {
-		return fmt.Errorf("plugin version is required")
+	if err := ValidateVersion(m.Version); err != nil {
+		return err
 	}
-	if m.Requires.RunPilotAPI != PluginABIVersion {
-		return fmt.Errorf("plugin API version %d is not supported; RunPilot requires %d", m.Requires.RunPilotAPI, PluginABIVersion)
+	if err := m.Requires.Validate(); err != nil {
+		return err
+	}
+	if m.Backend != nil && m.Requires.Backend == "" {
+		return fmt.Errorf("backend contract requirement is required")
+	}
+	if m.Frontend != nil && m.Requires.Frontend == "" {
+		return fmt.Errorf("frontend contract requirement is required")
+	}
+	if m.Requires.RunPilotAPI < 0 || (m.Backend != nil && m.Requires.RunPilotAPI == 0) {
+		return fmt.Errorf("backend requires a positive raw WASM ABI version (runpilotApi)")
 	}
 	seen := map[string]struct{}{}
 	for _, platform := range m.Platforms {
@@ -85,30 +99,27 @@ func (m Manifest) Validate() error {
 // Compatible reports whether this package can be activated on the current OS.
 // An empty platforms list means platform-independent.
 func (m Manifest) Compatible(goos string) bool {
-	if len(m.Platforms) == 0 {
-		return true
-	}
-	for _, platform := range m.Platforms {
-		if strings.EqualFold(platform, goos) {
-			return true
-		}
-	}
-	return false
+	return m.CompatibilityError(goos) == nil
 }
 
 func (m Manifest) CompatibleHere() bool { return m.Compatible(runtime.GOOS) }
 
 type Status struct {
-	Manifest         Manifest `json:"manifest"`
-	Enabled          bool     `json:"enabled"`
-	State            State    `json:"state"`
-	Message          string   `json:"message,omitempty"`
-	InstalledVersion string   `json:"installedVersion,omitempty"`
-	UpdateAvailable  bool     `json:"updateAvailable,omitempty"`
-	RestartRequired  bool     `json:"restartRequired,omitempty"`
+	LoadedVersion    string         `json:"loadedVersion,omitempty"`
+	Loaded           bool           `json:"loaded"`
+	Source           *InstallSource `json:"source,omitempty"`
+	Manifest         Manifest       `json:"manifest"`
+	Enabled          bool           `json:"enabled"`
+	State            State          `json:"state"`
+	Message          string         `json:"message,omitempty"`
+	InstalledVersion string         `json:"installedVersion,omitempty"`
+	UpdateAvailable  bool           `json:"updateAvailable,omitempty"`
+	RestartRequired  bool           `json:"restartRequired,omitempty"`
 }
 
 func safePackagePath(value string) bool {
-	value = strings.TrimSpace(value)
-	return value != "" && !strings.HasPrefix(value, "/") && !strings.Contains(value, "\\") && value != "." && !strings.HasPrefix(value, "../") && !strings.Contains(value, "/../")
+	if strings.TrimSpace(value) != value || path.Clean(value) != value || strings.Contains(value, ":") {
+		return false
+	}
+	return value != "" && !strings.HasPrefix(value, "/") && !strings.Contains(value, "\\") && value != "." && value != ".." && !strings.HasPrefix(value, "../") && !strings.Contains(value, "/../")
 }

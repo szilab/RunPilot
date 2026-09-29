@@ -19,14 +19,24 @@ import (
 )
 
 func main() {
-	indexPath := flag.String("index", "", "write a catalog index instead of a package")
+	manifestOnly := flag.Bool("manifest", false, "validate and print manifest JSON")
+	tag := flag.String("tag", "", "require exact release tag matching manifest")
 	outPath := flag.String("out", "dist", "output file or directory")
 	flag.Parse()
 	if flag.NArg() == 0 {
 		fail("plugin source directory is required")
 	}
-	if *indexPath != "" {
-		buildIndex(flag.Args(), *indexPath)
+	manifest := readManifest(flag.Arg(0))
+	if err := manifest.Validate(); err != nil {
+		fail(err.Error())
+	}
+	if *tag != "" && *tag != plugins.ReleaseTag(manifest.ID, manifest.Version) {
+		fail("tag version does not match plugin.yaml")
+	}
+	if *manifestOnly {
+		if err := json.NewEncoder(os.Stdout).Encode(manifest); err != nil {
+			fail(err.Error())
+		}
 		return
 	}
 	if err := buildPackage(flag.Arg(0), *outPath); err != nil {
@@ -48,6 +58,11 @@ func buildPackage(source, output string) error {
 	if filepath.Ext(output) != ".rpplugin" {
 		output = filepath.Join(output, manifest.ID+"-"+manifest.Version+".rpplugin")
 	}
+	sourceAbs, _ := filepath.Abs(source)
+	outputAbs, _ := filepath.Abs(output)
+	if relative, err := filepath.Rel(sourceAbs, outputAbs); err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("output must be outside plugin source directory")
+	}
 	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
 		return err
 	}
@@ -61,8 +76,17 @@ func buildPackage(source, output string) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if info.IsDir() || filepath.Base(path) == ".git" {
+		if info.IsDir() {
+			if filepath.Base(path) == ".git" {
+				return filepath.SkipDir
+			}
 			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("non-regular package asset %s", path)
+		}
+		if filepath.Base(path) == ".runpilot-source.json" {
+			return fmt.Errorf("reserved package metadata path")
 		}
 		rel, err := filepath.Rel(source, path)
 		if err != nil {
@@ -102,6 +126,9 @@ func buildPackage(source, output string) error {
 	if fileCloseErr != nil {
 		return fileCloseErr
 	}
+	if _, err := plugins.InspectPackage(output); err != nil {
+		return err
+	}
 	data, err := os.ReadFile(output)
 	if err != nil {
 		return err
@@ -109,21 +136,6 @@ func buildPackage(source, output string) error {
 	hash := sha256.Sum256(data)
 	fmt.Printf("%s  %s\n", hex.EncodeToString(hash[:]), output)
 	return nil
-}
-
-func buildIndex(sources []string, output string) {
-	entries := make([]map[string]any, 0, len(sources))
-	for _, source := range sources {
-		manifest := readManifest(source)
-		entries = append(entries, map[string]any{"id": manifest.ID, "name": manifest.Name, "version": manifest.Version, "description": manifest.Description, "runpilotApi": manifest.Requires.RunPilotAPI, "asset": manifest.ID + "-" + manifest.Version + ".rpplugin"})
-	}
-	data, err := json.MarshalIndent(map[string]any{"apiVersion": 1, "plugins": entries}, "", "  ")
-	if err != nil {
-		fail(err.Error())
-	}
-	if err := os.WriteFile(output, append(data, '\n'), 0o644); err != nil {
-		fail(err.Error())
-	}
 }
 
 func readManifest(source string) plugins.Manifest {

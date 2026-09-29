@@ -15,7 +15,7 @@ func TestManifestValidate(t *testing.T) {
 		ID:         "remote.xpra",
 		Name:       "Xpra",
 		Version:    "1.0.0",
-		Requires:   Requires{RunPilotAPI: PluginABIVersion},
+		Requires:   Requires{Backend: ">=1.0.0 <2.0.0", Frontend: ">=1.0.0 <2.0.0", RunPilotAPI: PluginABIVersion},
 		Backend:    &BackendManifest{Module: "backend/plugin.wasm"},
 	}
 	if err := manifest.Validate(); err != nil {
@@ -24,14 +24,14 @@ func TestManifestValidate(t *testing.T) {
 }
 
 func TestManifestRejectsUnsupportedAPI(t *testing.T) {
-	manifest := Manifest{APIVersion: PluginAPIVersion, ID: "test", Name: "Test", Version: "1", Requires: Requires{RunPilotAPI: PluginABIVersion + 1}, Backend: &BackendManifest{Module: "backend/plugin.wasm"}}
-	if err := manifest.Validate(); err == nil {
-		t.Fatal("Validate() accepted an unsupported API")
+	manifest := Manifest{APIVersion: PluginAPIVersion, ID: "test", Name: "Test", Version: "1.0.0", Requires: Requires{Backend: ">=1.0.0 <2.0.0", Frontend: ">=1.0.0 <2.0.0", RunPilotAPI: PluginABIVersion2 + 1}, Backend: &BackendManifest{Module: "backend/plugin.wasm"}}
+	if err := manifest.CompatibilityError("linux"); err == nil {
+		t.Fatal("CompatibilityError() accepted an unsupported API")
 	}
 }
 
 func TestManifestPlatforms(t *testing.T) {
-	manifest := Manifest{APIVersion: PluginAPIVersion, ID: "test", Name: "Test", Version: "1", Requires: Requires{RunPilotAPI: PluginABIVersion}, Platforms: []string{"linux"}}
+	manifest := Manifest{APIVersion: PluginAPIVersion, ID: "test", Name: "Test", Version: "1.0.0", Requires: Requires{Backend: ">=1.0.0 <2.0.0", Frontend: ">=1.0.0 <2.0.0", RunPilotAPI: PluginABIVersion}, Platforms: []string{"linux"}}
 	if err := manifest.Validate(); err != nil {
 		t.Fatalf("linux manifest rejected: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestInstallPackageRejectsMissingDeclaredAssets(t *testing.T) {
 	if _, err := InstallPackage(t.TempDir(), packagePath, ""); err == nil {
 		t.Fatal("package with missing backend was accepted")
 	}
-	frontend := "apiVersion: runpilot.plugin/v1\nid: test.frontend\nname: Test\nversion: 1\nrequires:\n  runpilotApi: 1\nfrontend:\n  module: web/plugin.js\n  stylesheet: web/plugin.css\n"
+	frontend := "apiVersion: runpilot.plugin/v1\nid: test.frontend\nname: Test\nversion: 1.0.0\nrequires:\n  backend: '>=1.0.0 <2.0.0'\n  frontend: '>=1.0.0 <2.0.0'\n  runpilotApi: 1\nfrontend:\n  module: web/plugin.js\n  stylesheet: web/plugin.css\n"
 	packagePath = writePackage(t, map[string]string{"plugin.yaml": frontend, "web/plugin.js": "export function activate() {}"})
 	if _, err := InstallPackage(t.TempDir(), packagePath, ""); err == nil {
 		t.Fatal("package with missing frontend stylesheet was accepted")
@@ -91,7 +91,30 @@ func TestInstallPackageVerifiesChecksumAndInstallsAtomically(t *testing.T) {
 	}
 }
 
-const validManifest = "apiVersion: runpilot.plugin/v1\nid: remote.xpra\nname: Xpra\nversion: 1.0.0\nrequires:\n  runpilotApi: 1\nbackend:\n  module: backend/plugin.wasm\n"
+func TestInstallPackageAddsVersionBesideExistingPluginVersions(t *testing.T) {
+	root := t.TempDir()
+	first := writePackage(t, map[string]string{
+		"plugin.yaml":         "apiVersion: runpilot.plugin/v1\nid: remote.xpra\nname: Xpra\nversion: 1.0.0\nrequires:\n  backend: '>=1.0.0 <2.0.0'\n  frontend: '>=1.0.0 <2.0.0'\n  runpilotApi: 1\nbackend:\n  module: backend/plugin.wasm\n",
+		"backend/plugin.wasm": "v1",
+	})
+	if _, err := InstallPackage(root, first, ""); err != nil {
+		t.Fatal(err)
+	}
+	second := writePackage(t, map[string]string{
+		"plugin.yaml":         "apiVersion: runpilot.plugin/v1\nid: remote.xpra\nname: Xpra\nversion: 1.1.0\nrequires:\n  backend: '>=1.0.0 <2.0.0'\n  frontend: '>=1.0.0 <2.0.0'\n  runpilotApi: 1\nbackend:\n  module: backend/plugin.wasm\n",
+		"backend/plugin.wasm": "v2",
+	})
+	if _, err := InstallPackage(root, second, ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []string{"1.0.0", "1.1.0"} {
+		if _, err := os.Stat(filepath.Join(root, "remote.xpra", version, "plugin.yaml")); err != nil {
+			t.Fatalf("version %s not installed: %v", version, err)
+		}
+	}
+}
+
+const validManifest = "apiVersion: runpilot.plugin/v1\nid: remote.xpra\nname: Xpra\nversion: 1.0.0\nrequires:\n  backend: '>=1.0.0 <2.0.0'\n  frontend: '>=1.0.0 <2.0.0'\n  runpilotApi: 1\nbackend:\n  module: backend/plugin.wasm\n"
 
 func writePackage(t *testing.T, entries map[string]string) string {
 	t.Helper()

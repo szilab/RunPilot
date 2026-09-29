@@ -16,7 +16,7 @@ jobs:
       - uses: tinygo-org/setup-tinygo@v2
         with:
           tinygo-version: "0.38.0"
-      - name: Build first-party System WASM
+      - name: Build System ABI test fixture
         run: go generate ./plugins/system/backend
       - name: Format check
         run: test -z "$(gofmt -l .)"

@@ -4,10 +4,13 @@ import (
 	"archive/zip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -18,6 +21,10 @@ const MaxPackageSize = 64 << 20
 // InstallPackage validates an immutable plugin archive and atomically installs
 // it below root/id/version. Existing installations are never overwritten.
 func InstallPackage(root, packagePath, expectedSHA256 string) (Manifest, error) {
+	return installPackage(root, packagePath, expectedSHA256, nil, nil)
+}
+
+func installPackage(root, packagePath, expectedSHA256 string, expected *Manifest, source *InstallSource) (Manifest, error) {
 	info, err := os.Stat(packagePath)
 	if err != nil {
 		return Manifest{}, err
@@ -46,7 +53,16 @@ func InstallPackage(root, packagePath, expectedSHA256 string) (Manifest, error) 
 	if err != nil {
 		return Manifest{}, err
 	}
+	if err := manifest.CompatibilityError(runtime.GOOS); err != nil {
+		return Manifest{}, err
+	}
+	if expected != nil && (manifest.ID != expected.ID || manifest.Version != expected.Version || manifest.Requires != expected.Requires || !slices.Equal(manifest.Platforms, expected.Platforms)) {
+		return Manifest{}, fmt.Errorf("downloaded manifest does not match catalog metadata")
+	}
 	if err := validateArchiveAssets(archive.File, manifest); err != nil {
+		return Manifest{}, err
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		return Manifest{}, err
 	}
 	tempRoot, err := os.MkdirTemp(root, ".install-")
@@ -89,7 +105,16 @@ func InstallPackage(root, packagePath, expectedSHA256 string) (Manifest, error) 
 			return Manifest{}, err
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(filepath.Join(root, manifest.ID)), 0o755); err != nil {
+	if source != nil {
+		data, err := json.Marshal(source)
+		if err != nil {
+			return Manifest{}, err
+		}
+		if err := os.WriteFile(filepath.Join(installRoot, ".runpilot-source.json"), data, 0o644); err != nil {
+			return Manifest{}, err
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, manifest.ID), 0o755); err != nil {
 		return Manifest{}, err
 	}
 	finalRoot := filepath.Join(root, manifest.ID, manifest.Version)
@@ -98,7 +123,7 @@ func InstallPackage(root, packagePath, expectedSHA256 string) (Manifest, error) 
 	} else if !os.IsNotExist(err) {
 		return Manifest{}, err
 	}
-	if err := os.Rename(filepath.Join(tempRoot, manifest.ID), filepath.Join(root, manifest.ID)); err != nil {
+	if err := os.Rename(installRoot, finalRoot); err != nil {
 		return Manifest{}, fmt.Errorf("activate plugin package: %w", err)
 	}
 	return manifest, nil
@@ -132,7 +157,18 @@ func manifestAssets(manifest Manifest) []string {
 
 func validateArchiveAssets(entries []*zip.File, manifest Manifest) error {
 	files := make(map[string]bool, len(entries))
+	var total uint64
+	seen := map[string]bool{}
 	for _, entry := range entries {
+		name := strings.TrimSuffix(entry.Name, "/")
+		if !safePackagePath(name) || name == ".runpilot-source.json" || seen[name] || entry.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("unsafe, reserved or duplicate archive path %q", entry.Name)
+		}
+		seen[name] = true
+		if entry.UncompressedSize64 > MaxPackageSize || total > MaxPackageSize-entry.UncompressedSize64 {
+			return fmt.Errorf("expanded plugin package exceeds %d bytes", MaxPackageSize)
+		}
+		total += entry.UncompressedSize64
 		if !entry.FileInfo().IsDir() {
 			files[entry.Name] = true
 		}
@@ -171,4 +207,25 @@ func ensureWithin(root, target string) error {
 		return fmt.Errorf("plugin archive path escapes installation root")
 	}
 	return nil
+}
+
+// InspectPackage validates immutable contents for repository tooling on any OS.
+func InspectPackage(path string) (Manifest, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if info.Size() > MaxPackageSize {
+		return Manifest{}, fmt.Errorf("package exceeds size limit")
+	}
+	archive, err := zip.OpenReader(path)
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer archive.Close()
+	manifest, err := manifestFromArchive(archive.File)
+	if err != nil {
+		return Manifest{}, err
+	}
+	return manifest, validateArchiveAssets(archive.File, manifest)
 }

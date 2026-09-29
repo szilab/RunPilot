@@ -6,7 +6,7 @@ This plan migrates RunPilot from a feature-heavy core to a small plugin host. Mi
 
 Core contains only plugin runtime/lifecycle, versioned host capabilities, one authenticated browser/server WebSocket protocol, web shell/navigation, shared UI/design system, Overview/Settings extension hosts, replaceable style/theme infrastructure, and framework/plugin configuration.
 
-Tasks, System monitoring, Storage, Terminal, Docker, Software Management, Backup and Remote providers become first-party plugins.
+Feature migrations remain future work. Host/system metrics presentation is planned through plugin/widget contributions; the System reference fixture is not a permanent production feature.
 
 ## Phase 0 — restore a green baseline
 
@@ -42,6 +42,25 @@ validation, a linear-memory WASM ABI, a minimal `log`/`config` capability
 bridge, browser protocol envelopes and semantic style tokens are now present.
 The WebSocket transport and frontend registration hosts remain in their later
 phases; existing product APIs and Remote compatibility stay in place meanwhile.
+
+ABI-v2 host infrastructure and the TinyGo SDK remain implemented alongside ABI
+v1. System is a nonpublic technical test fixture. No Tasks migration or System
+feature development is part of the current publication/registry milestone.
+
+## Current priority — independent publication and installation
+
+Implemented: independent backend/frontend `1.0.0` contracts, strict package
+SemVer, contract constraints, deterministic packages and release records,
+repository publication policy, version-driven GitHub publication, static catalog
+generation, bounded catalog/download clients, SHA-256 verification, and Settings
+install/update/enable/disable/uninstall. Activation is restart-only. See
+[PLUGIN_REGISTRY.md](PLUGIN_REGISTRY.md) for operational details and test commands.
+
+System remains excluded from publication. Existing Remote scaffolds and examples
+are opt-in only; release policy must be deliberately enabled when a plugin is
+ready. No production release is created by local validation. Before feature
+migration resumes, continue ABI stress validation and define the separately
+planned widget contribution model only when needed.
 
 ## Phase 2 — WebSocket transport
 
@@ -84,37 +103,24 @@ Implement stable registration APIs for navigation/full pages, Overview cards, Se
 
 Acceptance: a plugin can add its menu/page without core feature code, use shared components, register settings inside common Settings and own Overview cards.
 
-## Phase 6 — reference `system` plugin
+## Phase 6 — retain the System technical fixture
 
-Build a small complete first-party plugin before complex migrations.
-
-Suggested scope:
-
-- real WASM backend;
-- hostname/platform/basic host metrics via `host.system.*`;
-- System navigation page;
-- CPU/memory/disk Overview cards;
-- one small Settings contribution if useful;
-- WS RPC and at least one event/update path;
-- Windows + Linux compatibility;
-- deterministic package/release output.
-
-The goal is architectural proof, not a large monitoring feature.
-
-Acceptance: install/enable/restart loads WASM, renders plugin-owned page/cards/settings through shared UI, communicates only through common WS, and disables without feature-specific core code.
+Keep the source-derived ABI fixture, repeated real-WASM/WebSocket tests and
+frontend extension coverage. Do not expand System into a user-facing production
+plugin, add metrics widgets, or migrate its ABI as part of registry work. It is
+not bundled/auto-enabled on fresh installations or published to the catalog.
 
 ## Phase 7 — migrate existing features incrementally
 
 Suggested order:
 
-1. System/host information;
-2. Tasks and execution history;
-3. Storage;
-4. Docker;
-5. Terminal;
-6. Software Management/Scoop;
-7. backup integrations;
-8. Remote Access providers: Xpra, RDP, VNC.
+1. Tasks and execution history (after the async ABI-v2 stress gate);
+2. Storage;
+3. Docker;
+4. Terminal;
+5. Software Management/Scoop;
+6. backup integrations;
+7. Remote Access providers: Xpra, RDP, VNC.
 
 For each migration: identify generic capability needs; add only missing host methods; implement backend WASM; move UI/settings/Overview contributions into the plugin; add parity/regression tests; validate applicable platforms; remove old core code only after parity passes.
 

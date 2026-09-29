@@ -4,6 +4,7 @@ name: Xpra
 description: Xpra remote access provider
 version: 1.0.0
 requires:
+  frontend: ">=1.0.0 <2.0.0"
   runpilotApi: 1
 platforms: [linux]
 frontend:

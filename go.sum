@@ -1,3 +1,5 @@
+github.com/Masterminds/semver/v3 v3.4.0 h1:Zog+i5UMtVoCU8oKka5P7i9q9HgrJeGzI9SA1Xbatp0=
+github.com/Masterminds/semver/v3 v3.4.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
 github.com/aymanbagabas/go-pty v0.2.2 h1:YZREB4eSj+1xdbbItIokX0ekjjeifgJOA+ZvxU4/WM8=
 github.com/aymanbagabas/go-pty v0.2.2/go.mod h1:gfvlwH+0U66BCwxJREjJaAOEs9H1OFf3YFjI9WSiZ04=
 github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=

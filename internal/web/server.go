@@ -98,6 +98,9 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/system", s.handleSystem)
 	api.HandleFunc("POST /api/v1/ws/ticket", s.handleApplicationTicket)
 	api.HandleFunc("GET /api/v1/plugins", s.handlePlugins)
+	api.HandleFunc("GET /api/v1/plugins/catalog", s.handlePluginCatalog)
+	api.HandleFunc("POST /api/v1/plugins/{id}/install", s.handlePluginInstall)
+	api.HandleFunc("DELETE /api/v1/plugins/{id}", s.handlePluginUninstall)
 	api.HandleFunc("GET /api/v1/plugins/runtime", s.handlePluginRuntime)
 	api.HandleFunc("PUT /api/v1/plugins/{id}", s.handlePluginUpdate)
 	api.HandleFunc("POST /api/v1/plugins/rescan", s.handlePluginRescan)
@@ -250,6 +253,7 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"plugins":         s.ctrl.Plugins().Statuses(),
 		"discoveryErrors": s.ctrl.Plugins().DiscoveryErrors(),
+		"restartRequired": s.ctrl.Plugins().RestartRequired(),
 	})
 }
 

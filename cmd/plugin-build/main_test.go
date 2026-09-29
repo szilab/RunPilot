@@ -12,7 +12,7 @@ func TestBuildPackageIsDeterministicAndValidatesAssets(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(source, "web"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	manifest := "apiVersion: runpilot.plugin/v1\nid: test.builder\nname: Builder\nversion: 1\nrequires:\n  runpilotApi: 1\nfrontend:\n  module: web/plugin.js\n"
+	manifest := "apiVersion: runpilot.plugin/v1\nid: test.builder\nname: Builder\nversion: 1.0.0\nrequires:\n  backend: '>=1.0.0 <2.0.0'\n  frontend: '>=1.0.0 <2.0.0'\n  runpilotApi: 1\nfrontend:\n  module: web/plugin.js\n"
 	if err := os.WriteFile(filepath.Join(source, "plugin.yaml"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}

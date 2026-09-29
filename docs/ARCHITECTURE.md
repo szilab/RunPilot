@@ -56,6 +56,14 @@ A plugin may contain three kinds of contribution:
 
 A plugin may be platform-independent, Linux-only or Windows-only. Compatibility is declared in its manifest; incompatible plugins are not activated.
 
+The WASM runtime supports explicit ABI v1 and ABI v2 manifest dispatch. The
+System reference plugin now uses ABI v2 through the first-party TinyGo SDK.
+ABI-v2 lifecycle inputs and outputs use host-owned invocation handles, and
+capability responses use invocation-scoped handles with synchronous copying.
+ABI v1 remains supported for existing plugins and its retained allocation
+behavior stays isolated in the v1 adapter. High-volume asynchronous
+scheduler/process callback validation remains pending before Tasks migration.
+
 ## Host capabilities
 
 WASM modules do not receive native Go objects, unrestricted memory access or direct access to RunPilot internals. Host functionality is exposed through a small versioned API, expected to grow around real needs:
@@ -134,7 +142,7 @@ Themes are not normal WASM plugins and execute neither backend code nor JavaScri
 
 ## Overview
 
-Overview is a core layout/extension host; its cards are plugin contributions. CPU/memory/disk cards belong to a system plugin, Docker status to Docker, and task status to Tasks. The core does not understand card semantics.
+Overview is a core layout/extension host; its cards are plugin contributions. Host metrics presentation is planned through plugin/widget contributions; the current System technical fixture is not a permanent production feature. Docker and task contributions remain future migrations. The core does not understand card semantics.
 
 ## Settings
 
@@ -167,3 +175,24 @@ existing application WebSocket fanout with bounded, lossy per-client queues.
 8. Preserve Windows/Linux support and declare plugin platform constraints explicitly.
 9. Migrate incrementally; remove old core implementations only after plugin parity and tests.
 10. Treat the plugin API, WebSocket protocol, capability API and design tokens as versioned public contracts.
+
+## Plugin publication and discovery
+
+First-party plugin source remains in this repository, but plugin SemVer releases
+are independent of the native application. Backend and frontend contract versions
+are explicitly `1.0.0`; raw WASM ABI 1/2 remains a separate calling convention.
+Manifests declare component contract ranges and platform support.
+
+Immutable `plugin-<id>-v<version>` GitHub releases store packages, checksums and
+publication records. A generated mutable `plugin-catalog/catalog.json` groups
+published versions. Repository tooling validates and deterministically regenerates
+it; one configurable first-party registry is supported. The client distinguishes
+latest published from latest compatible and verifies downloaded packages before
+using the existing atomic installer. Settings manages explicit installation,
+updates, enablement and removal, with startup-pinned activation and retained plugin
+data. No hot loading or automatic updates occur.
+
+System is retained solely as a nonpublic ABI/frontend integration fixture. Fresh
+startup no longer installs it; application releases no longer bundle plugins.
+Tasks and existing feature domains are not migrated by registry work. See
+[PLUGIN_REGISTRY.md](PLUGIN_REGISTRY.md) for schema, trust model and operations.

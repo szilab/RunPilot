@@ -48,7 +48,7 @@ func TestAsyncFixtureRealWASM(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	manifest := plugins.Manifest{APIVersion: plugins.PluginAPIVersion, ID: "async.fixture", Name: "Async fixture", Version: "1", Requires: plugins.Requires{RunPilotAPI: plugins.PluginABIVersion}, Backend: &plugins.BackendManifest{Module: "backend/plugin.wasm"}}
+	manifest := plugins.Manifest{APIVersion: plugins.PluginAPIVersion, ID: "async.fixture", Name: "Async fixture", Version: "1.0.0", Requires: plugins.Requires{Backend: ">=1.0.0 <2.0.0", Frontend: ">=1.0.0 <2.0.0", RunPilotAPI: plugins.PluginABIVersion}, Backend: &plugins.BackendManifest{Module: "backend/plugin.wasm"}}
 	runtime, err := plugins.LoadRuntime(context.Background(), pkg, manifest, controllerPluginHost{controller: c})
 	if err != nil {
 		t.Fatal(err)

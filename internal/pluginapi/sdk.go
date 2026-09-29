@@ -8,7 +8,14 @@ import (
 	"fmt"
 )
 
-const APIVersion = 1
+const (
+	// APIVersion is retained for the ABI-v1 capability helpers below.
+	APIVersion = 1
+	// LifecycleAPIVersion identifies the v2 lifecycle envelope consumed by
+	// ReadInput. CapabilityAPIVersion remains independently versioned at 1.
+	LifecycleAPIVersion  = 2
+	CapabilityAPIVersion = 1
+)
 
 // Keep allocations reachable for the lifetime of the module. The v1 ABI has
 // no free operation: the host copies returned bytes before the next call.
@@ -16,9 +23,24 @@ func PackedBytes(value uint64) []byte    { return Bytes(uint32(value>>32), uint3
 func Pack(pointer, length uint32) uint64 { return uint64(pointer)<<32 | uint64(length) }
 
 type Error struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    string          `json:"code"`
+	Message string          `json:"message"`
+	Details json.RawMessage `json:"details,omitempty"`
 }
+
+func (e *Error) Error() string {
+	if e == nil {
+		return "host capability failed"
+	}
+	if e.Code == "" {
+		return e.Message
+	}
+	if e.Message == "" {
+		return e.Code
+	}
+	return e.Code + ": " + e.Message
+}
+
 type hostResponse struct {
 	OK     bool            `json:"ok"`
 	Result json.RawMessage `json:"result"`

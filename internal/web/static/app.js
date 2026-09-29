@@ -12,6 +12,8 @@ let systemInfo = null, terminalInfo = null, terminalTabs = [], activeTerminalID 
 let dockerRuntime = null, dockerProjects = [], dockerVolumes = [], dockerNetworks = [], dockerBusy = new Set(), dockerPendingContainerStates = new Map(), dockerProjectErrors = new Map(), dockerEditing = null, dockerAttachTerminal = null;
 let remoteProviders = [], remoteTargets = [], remoteSessions = [], remoteSessionID = "", remoteStartingTargets = new Set(), remoteRDPInteraction = null, remoteVNCInteraction = null, remotePendingTarget = null, remoteVNCPendingCredentials = null;
 let pluginStatuses = [], pluginBusy = new Set();
+let pluginDiscoveryErrors = [], pluginRestartRequired = false;
+let pluginCatalog = [], pluginCatalogError = "", pluginCatalogLoaded = false, pluginCatalogLoading = false;
 let pluginExtensions = new Map();
 const pluginNavigation = new Map(), pluginOverview = new Map(), pluginSettings = new Map();
 let applicationSocket = null, applicationSocketPromise = null, applicationSequence = 0;
@@ -391,7 +393,7 @@ async function refresh() {
     if (currentPage === "software") renderSoftware();
     if (docker) applyDockerSnapshot(docker);
     if (remote) { [remoteProviders, remoteTargets, remoteSessions] = remote; renderRemote(); }
-    if (pluginSnapshot) { pluginStatuses = pluginSnapshot.plugins || []; renderPluginSettings(); }
+    if (pluginSnapshot) { pluginStatuses = pluginSnapshot.plugins || []; pluginDiscoveryErrors=pluginSnapshot.discoveryErrors || []; pluginRestartRequired=!!pluginSnapshot.restartRequired; renderPluginSettings(); if (!pluginCatalogLoaded && !pluginCatalogLoading) refreshPluginCatalog(); }
     if (frontendSnapshot) await loadPluginExtensions(frontendSnapshot);
     setConnected(true);
   } catch (e) {
@@ -443,10 +445,18 @@ async function loadPluginExtensions(extensions) {
 
 function renderPluginSettings() {
   const root = $("pluginSettings"); if (!root) return;
-  if (!pluginStatuses.length) { root.innerHTML = `<div class="empty compact"><p>No plugins were discovered.</p></div>`; return; }
-  root.innerHTML = pluginStatuses.map(status => {
-    const manifest=status.manifest||{}, busy=pluginBusy.has(manifest.id), enabled=!!status.enabled, state=status.message || status.state || "installed";
-    return `<article class="row"><label class="check"><input type="checkbox" ${enabled?"checked":""} ${busy?"disabled":""} onchange="togglePlugin('${escapeHtml(manifest.id)}',this.checked)"><span><strong>${escapeHtml(manifest.name||manifest.id)}</strong><span class="meta">${escapeHtml(manifest.description||((manifest.capabilities||[]).map(capability => capability.type || capability).join(" · ")))} · v${escapeHtml(manifest.version||"")}</span></span></label><span class="status ${enabled ? "running" : "stopped"}">${escapeHtml(busy ? "Updating" : state)}${status.restartRequired ? " · Restart required" : ""}</span></article>`;
+  const installed = new Map(pluginStatuses.map(status => [status.manifest.id, status]));
+  const catalog = new Map(pluginCatalog.map(entry => [entry.id, entry]));
+  const ids = [...new Set([...installed.keys(), ...catalog.keys()])].sort();
+  root.innerHTML = `${pluginRestartRequired ? '<p class="meta">Restart required to apply package and activation changes.</p>' : ""}${pluginDiscoveryErrors.map(error=>`<p class="meta">${escapeHtml(error)}</p>`).join("")}<p class="meta">${escapeHtml(pluginCatalogLoading ? "Checking catalog…" : pluginCatalogError || "Install packages, then enable them. Activation changes require a restart.")}</p>` + ids.map(id => {
+    const status=installed.get(id), entry=catalog.get(id), manifest=status?.manifest || entry || {}, busy=pluginBusy.has(id);
+    const enabled=!!status?.enabled, compatible=entry?.latestCompatible, manual=status && !status.source;
+    const update=!!status?.source && compatible && entry?.updateAvailable;
+    const state=status ? (status.message ? `${status.state === "incompatible" ? "Incompatible" : "Failed"}: ${status.message}` : `Installed · ${enabled ? "Enabled" : "Disabled"}${status.loaded ? ` · Loaded ${status.loadedVersion || ""}` : ""}`) : compatible ? "Available" : "Incompatible";
+    const buttons = status
+      ? `<button type="button" ${busy || (!enabled && status.state === "incompatible") ? "disabled" : ""} onclick="togglePlugin('${escapeHtml(id)}',${!enabled})">${enabled ? "Disable" : "Enable"}</button>${update ? `<button type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible)}')">Update to ${escapeHtml(compatible)}</button>` : ""}<button type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','uninstall')">Uninstall</button>`
+      : `<button type="button" ${busy || !compatible ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible || "")}')">Install${compatible ? " " + escapeHtml(compatible) : ""}</button>`;
+    return `<article class="row"><div><strong>${escapeHtml(manifest.name || id)}</strong><div class="meta">${escapeHtml(manifest.description || "")}</div><div class="meta">${status ? `Installed ${escapeHtml(manifest.version)} · ${manual ? "Local/manual" : "Catalog"}` : ""}${entry ? ` · Latest published ${escapeHtml(entry.latest)} · Latest compatible ${escapeHtml(compatible || "none")}` : ""}</div>${entry?.incompatibility ? `<div class="meta">Latest release: ${escapeHtml(entry.incompatibility)}</div>` : ""}<span class="status">${escapeHtml(busy ? "Updating…" : state)}${update ? " · Update available" : ""}${status?.restartRequired ? " · Restart required" : ""}</span></div><div class="actions">${buttons}</div></article>`;
   }).join("");
   const featureRoot=$("pluginFeatureSettings"); featureRoot.replaceChildren();
   for (const entry of pluginSettings.values()) { try { const section=document.createElement("section"); section.className="overview-section"; const content=entry.render(); if(content) section.append(content); featureRoot.append(section); } catch(error) { console.error(`plugin settings ${entry.id}`,error); } }
@@ -455,6 +465,24 @@ async function togglePlugin(id, enabled) {
   if (pluginBusy.has(id)) return; pluginBusy.add(id); renderPluginSettings();
   try { const response=await api(`api/v1/plugins/${encodeURIComponent(id)}`,{method:"PUT",body:JSON.stringify({enabled})}); pluginStatuses=response.plugins||pluginStatuses; }
   catch(error) { toastError(error.message); }
+  finally { pluginBusy.delete(id); renderPluginSettings(); }
+}
+
+async function refreshPluginCatalog() {
+  if (pluginCatalogLoading) return;
+  pluginCatalogLoading=true; renderPluginSettings();
+  try { const response=await api("api/v1/plugins/catalog"); pluginCatalog=response.plugins || []; pluginCatalogError=""; }
+  catch(error) { pluginCatalogError=`Catalog unavailable: ${error.message}`; }
+  finally { pluginCatalogLoaded=true; pluginCatalogLoading=false; renderPluginSettings(); }
+}
+async function managePlugin(id, action, version="") {
+  if (pluginBusy.has(id)) return;
+  if (action === "uninstall" && !confirm("Uninstall this package? Plugin data will be retained. Restart to finish deactivation.")) return;
+  pluginBusy.add(id); renderPluginSettings();
+  try {
+    const response=await api(`api/v1/plugins/${encodeURIComponent(id)}${action === "install" ? "/install" : ""}`, {method:action === "install" ? "POST" : "DELETE", ...(action === "install" ? {body:JSON.stringify({version})} : {})});
+    pluginStatuses=response.plugins || []; pluginRestartRequired=!!response.restartRequired; toast("Package changed. Restart required."); await refreshPluginCatalog();
+  } catch(error) { toastError(error.message); }
   finally { pluginBusy.delete(id); renderPluginSettings(); }
 }
 

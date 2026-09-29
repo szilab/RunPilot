@@ -4,6 +4,7 @@ name: RDP / Guacamole
 description: RDP remote access provider
 version: 1.0.0
 requires:
+  frontend: ">=1.0.0 <2.0.0"
   runpilotApi: 1
 frontend:
   module: web/plugin.js
