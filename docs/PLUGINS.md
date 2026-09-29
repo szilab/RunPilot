@@ -54,7 +54,11 @@ are in [PLUGIN_API.md](PLUGIN_API.md).
 
 First-party backend sources are built with TinyGo 0.38.0. The checked-in
 System plugin is the reference source implementation: run
-`go generate ./plugins/system/backend` before packaging it. TinyGo is never a
+`go generate ./plugins/system/backend` before packaging it. The Tasks plugin is
+the first feature backend: run `go generate ./plugins/tasks/backend` after
+changing it (the checked-in `plugin.wasm` is verified against the source when
+TinyGo is available). Stateful backends must build with `-gc=conservative`:
+TinyGo's default `wasm-unknown` collector never frees memory. TinyGo is never a
 runtime dependency. The optional `runpilot_event` ABI export receives generic
 host callbacks and is serialized with normal plugin calls.
 
@@ -68,6 +72,7 @@ host.fs.*
 host.network.*
 host.scheduler.*
 host.storage.*
+host.history.*
 host.system.*
 host.config.*
 host.log.*
@@ -158,4 +163,11 @@ registry testing. Production publication is an explicit version-driven action;
 application release workflows no longer bundle plugin artifacts.
 
 Host metrics presentation will use future plugin/widget contributions. No System
-feature expansion or Tasks migration is part of the registry implementation.
+feature expansion is part of the registry implementation.
+
+`plugins/tasks` is the first feature plugin (continuous and scheduled command
+tasks). It is registered in `plugins/publication.json` with `publish: false`,
+is not installed or enabled automatically, and does not replace the legacy
+Tasks page (its navigation entry is "Tasks (plugin)"). Backup is not part of
+it. Unit tests inject a fake host; `internal/core/tasks_plugin_test.go` runs the
+real ABI-v2 WASM through the normal controller path.

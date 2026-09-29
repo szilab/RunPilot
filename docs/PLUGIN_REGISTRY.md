@@ -53,7 +53,8 @@ contract/platform requirements match. Build metadata does not imply an update.
 maps an ID to its source directory and an explicit `publish` boolean. It is not
 part of runtime manifests. System is `publish: false`; it remains a technical
 ABI/frontend/WebSocket fixture and is no longer installed on fresh startup.
-Existing manual System installations are not deleted. Remote packages are
+Existing manual System installations are not deleted. The Tasks plugin is
+registered with `publish: false` until its legacy cutover is reviewed. Remote packages are
 currently compatibility scaffolding, so publication stays disabled until they
 are complete. The hello example is buildable and locally testable; opt in using
 a temporary policy for publication tests. There is intentionally no public

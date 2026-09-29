@@ -132,7 +132,7 @@ func (s *Scheduler) Reload(defs []model.JobDefinition) error {
 		compiled = append(compiled, scheduledJob{def: def, next: next})
 	}
 
-	s.Stop()
+	s.stopJobs()
 
 	cancel := make(chan struct{})
 	s.mu.Lock()
@@ -176,6 +176,12 @@ func (s *Scheduler) Stop() {
 	for owner := range owners {
 		s.RemovePluginOwner(owner)
 	}
+	s.stopJobs()
+}
+
+// stopJobs stops only the legacy job loops. Reload uses it so reloading job
+// definitions never drops schedules registered by plugins.
+func (s *Scheduler) stopJobs() {
 	s.mu.Lock()
 	cancel := s.cancel
 	s.cancel = nil

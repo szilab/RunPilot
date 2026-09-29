@@ -36,7 +36,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - uses: tinygo-org/setup-tinygo@v2
+      - uses: acifani/setup-tinygo@v3
         with:
           tinygo-version: '0.38.0'
       - name: Validate and build selected version
@@ -54,7 +54,7 @@ jobs:
           test "$(jq -r .id manifest.json)" = "$PLUGIN_ID"
           module=$(jq -r '.backend.module // empty' manifest.json)
           if [ -n "$module" ]; then
-            GOOS=js GOARCH=wasm tinygo build -target=wasm-unknown -tags=runpilot_wasm -scheduler=none -no-debug -o "$source_dir/$module" "./$source_dir/backend"
+            GOOS=js GOARCH=wasm tinygo build -target=wasm-unknown -tags=runpilot_wasm -scheduler=none -gc=conservative -stack-size=64kb -no-debug -o "$source_dir/$module" "./$source_dir/backend"
           fi
           while IFS= read -r -d '' script; do node --input-type=module --check < "$script"; done < <(find "$source_dir" -name '*.js' -print0)
           go test ./internal/plugins ./internal/pluginapi ./cmd/plugin-build ./cmd/plugin-catalog

@@ -64,3 +64,26 @@ func TestIntervalExpression(t *testing.T) {
 		t.Fatalf("unexpected expression %q", got)
 	}
 }
+
+// Reloading legacy job definitions (for example after editing a job) must not
+// drop schedules that plugins registered.
+func TestReloadKeepsPluginSchedules(t *testing.T) {
+	s := New(nil)
+	defer s.Stop()
+	value := PluginSchedule{Owner: "tasks", ID: "one", Callback: "tick", Schedule: model.ScheduleSpec{Type: model.ScheduleInterval, IntervalSeconds: 3600}}
+	if err := s.RegisterPlugin(value, func(PluginSchedule) {}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := s.Reload(nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(s.ListPlugin("tasks")) != 1 {
+		t.Fatal("Reload removed a plugin schedule")
+	}
+	s.Stop()
+	if len(s.ListPlugin("tasks")) != 0 {
+		t.Fatal("Stop must remove plugin schedules")
+	}
+}

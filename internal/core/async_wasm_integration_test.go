@@ -26,7 +26,7 @@ func TestAsyncFixtureRealWASM(t *testing.T) {
 	}
 	root := filepath.Join("..", "..")
 	wasm := filepath.Join(t.TempDir(), "plugin.wasm")
-	build := exec.Command(tinygo, "build", "-target=wasm-unknown", "-tags=runpilot_wasm", "-scheduler=none", "-no-debug", "-o", wasm, "./plugins/test-fixtures/async/backend")
+	build := exec.Command(tinygo, "build", "-target=wasm-unknown", "-tags=runpilot_wasm", "-scheduler=none", "-gc=conservative", "-no-debug", "-o", wasm, "./plugins/test-fixtures/async/backend")
 	build.Dir = root
 	build.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
 	if output, err := build.CombinedOutput(); err != nil {

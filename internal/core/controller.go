@@ -49,7 +49,24 @@ type Controller struct {
 	eventMu             sync.RWMutex
 	eventSubscribers    map[uint64]chan plugins.Event
 	nextEventSubscriber uint64
+	// loading holds a channel per plugin whose backend is initializing; events
+	// for it wait for the load to finish instead of being lost.
+	loading     map[string]chan struct{}
+	queueMu     sync.Mutex
+	eventQueues map[string]chan queuedPluginEvent
+	stopEvents  chan struct{}
 }
+
+type queuedPluginEvent struct {
+	event string
+	data  any
+}
+
+const (
+	pluginEventQueueSize   = 256
+	pluginEventEnqueueWait = 10 * time.Second
+	pluginLoadEventWait    = 30 * time.Second
+)
 
 func Open(dataDir string) (*Controller, error) {
 	if dataDir == "" {
@@ -72,10 +89,19 @@ func Open(dataDir string) (*Controller, error) {
 		jobs:             jr,
 		scheduler:        scheduler.New(jr),
 		eventSubscribers: map[uint64]chan plugins.Event{},
+		loading:          map[string]chan struct{}{},
+		eventQueues:      map[string]chan queuedPluginEvent{},
+		stopEvents:       make(chan struct{}),
 		software:         software.NewManager(dataDir),
 		docker:           dockercompose.NewManager(dataDir),
 	}
 	c.pluginProcesses = newPluginProcessManager(c.deliverPluginEvent)
+	c.pluginProcesses.history = h
+	c.pluginProcesses.publish = func(owner, event string, data any) {
+		if raw, err := json.Marshal(data); err == nil {
+			c.publishPluginEvent(owner, event, raw)
+		}
+	}
 	c.plugins = plugins.New(dataDir, func(id string) (bool, bool) {
 		setting, ok := c.config.Snapshot().Plugins[id]
 		return boolValue(setting.Enabled), ok && setting.Enabled != nil
@@ -109,13 +135,18 @@ func (c *Controller) Start() {
 }
 
 func (c *Controller) Close() {
-	c.pluginProcesses.close()
+	// Plugins shut down first so they can stop and record their own work; the
+	// host then terminates anything they left behind and flushes captured logs
+	// before the history store closes.
 	c.runtimeMu.Lock()
-	for _, runtime := range c.runtimes {
-		_ = runtime.Close(context.Background())
-	}
+	runtimes := c.runtimes
 	c.runtimes = nil
 	c.runtimeMu.Unlock()
+	for _, runtime := range runtimes {
+		_ = runtime.Close(context.Background())
+	}
+	c.pluginProcesses.close()
+	close(c.stopEvents)
 	c.remote.Close()
 	c.scheduler.Stop()
 	snap := c.config.Snapshot()
@@ -156,23 +187,89 @@ func (c *Controller) publishPluginEvent(plugin, event string, data json.RawMessa
 	}
 }
 func (c *Controller) deliverPluginEvent(plugin, event string, data any) {
-	c.runtimeMu.RLock()
-	runtime := c.runtimes[plugin]
-	c.runtimeMu.RUnlock()
+	item := queuedPluginEvent{event: event, data: data}
+	queue := c.pluginEventQueue(plugin)
+	if isPluginOutputEvent(event) {
+		select {
+		case queue <- item:
+		default: // output is lossy by design when the plugin is slow.
+		}
+		return
+	}
+	timer := time.NewTimer(pluginEventEnqueueWait)
+	defer timer.Stop()
+	select {
+	case queue <- item:
+	case <-timer.C:
+		log.Printf("plugin %s event %s dropped: delivery queue full", plugin, event)
+	case <-c.stopEvents:
+	}
+}
+
+func isPluginOutputEvent(event string) bool {
+	return strings.HasPrefix(event, "process.stdout") || strings.HasPrefix(event, "process.stderr")
+}
+
+// pluginEventQueue returns the plugin's bounded, ordered delivery queue. One
+// worker per plugin keeps events (for example last output before exit) in the
+// order the host produced them without a goroutine per event.
+func (c *Controller) pluginEventQueue(plugin string) chan queuedPluginEvent {
+	c.queueMu.Lock()
+	defer c.queueMu.Unlock()
+	if queue := c.eventQueues[plugin]; queue != nil {
+		return queue
+	}
+	queue := make(chan queuedPluginEvent, pluginEventQueueSize)
+	c.eventQueues[plugin] = queue
+	go func() {
+		for {
+			select {
+			case item := <-queue:
+				c.runPluginEvent(plugin, item)
+			case <-c.stopEvents:
+				return
+			}
+		}
+	}()
+	return queue
+}
+
+func (c *Controller) runPluginEvent(plugin string, item queuedPluginEvent) {
+	runtime := c.awaitPluginRuntime(plugin)
 	if runtime == nil {
 		return
 	}
-	go func() {
-		timeout := plugins.DefaultCallTimeout
-		if strings.HasPrefix(event, "process.stdout") || strings.HasPrefix(event, "process.stderr") {
-			timeout = 250 * time.Millisecond
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		if err := runtime.Event(ctx, event, data); err != nil {
-			log.Printf("plugin %s event %s: %v", plugin, event, err)
-		}
-	}()
+	timeout := plugins.DefaultCallTimeout
+	if isPluginOutputEvent(item.event) {
+		timeout = 250 * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := runtime.Event(ctx, item.event, item.data); err != nil {
+		log.Printf("plugin %s event %s: %v", plugin, item.event, err)
+	}
+}
+
+// awaitPluginRuntime returns the loaded runtime, waiting for a backend that is
+// still initializing (it may already have started processes or schedules).
+func (c *Controller) awaitPluginRuntime(plugin string) *plugins.Runtime {
+	c.runtimeMu.RLock()
+	runtime, ready := c.runtimes[plugin], c.loading[plugin]
+	c.runtimeMu.RUnlock()
+	if runtime != nil || ready == nil {
+		return runtime
+	}
+	timer := time.NewTimer(pluginLoadEventWait)
+	defer timer.Stop()
+	select {
+	case <-ready:
+	case <-timer.C:
+	case <-c.stopEvents:
+		return nil
+	}
+	c.runtimeMu.RLock()
+	defer c.runtimeMu.RUnlock()
+	return c.runtimes[plugin]
 }
 
 func (c *Controller) Remote() *remote.Service   { return c.remote }
@@ -234,6 +331,7 @@ func (c *Controller) PluginCall(ctx context.Context, id, method string, params j
 
 func (c *Controller) loadPluginRuntimes() error {
 	loaded := map[string]*plugins.Runtime{}
+	attempted := map[string]chan struct{}{}
 	for _, status := range c.plugins.Statuses() {
 		if !status.Enabled || status.State == plugins.StateIncompatible || status.Manifest.Backend == nil {
 			continue
@@ -242,6 +340,11 @@ func (c *Controller) loadPluginRuntimes() error {
 		if !ok {
 			continue
 		}
+		ready := make(chan struct{})
+		attempted[status.Manifest.ID] = ready
+		c.runtimeMu.Lock()
+		c.loading[status.Manifest.ID] = ready
+		c.runtimeMu.Unlock()
 		runtime, err := plugins.LoadRuntime(context.Background(), dir, status.Manifest, controllerPluginHost{controller: c})
 		if err != nil {
 			c.plugins.SetFailure(status.Manifest.ID, err)
@@ -253,6 +356,10 @@ func (c *Controller) loadPluginRuntimes() error {
 	c.runtimeMu.Lock()
 	old := c.runtimes
 	c.runtimes = loaded
+	for id, ready := range attempted {
+		delete(c.loading, id)
+		close(ready)
+	}
 	c.runtimeMu.Unlock()
 	for _, runtime := range old {
 		_ = runtime.Close(context.Background())

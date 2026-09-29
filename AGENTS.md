@@ -22,7 +22,10 @@ architecture description elsewhere.
   plugin SemVer as separate version domains.
 - ABI v2 is the preferred first-party backend path; ABI v1 remains compatibility
   code. Do not reintroduce retained ABI-v2 WASM pointer lifetimes or static
-  linear-memory arenas.
+  linear-memory arenas. Stateful TinyGo backends build with `-gc=conservative`
+  (the `wasm-unknown` default collector never frees memory).
+- Plugin execution logs/history use the generic owner-scoped `history.*`
+  capability, never `plugin-data/<id>/storage.json`.
 - Plugins are trusted packages. Do not add a per-plugin permission system,
   generic syscall escape hatch, native Go plugin loading, or automatic
   privilege escalation.

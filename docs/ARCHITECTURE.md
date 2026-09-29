@@ -93,10 +93,15 @@ capabilities such as:
 host.process.*
 host.scheduler.*
 host.storage.*
+host.history.*
 host.system.*
 host.config.*
 host.log.*
 ```
+
+`host.history.*` is a generic, owner-scoped execution record with captured
+output, backed by RunPilot's existing SQLite history and run-log files. Plugins
+never supply filesystem paths and never store growing logs in `plugin-data`.
 
 Additional families such as filesystem or network access should be added only
 when a real plugin needs a narrow, reusable operation. Do not add generic
@@ -176,6 +181,25 @@ Current intended order:
 4. Terminal;
 5. Software and backup integrations;
 6. Remote providers (one provider at a time).
+
+### Tasks status
+
+Tasks has a real first-party plugin (`plugins/tasks`, version `0.1.0`, ABI v2,
+unpublished and never auto-enabled). It covers continuous command tasks and
+scheduled command tasks, owns their definitions and semantics, and talks to the
+browser only through the common WebSocket. It runs on the generic storage,
+scheduler, process, history and event capabilities; core has no Task concept.
+
+**The legacy Tasks implementation remains the active production path** until an
+explicit, separate cutover. Both can be installed side by side (the plugin page
+is "Tasks (plugin)"), and legacy Tasks, `runpilot.yaml` and Run history are
+unaffected by it. **Backup is not part of the Tasks plugin**: Backup jobs stay
+in the legacy job engine until their own migration.
+
+The capability changes made for Tasks are generic framework infrastructure:
+interpreter-aware `process.start` (launcher semantics), process timeouts and
+captured output, `scheduler.validate`, the owner-scoped `history.*` family, and
+ordered/bounded event delivery. See [PLUGIN_API.md](PLUGIN_API.md).
 
 The async ABI-v2 process/scheduler/event path should remain covered by real-WASM
 race/integration tests before stateful feature migrations depend on it.

@@ -56,6 +56,10 @@ func Open(dataDir string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate legacy run history: %w", err)
 	}
+	if err := store.AbandonExecutions(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("finish interrupted plugin executions: %w", err)
+	}
 	return store, nil
 }
 
@@ -75,6 +79,41 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS runs_target_started ON runs(target_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS runs_started ON runs(started_at DESC);`)
+	if err != nil {
+		return err
+	}
+	return s.migrateOwner()
+}
+
+// migrateOwner adds the plugin-owner column. Legacy rows have an empty owner and
+// legacy queries only ever see those rows.
+func (s *Store) migrateOwner() error {
+	rows, err := s.db.Query(`PRAGMA table_info(runs)`)
+	if err != nil {
+		return err
+	}
+	hasOwner := false
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, kind string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &pk); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if name == "owner" {
+			hasOwner = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !hasOwner {
+		if _, err := s.db.Exec(`ALTER TABLE runs ADD COLUMN owner TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	_, err = s.db.Exec(`CREATE INDEX IF NOT EXISTS runs_owner_subject ON runs(owner, target_id, started_at DESC)`)
 	return err
 }
 
@@ -168,10 +207,10 @@ func (s *Store) Recent(targetID string, limit int) ([]model.RunRecord, error) {
 	if limit <= 0 || limit > 100 {
 		limit = defaultLimit
 	}
-	query := `SELECT id, kind, target_id, target_name, started_at, finished_at, exit_code, success, log_path, message FROM runs`
+	query := `SELECT id, kind, target_id, target_name, started_at, finished_at, exit_code, success, log_path, message FROM runs WHERE owner = ''`
 	args := []any{}
 	if targetID != "" {
-		query += ` WHERE target_id = ?`
+		query += ` AND target_id = ?`
 		args = append(args, targetID)
 	}
 	query += ` ORDER BY started_at DESC LIMIT ?`

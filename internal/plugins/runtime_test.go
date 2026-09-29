@@ -340,3 +340,66 @@ func runtimeFixture(response string, shutdown bool) []byte {
 	section(11, data)
 	return wasm
 }
+
+type historyCapabilityHost struct {
+	testHost
+	owner, operation string
+	params           string
+	err              error
+	validated        bool
+	validateErr      error
+}
+
+func (h *historyCapabilityHost) History(_ context.Context, owner, operation string, params json.RawMessage) (json.RawMessage, error) {
+	h.owner, h.operation, h.params = owner, operation, string(params)
+	if h.err != nil {
+		return nil, h.err
+	}
+	return json.RawMessage(`{"ok":true}`), nil
+}
+func (h *historyCapabilityHost) ScheduleValidate(context.Context, json.RawMessage) error {
+	h.validated = true
+	return h.validateErr
+}
+
+func TestHistoryAndSchedulerValidateCapabilities(t *testing.T) {
+	host := &historyCapabilityHost{}
+	runtime := &Runtime{host: host, manifest: Manifest{ID: "owner.one"}}
+	call := func(capability, params string) capabilityResponse {
+		return runtime.dispatchCapability(context.Background(), []byte(`{"apiVersion":1,"capability":"`+capability+`","params":`+params+`}`))
+	}
+	for _, operation := range []string{"begin", "append", "finish", "list", "get", "output"} {
+		response := call("history."+operation, `{"id":"x"}`)
+		if !response.OK || host.operation != operation || host.owner != "owner.one" || host.params != `{"id":"x"}` {
+			t.Fatalf("history.%s = %#v host=%#v", operation, response, host)
+		}
+	}
+	// The owner always comes from the loaded plugin, never from parameters.
+	call("history.get", `{"owner":"someone.else","id":"x"}`)
+	if host.owner != "owner.one" {
+		t.Fatalf("owner = %q", host.owner)
+	}
+	host.err = &HostFailure{Code: "not_found", Message: "unknown execution"}
+	if response := call("history.get", `{"id":"x"}`); response.Error == nil || response.Error.Code != "not_found" || response.Error.Message != "unknown execution" {
+		t.Fatalf("structured host failure lost: %#v", response)
+	}
+	host.err = os.ErrPermission
+	if response := call("history.get", `{"id":"x"}`); response.Error == nil || response.Error.Code != "failed" || !strings.Contains(response.Error.Message, "permission") {
+		t.Fatalf("plain failure = %#v", response)
+	}
+	if response := call("scheduler.validate", `{"schedule":{"type":"interval","intervalSeconds":5}}`); !response.OK || !host.validated {
+		t.Fatalf("validate = %#v", response)
+	}
+	host.validateErr = &HostFailure{Code: "invalid_argument", Message: "bad cron"}
+	if response := call("scheduler.validate", `{}`); response.Error == nil || response.Error.Message != "bad cron" {
+		t.Fatalf("validate failure = %#v", response)
+	}
+	// Hosts that do not publish the capabilities report them as unavailable.
+	bare := &Runtime{host: testHost{}, manifest: Manifest{ID: "owner.one"}}
+	for _, capability := range []string{"history.list", "scheduler.validate"} {
+		response := bare.dispatchCapability(context.Background(), []byte(`{"apiVersion":1,"capability":"`+capability+`","params":{}}`))
+		if response.Error == nil || response.Error.Code != "unavailable" {
+			t.Fatalf("%s on bare host = %#v", capability, response)
+		}
+	}
+}

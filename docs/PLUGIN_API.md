@@ -163,9 +163,14 @@ The capability protocol version is separate from the raw WASM ABI.
 
 Implemented generic capability work includes logging, host status,
 plugin-namespaced JSON storage, plugin-owned scheduler registrations, asynchronous
-process execution/status/termination, and browser event publication. Config
+process execution/status/termination, owner-scoped execution history, and
+browser event publication. Config
 hooks exist in the host interface but are not yet a general plugin configuration
 service. Add new capability methods only for real reusable plugin needs.
+
+Validation-style failures (bad interpreter, invalid schedule, unknown
+execution/process) return a stable code such as `invalid_argument` or
+`not_found` with an actionable message; other failures return code `failed`.
 
 ### Scheduler callbacks
 
@@ -175,17 +180,74 @@ callback name and optional data. IDs are scoped to the calling plugin.
 
 A fire is delivered through `runpilot_event` as a generic scheduler event.
 Registrations are runtime state; a plugin should reconstruct them from its own
-durable state during initialization.
+durable state during initialization. A plugin has no timers of its own, so a
+one-shot delay is an `interval` registration removed on its first fire.
+`scheduler.validate` takes `{"schedule":{...}}` and applies the same rules as
+registration without creating a timer. Reloading legacy job definitions never
+removes plugin registrations.
 
 ### Processes
 
 `process.start` accepts command, arguments, working directory and environment
-and returns an opaque plugin-owned process ID. Status and termination are
-owner-scoped.
+and returns an opaque plugin-owned process ID and its `pid`. Optional fields:
 
-Stdout/stderr and exit are delivered through `runpilot_event`. Output uses
-bounded queues; overflow is intentionally lossy rather than blocking a child
-process or growing memory without bound.
+- `interpreter`: the launcher's `CommandSpec` semantics (`auto`, `direct`,
+  `powershell`, `cmd`, `sh`, `bash`, `sh-inline`, `python`), with the same
+  Windows/Linux behavior as legacy commands. Empty means `direct`.
+- `timeoutSeconds` (0 to 7 days): the process tree is killed when it elapses;
+  the exit event and status report `timedOut`.
+- `historyId`: an unfinished execution owned by the caller. Combined
+  stdout/stderr is then captured losslessly (bounded, see history) into that
+  execution and **no** `process.stdout`/`process.stderr` callbacks are sent.
+  The host also publishes a coalesced `history.output` browser event
+  (`{id,size}`, at most about four per second) that carries no output.
+
+Inputs are bounded (arguments, environment, string lengths). Status and
+termination are owner-scoped; `process.status` reports `running`, `pid`,
+`exitCode`, `terminated` and `timedOut`, and finished processes stay queryable
+for five minutes. The exit event carries `id`, `exitCode`, `success`,
+`terminated`, `timedOut` and, when captured, `historyId`.
+
+Without `historyId`, stdout/stderr are delivered through `runpilot_event`. Output
+uses bounded queues; overflow is intentionally lossy rather than blocking a
+child process or growing memory without bound.
+
+### History
+
+`history.*` records executions per owner. The owner is always the calling plugin;
+IDs and log locations are host-generated and never accept paths. Execution
+metadata lives in the existing SQLite `runs` table (legacy history never lists
+plugin executions) and output in `runs/plugins/<owner>/<id>.log`.
+
+```text
+history.begin   {kind, subject, label}            -> execution
+history.append  {id, text}          (<= 64 KiB)   -> null
+history.finish  {id, exitCode?, success?, message?} -> execution (idempotent)
+history.list    {subject?, limit?}  (<= 100)      -> {executions:[...]}
+history.get     {id}                              -> execution
+history.output  {id, maxBytes?}     (<= 1 MiB)    -> {id, output, size, truncated}
+```
+
+An execution is `{id, kind, subject, label, startedAt, finishedAt?, exitCode?,
+success?, message?}`. `kind`, `subject` are short identifiers, `label` is
+truncated, `output` is the tail of the log. Each log is capped at 16 MiB (later
+output is discarded after a truncation marker), the newest 200 finished
+executions per owner and subject are kept, and executions left unfinished by a
+previous RunPilot process are marked failed at startup. Access is serialized by
+the store, so concurrent plugin calls and process capture are safe.
+
+### Event delivery
+
+Host callbacks are delivered per plugin in the order they were produced, through
+a bounded queue. Output callbacks are dropped when the plugin falls behind;
+process exit and scheduler callbacks wait for space. Callbacks produced while a
+backend is still initializing (for example an autostarted process that exits
+quickly) wait for initialization instead of being lost. A plugin should still
+treat callbacks as at-least-once hints: make exit handling idempotent and
+reconcile with `process.status` (Tasks does so on every list and every 30
+seconds). On shutdown RunPilot calls `runpilot_shutdown` first, then
+terminates remaining plugin processes and flushes captured logs before history
+closes.
 
 ### Browser publication
 
@@ -260,7 +322,8 @@ style. Executable theme plugins are not part of the contract.
 ## First-party build contract
 
 First-party WASM backends use TinyGo 0.38.0 with the repository's
-`wasm-unknown` build settings and are shipped precompiled inside
+`wasm-unknown` build settings (`-scheduler=none -gc=conservative`, and a larger
+`-stack-size` for JSON-heavy backends such as Tasks) and are shipped precompiled inside
 `.rpplugin` packages. TinyGo is build-time tooling only.
 
 The System package is a nonpublic reference fixture for ABI, host capability,

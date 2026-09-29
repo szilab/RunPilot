@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,8 +56,38 @@ type ProcessHost interface {
 	ProcessStatus(context.Context, string, string) (json.RawMessage, error)
 	ProcessTerminate(context.Context, string, string) (json.RawMessage, error)
 }
+
+// SchedulerValidator optionally checks a schedule definition without
+// registering it.
+type SchedulerValidator interface {
+	ScheduleValidate(context.Context, json.RawMessage) error
+}
 type EventHost interface {
 	PublishEvent(context.Context, string, string, json.RawMessage) error
+}
+
+// HistoryHost exposes owner-scoped execution records and captured output.
+// The runtime supplies the owner; params are the capability's JSON params and
+// the host validates and bounds them.
+type HistoryHost interface {
+	History(ctx context.Context, owner, operation string, params json.RawMessage) (json.RawMessage, error)
+}
+
+// HostFailure lets a host implementation return a stable capability error code
+// and a message that is safe to show to the plugin.
+type HostFailure struct{ Code, Message string }
+
+func (e *HostFailure) Error() string { return e.Message }
+
+// detailedFailure reports validation-style host errors (bad interpreter,
+// invalid schedule, unknown execution) so plugins can surface actionable
+// messages instead of an opaque "failed".
+func detailedFailure(operation string, err error) capabilityResponse {
+	var host *HostFailure
+	if errors.As(err, &host) {
+		return capabilityFailure(host.Code, host.Message)
+	}
+	return capabilityFailure("failed", operation+" failed: "+err.Error())
 }
 
 // LifecycleHost releases owner-scoped asynchronous work when a runtime stops.
@@ -440,9 +471,18 @@ func (r *Runtime) dispatchCapability(ctx context.Context, payload []byte) capabi
 		}
 		value, err := scheduler.ScheduleRegister(ctx, r.manifest.ID, request.Params)
 		if err != nil {
-			return capabilityFailure("failed", "scheduler.register failed")
+			return detailedFailure("scheduler.register", err)
 		}
 		return capabilitySuccess(value)
+	case "scheduler.validate":
+		validator, ok := r.host.(SchedulerValidator)
+		if !ok {
+			return capabilityFailure("unavailable", "scheduler is unavailable")
+		}
+		if err := validator.ScheduleValidate(ctx, request.Params); err != nil {
+			return detailedFailure("scheduler.validate", err)
+		}
+		return capabilitySuccess(nil)
 	case "scheduler.remove":
 		var args struct {
 			ID string `json:"id"`
@@ -455,7 +495,7 @@ func (r *Runtime) dispatchCapability(ctx context.Context, payload []byte) capabi
 			return capabilityFailure("unavailable", "scheduler is unavailable")
 		}
 		if err := scheduler.ScheduleRemove(ctx, r.manifest.ID, args.ID); err != nil {
-			return capabilityFailure("failed", "scheduler.remove failed")
+			return detailedFailure("scheduler.remove", err)
 		}
 		return capabilitySuccess(nil)
 	case "scheduler.list":
@@ -475,7 +515,17 @@ func (r *Runtime) dispatchCapability(ctx context.Context, payload []byte) capabi
 		}
 		value, err := process.ProcessStart(ctx, r.manifest.ID, request.Params)
 		if err != nil {
-			return capabilityFailure("failed", "process.start failed")
+			return detailedFailure("process.start", err)
+		}
+		return capabilitySuccess(value)
+	case "history.begin", "history.append", "history.finish", "history.list", "history.get", "history.output":
+		history, ok := r.host.(HistoryHost)
+		if !ok {
+			return capabilityFailure("unavailable", "execution history is unavailable")
+		}
+		value, err := history.History(ctx, r.manifest.ID, strings.TrimPrefix(request.Capability, "history."), request.Params)
+		if err != nil {
+			return detailedFailure(request.Capability, err)
 		}
 		return capabilitySuccess(value)
 	case "process.status", "process.terminate":
@@ -497,7 +547,7 @@ func (r *Runtime) dispatchCapability(ctx context.Context, payload []byte) capabi
 			value, err = process.ProcessTerminate(ctx, r.manifest.ID, args.ID)
 		}
 		if err != nil {
-			return capabilityFailure("failed", request.Capability+" failed")
+			return detailedFailure(request.Capability, err)
 		}
 		return capabilitySuccess(value)
 	case "events.publish":

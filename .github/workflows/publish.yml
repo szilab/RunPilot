@@ -24,12 +24,15 @@ jobs:
           go-version: "1.23.x"
           cache: true
 
-      - uses: tinygo-org/setup-tinygo@v2
+      - uses: acifani/setup-tinygo@v3
         with:
           tinygo-version: "0.38.0"
 
       - name: Build System ABI test fixture
         run: go generate ./plugins/system/backend
+
+      - name: Build Tasks plugin backend
+        run: go generate ./plugins/tasks/backend
 
       - name: Format check
         run: test -z "$(gofmt -l .)"

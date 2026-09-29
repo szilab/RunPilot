@@ -1,0 +1,6 @@
+/* Tasks plugin: only layout that core styles do not already provide, using public tokens. */
+.tasks-plugin-toolbar { display: flex; justify-content: space-between; align-items: center; gap: var(--rp-space-2); flex-wrap: wrap; }
+.tasks-plugin-inline { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--rp-space-1); }
+.tasks-plugin-dialog { max-height: calc(100vh - 32px); overflow: auto; }
+.tasks-plugin-output { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+.run-history-row.active { outline: 2px solid var(--rp-accent); outline-offset: -2px; }
