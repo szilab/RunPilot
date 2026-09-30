@@ -25,8 +25,8 @@ func TestPluginRegistryLifecycleHTTP(t *testing.T) {
 	for _, version := range []string{"1.0.0", "1.1.0"} {
 		var archive bytes.Buffer
 		writer := zip.NewWriter(&archive)
-		manifest := fmt.Sprintf("apiVersion: runpilot.plugin/v1\nid: example\nname: Example\nversion: %s\nrequires:\n  frontend: '>=1.0.0 <2.0.0'\nfrontend:\n  module: web/plugin.js\n", version)
-		for name, contents := range map[string]string{"plugin.yaml": manifest, "web/plugin.js": "// " + version} {
+		manifest := fmt.Sprintf("apiVersion: runpilot.plugin/v1\nid: example\nname: Example\nversion: %s\nrequires:\n  frontend: '>=1.0.0 <2.0.0'\nfrontend:\n  module: web/plugin.js\n  stylesheet: web/plugin.css\n", version)
+		for name, contents := range map[string]string{"plugin.yaml": manifest, "web/plugin.js": "// " + version, "web/plugin.css": "/* " + version + " */"} {
 			entry, err := writer.Create(name)
 			if err != nil {
 				t.Fatal(err)
@@ -116,6 +116,36 @@ func TestPluginRegistryLifecycleHTTP(t *testing.T) {
 	resetServer()
 	if len(ctrl.Plugins().FrontendExtensions()) != 1 || !ctrl.Plugins().Statuses()[0].Loaded {
 		t.Fatal("restart did not activate frontend")
+	}
+	mountedServer, err := New(ctrl, "/mount")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mountedRequest := httptest.NewRequest("GET", "/mount/api/v1/plugins/runtime", nil)
+	mountedRequest.Header.Set("Authorization", "Bearer "+ctrl.Snapshot().Server.Token)
+	mountedResponse := httptest.NewRecorder()
+	mountedServer.Handler().ServeHTTP(mountedResponse, mountedRequest)
+	if mountedResponse.Code != http.StatusOK {
+		t.Fatalf("mounted runtime extensions: %d %s", mountedResponse.Code, mountedResponse.Body.String())
+	}
+	var mountedExtensions []plugins.FrontendExtension
+	if err := json.Unmarshal(mountedResponse.Body.Bytes(), &mountedExtensions); err != nil {
+		t.Fatal(err)
+	}
+	if len(mountedExtensions) != 1 || mountedExtensions[0].Module != "/mount/plugins/example/web/plugin.js" || mountedExtensions[0].Stylesheet != "/mount/plugins/example/web/plugin.css" {
+		t.Fatalf("mounted plugin URL: %+v", mountedExtensions)
+	}
+	mountedAssetRequest := httptest.NewRequest("GET", mountedExtensions[0].Module, nil)
+	mountedAssetResponse := httptest.NewRecorder()
+	mountedServer.Handler().ServeHTTP(mountedAssetResponse, mountedAssetRequest)
+	if mountedAssetResponse.Code != http.StatusOK {
+		t.Fatalf("mounted plugin asset: %d %s", mountedAssetResponse.Code, mountedAssetResponse.Body.String())
+	}
+	mountedStyleRequest := httptest.NewRequest("GET", mountedExtensions[0].Stylesheet, nil)
+	mountedStyleResponse := httptest.NewRecorder()
+	mountedServer.Handler().ServeHTTP(mountedStyleResponse, mountedStyleRequest)
+	if mountedStyleResponse.Code != http.StatusOK {
+		t.Fatalf("mounted plugin stylesheet: %d %s", mountedStyleResponse.Code, mountedStyleResponse.Body.String())
 	}
 	request("POST", "/api/v1/plugins/example/install", `{"version":"1.1.0"}`, 200)
 	status = ctrl.Plugins().Statuses()[0]

@@ -258,7 +258,16 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePluginRuntime(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.ctrl.Plugins().FrontendExtensions())
+	extensions := s.ctrl.Plugins().FrontendExtensions()
+	if s.basePath != "/" {
+		for i := range extensions {
+			extensions[i].Module = s.basePath + extensions[i].Module
+			if extensions[i].Stylesheet != "" {
+				extensions[i].Stylesheet = s.basePath + extensions[i].Stylesheet
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, extensions)
 }
 
 func (s *Server) handlePluginAsset(w http.ResponseWriter, r *http.Request) {
