@@ -1,15 +1,15 @@
 //go:build windows
 
-package terminal
+package processsession
 
 import (
+	pty "github.com/aymanbagabas/go-pty"
+	"golang.org/x/sys/windows"
 	"os"
 	"unsafe"
-
-	"golang.org/x/sys/windows"
 )
 
-func attachProcessTree(process *os.Process) (func() error, error) {
+func contain(process *os.Process) (func() error, error) {
 	if process == nil {
 		return func() error { return nil }, nil
 	}
@@ -19,7 +19,7 @@ func attachProcessTree(process *os.Process) (func() error, error) {
 	}
 	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
 	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
+	if _, err = windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
 		windows.CloseHandle(job)
 		return nil, err
 	}
@@ -35,4 +35,17 @@ func attachProcessTree(process *os.Process) (func() error, error) {
 		return nil, err
 	}
 	return func() error { return windows.CloseHandle(job) }, nil
+}
+func killTree(process *os.Process) error {
+	if process == nil {
+		return nil
+	}
+	return process.Kill()
+}
+func graceful(process *os.Process, terminal pty.Pty) error {
+	if process == nil {
+		return nil
+	}
+	_, err := terminal.Write([]byte{3}) // ConPTY Ctrl-C interrupt.
+	return err
 }

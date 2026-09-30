@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	pty "github.com/aymanbagabas/go-pty"
+	"github.com/szilab/RunPilot/internal/processsession"
 )
 
 // Session is a single shell attached to a real OS pseudo-terminal.
@@ -14,9 +14,7 @@ type Session struct {
 	shell      Shell
 	createdAt  time.Time
 	cols, rows uint16
-	pty        pty.Pty
-	cmd        *pty.Cmd
-	cleanup    func() error
+	process    *processsession.Session
 	onClose    func()
 	mu         sync.RWMutex
 	closeOnce  sync.Once
@@ -29,8 +27,8 @@ func (s *Session) ID() string           { return s.id }
 func (s *Session) Shell() Shell         { return s.shell }
 func (s *Session) CreatedAt() time.Time { return s.createdAt }
 
-func (s *Session) Read(p []byte) (int, error)  { return s.pty.Read(p) }
-func (s *Session) Write(p []byte) (int, error) { return s.pty.Write(p) }
+func (s *Session) Read(p []byte) (int, error)  { return s.process.Read(p) }
+func (s *Session) Write(p []byte) (int, error) { return s.process.Write(p) }
 
 func (s *Session) Resize(cols, rows uint16) error {
 	if cols == 0 || rows == 0 {
@@ -38,7 +36,7 @@ func (s *Session) Resize(cols, rows uint16) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.pty.Resize(int(cols), int(rows)); err != nil {
+	if err := s.process.Resize(rows, cols); err != nil {
 		return err
 	}
 	s.cols, s.rows = cols, rows
@@ -47,15 +45,7 @@ func (s *Session) Resize(cols, rows uint16) error {
 
 func (s *Session) Close() (err error) {
 	s.closeOnce.Do(func() {
-		if s.cleanup != nil {
-			err = errors.Join(err, s.cleanup())
-		}
-		if s.cmd != nil && s.cmd.Process != nil {
-			_ = s.cmd.Process.Kill()
-		}
-		if s.pty != nil {
-			err = errors.Join(err, s.pty.Close())
-		}
+		err = s.process.Close()
 		if s.onClose != nil {
 			s.onClose()
 		}
@@ -66,7 +56,7 @@ func (s *Session) Close() (err error) {
 // Wait waits for the shell process. It is safe to call concurrently.
 func (s *Session) Wait() error {
 	s.waitOnce.Do(func() {
-		s.waitErr = s.cmd.Wait()
+		s.waitErr = s.process.Wait()
 		close(s.waitDone)
 		_ = s.Close()
 	})

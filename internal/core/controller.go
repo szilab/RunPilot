@@ -46,6 +46,7 @@ type Controller struct {
 	runtimeMu           sync.RWMutex
 	runtimes            map[string]*plugins.Runtime
 	pluginProcesses     *pluginProcessManager
+	pluginSessions      *pluginSessionManager
 	eventMu             sync.RWMutex
 	eventSubscribers    map[uint64]chan plugins.Event
 	nextEventSubscriber uint64
@@ -95,7 +96,8 @@ func Open(dataDir string) (*Controller, error) {
 		software:         software.NewManager(dataDir),
 		docker:           dockercompose.NewManager(dataDir),
 	}
-	c.pluginProcesses = newPluginProcessManager(c.deliverPluginEvent)
+	c.pluginProcesses = newPluginProcessManager(func(owner, event string, data any) { c.deliverPluginEvent(owner, event, data) })
+	c.pluginSessions = newPluginSessionManager(c.deliverPluginEvent)
 	c.pluginProcesses.history = h
 	c.pluginProcesses.publish = func(owner, event string, data any) {
 		if raw, err := json.Marshal(data); err == nil {
@@ -146,6 +148,7 @@ func (c *Controller) Close() {
 		_ = runtime.Close(context.Background())
 	}
 	c.pluginProcesses.close()
+	c.pluginSessions.close()
 	close(c.stopEvents)
 	c.remote.Close()
 	c.scheduler.Stop()
@@ -175,39 +178,52 @@ func (c *Controller) SubscribePluginEvents() (<-chan plugins.Event, func()) {
 		c.eventMu.Unlock()
 	}
 }
-func (c *Controller) publishPluginEvent(plugin, event string, data json.RawMessage) {
+func (c *Controller) publishPluginEvent(plugin, event string, data json.RawMessage) bool {
 	item := plugins.Event{Plugin: plugin, Event: event, Data: append(json.RawMessage(nil), data...)}
 	c.eventMu.RLock()
 	defer c.eventMu.RUnlock()
+	strict := strings.HasPrefix(event, "process.session.")
+	if strict && len(c.eventSubscribers) == 0 {
+		return false
+	}
+	delivered := true
 	for _, ch := range c.eventSubscribers {
 		select {
 		case ch <- item:
 		default:
+			if strict {
+				delivered = false
+			}
 		}
 	}
+	return delivered
 }
-func (c *Controller) deliverPluginEvent(plugin, event string, data any) {
+func (c *Controller) deliverPluginEvent(plugin, event string, data any) bool {
 	item := queuedPluginEvent{event: event, data: data}
 	queue := c.pluginEventQueue(plugin)
 	if isPluginOutputEvent(event) {
 		select {
 		case queue <- item:
-		default: // output is lossy by design when the plugin is slow.
+			return true
+		default: // ordinary process output is lossy; session output treats this as fatal.
+			return false
 		}
-		return
 	}
 	timer := time.NewTimer(pluginEventEnqueueWait)
 	defer timer.Stop()
 	select {
 	case queue <- item:
+		return true
 	case <-timer.C:
 		log.Printf("plugin %s event %s dropped: delivery queue full", plugin, event)
+		return false
 	case <-c.stopEvents:
+		return false
 	}
 }
 
 func isPluginOutputEvent(event string) bool {
-	return strings.HasPrefix(event, "process.stdout") || strings.HasPrefix(event, "process.stderr")
+	return strings.HasPrefix(event, "process.stdout") || strings.HasPrefix(event, "process.stderr") || event == "process.session.output"
 }
 
 // pluginEventQueue returns the plugin's bounded, ordered delivery queue. One
@@ -247,6 +263,13 @@ func (c *Controller) runPluginEvent(plugin string, item queuedPluginEvent) {
 	defer cancel()
 	if err := runtime.Event(ctx, item.event, item.data); err != nil {
 		log.Printf("plugin %s event %s: %v", plugin, item.event, err)
+		if item.event == "process.session.output" {
+			if data, ok := item.data.(map[string]any); ok {
+				if id, ok := data["id"].(string); ok {
+					c.pluginSessions.deliveryFailed(plugin, id)
+				}
+			}
+		}
 	}
 }
 
@@ -389,12 +412,15 @@ func (h controllerPluginHost) StorageSet(_ context.Context, pluginID, key string
 	return h.controller.pluginStorageSet(pluginID, key, value)
 }
 func (h controllerPluginHost) PublishEvent(_ context.Context, pluginID, event string, data json.RawMessage) error {
-	h.controller.publishPluginEvent(pluginID, event, data)
+	if !h.controller.publishPluginEvent(pluginID, event, data) && strings.HasPrefix(event, "process.session.") {
+		return &plugins.HostFailure{Code: "io_error", Message: "interactive process output delivery queue is full"}
+	}
 	return nil
 }
 func (h controllerPluginHost) PluginStopped(pluginID string) {
 	h.controller.scheduler.RemovePluginOwner(pluginID)
 	h.controller.pluginProcesses.stopOwner(pluginID)
+	h.controller.pluginSessions.stopOwner(pluginID)
 }
 func (h controllerPluginHost) ScheduleRegister(_ context.Context, pluginID string, raw json.RawMessage) (json.RawMessage, error) {
 	var value struct {
@@ -450,6 +476,21 @@ func (h controllerPluginHost) ProcessTerminate(_ context.Context, pluginID, id s
 		return nil, err
 	}
 	return json.Marshal(result)
+}
+func (h controllerPluginHost) ProcessSessionCreate(_ context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginSessions.create(owner, raw)
+}
+func (h controllerPluginHost) ProcessSessionWrite(_ context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginSessions.write(owner, raw)
+}
+func (h controllerPluginHost) ProcessSessionResize(_ context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginSessions.resize(owner, raw)
+}
+func (h controllerPluginHost) ProcessSessionStatus(_ context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginSessions.status(owner, raw)
+}
+func (h controllerPluginHost) ProcessSessionTerminate(_ context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginSessions.terminate(owner, raw)
 }
 
 func (c *Controller) pluginStoragePath(pluginID string) (string, error) {

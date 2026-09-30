@@ -56,6 +56,13 @@ type ProcessHost interface {
 	ProcessStatus(context.Context, string, string) (json.RawMessage, error)
 	ProcessTerminate(context.Context, string, string) (json.RawMessage, error)
 }
+type ProcessSessionHost interface {
+	ProcessSessionCreate(context.Context, string, json.RawMessage) (json.RawMessage, error)
+	ProcessSessionWrite(context.Context, string, json.RawMessage) (json.RawMessage, error)
+	ProcessSessionResize(context.Context, string, json.RawMessage) (json.RawMessage, error)
+	ProcessSessionStatus(context.Context, string, json.RawMessage) (json.RawMessage, error)
+	ProcessSessionTerminate(context.Context, string, json.RawMessage) (json.RawMessage, error)
+}
 
 // SchedulerValidator optionally checks a schedule definition without
 // registering it.
@@ -516,6 +523,29 @@ func (r *Runtime) dispatchCapability(ctx context.Context, payload []byte) capabi
 		value, err := process.ProcessStart(ctx, r.manifest.ID, request.Params)
 		if err != nil {
 			return detailedFailure("process.start", err)
+		}
+		return capabilitySuccess(value)
+	case "process.session.create", "process.session.write", "process.session.resize", "process.session.status", "process.session.terminate":
+		sessions, ok := r.host.(ProcessSessionHost)
+		if !ok {
+			return capabilityFailure("unavailable", "interactive process sessions are unavailable")
+		}
+		var value json.RawMessage
+		var err error
+		switch request.Capability {
+		case "process.session.create":
+			value, err = sessions.ProcessSessionCreate(ctx, r.manifest.ID, request.Params)
+		case "process.session.write":
+			value, err = sessions.ProcessSessionWrite(ctx, r.manifest.ID, request.Params)
+		case "process.session.resize":
+			value, err = sessions.ProcessSessionResize(ctx, r.manifest.ID, request.Params)
+		case "process.session.status":
+			value, err = sessions.ProcessSessionStatus(ctx, r.manifest.ID, request.Params)
+		case "process.session.terminate":
+			value, err = sessions.ProcessSessionTerminate(ctx, r.manifest.ID, request.Params)
+		}
+		if err != nil {
+			return detailedFailure(request.Capability, err)
 		}
 		return capabilitySuccess(value)
 	case "history.begin", "history.append", "history.finish", "history.list", "history.get", "history.output":

@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	pty "github.com/aymanbagabas/go-pty"
+	"github.com/szilab/RunPilot/internal/processsession"
 )
 
 const DefaultMaxSessions = 8
@@ -104,26 +104,9 @@ func (m *Manager) startCommand(shell Shell, path string, args []string, cols, ro
 	if len(m.sessions) >= m.max {
 		return nil, ErrSessionLimit
 	}
-	p, err := pty.New()
+	process, err := processsession.Start(path, args, m.cwd, terminalEnvironment(os.Environ()), rows, cols)
 	if err != nil {
-		return nil, fmt.Errorf("initialize PTY: %w", err)
-	}
-	if err := p.Resize(int(cols), int(rows)); err != nil {
-		_ = p.Close()
-		return nil, fmt.Errorf("resize PTY: %w", err)
-	}
-	cmd := p.Command(path, args...)
-	cmd.Dir = m.cwd
-	cmd.Env = terminalEnvironment(os.Environ())
-	if err := cmd.Start(); err != nil {
-		_ = p.Close()
 		return nil, fmt.Errorf("start %s: %w", shell.Name, err)
-	}
-	cleanup, err := attachProcessTree(cmd.Process)
-	if err != nil {
-		_ = cmd.Process.Kill()
-		_ = p.Close()
-		return nil, fmt.Errorf("contain shell process: %w", err)
 	}
 	s := &Session{
 		id:        randomID(),
@@ -131,9 +114,7 @@ func (m *Manager) startCommand(shell Shell, path string, args []string, cols, ro
 		createdAt: time.Now().UTC(),
 		cols:      cols,
 		rows:      rows,
-		pty:       p,
-		cmd:       cmd,
-		cleanup:   cleanup,
+		process:   process,
 		waitDone:  make(chan struct{}),
 	}
 	s.onClose = func() { m.remove(s.id) }

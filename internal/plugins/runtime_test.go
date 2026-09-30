@@ -81,6 +81,47 @@ func TestCapabilityBridgeReturnsStructuredResults(t *testing.T) {
 	}
 }
 
+type recordingSessionHost struct {
+	testHost
+	operation string
+}
+
+func (h *recordingSessionHost) record(operation string) (json.RawMessage, error) {
+	h.operation = operation
+	return json.RawMessage(`{"id":"opaque","state":"running"}`), nil
+}
+func (h *recordingSessionHost) ProcessSessionCreate(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	return h.record("create")
+}
+func (h *recordingSessionHost) ProcessSessionWrite(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	return h.record("write")
+}
+func (h *recordingSessionHost) ProcessSessionResize(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	return h.record("resize")
+}
+func (h *recordingSessionHost) ProcessSessionStatus(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	return h.record("status")
+}
+func (h *recordingSessionHost) ProcessSessionTerminate(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	return h.record("terminate")
+}
+
+func TestProcessSessionCapabilitiesDispatchThroughHost(t *testing.T) {
+	host := &recordingSessionHost{}
+	runtime := &Runtime{host: host, manifest: Manifest{ID: "owner.plugin"}}
+	for _, operation := range []string{"create", "write", "resize", "status", "terminate"} {
+		name := "process.session." + operation
+		response := runtime.dispatchCapability(context.Background(), []byte(`{"apiVersion":1,"capability":"`+name+`","params":{"id":"x"}}`))
+		if !response.OK || host.operation != operation {
+			t.Fatalf("%s response=%#v host=%q", name, response, host.operation)
+		}
+	}
+	response := (&Runtime{host: testHost{}, manifest: Manifest{ID: "owner.plugin"}}).dispatchCapability(context.Background(), []byte(`{"apiVersion":1,"capability":"process.session.status","params":{"id":"x"}}`))
+	if response.Error == nil || response.Error.Code != "unavailable" {
+		t.Fatalf("missing capability response %#v", response)
+	}
+}
+
 // TestSystemSourceWASM proves the checked-in System module is produced by a
 // real compiler and uses the normal ABI/capability bridge, not a core bypass.
 func TestSystemSourceWASM(t *testing.T) {
