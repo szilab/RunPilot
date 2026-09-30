@@ -3,11 +3,64 @@ package plugins
 import (
 	"archive/zip"
 	_ "embed"
+	"fmt"
 	"os"
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
+
+// CleanupObsoleteSystemFixture removes the automatically installed ABI-v1
+// System fixture used by older develop builds. The fixture predates backend
+// and frontend contract requirements, so it cannot be discovered by current
+// releases. Only its immutable package directory is removed; plugin data is
+// stored elsewhere and remains untouched.
+func CleanupObsoleteSystemFixture(root string) (bool, error) {
+	dir := filepath.Join(root, "system", "1.0.0")
+	info, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false, nil
+	}
+	manifestPath := filepath.Join(dir, "plugin.yaml")
+	manifestInfo, err := os.Lstat(manifestPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !manifestInfo.Mode().IsRegular() {
+		return false, nil
+	}
+	file, err := os.Open(manifestPath)
+	if err != nil {
+		return false, err
+	}
+	var manifest Manifest
+	decoder := yaml.NewDecoder(file)
+	decoder.KnownFields(true)
+	decodeErr := decoder.Decode(&manifest)
+	closeErr := file.Close()
+	if decodeErr != nil {
+		return false, nil
+	}
+	if closeErr != nil {
+		return false, closeErr
+	}
+	if manifest.APIVersion != PluginAPIVersion || manifest.ID != "system" || manifest.Name != "System" || manifest.Description != "Host status and resource usage" || manifest.Version != "1.0.0" || manifest.Requires.RunPilotAPI != PluginABIVersion || manifest.Requires.Backend != "" || manifest.Requires.Frontend != "" || manifest.Backend == nil || manifest.Backend.Module != "backend/plugin.wasm" || manifest.Frontend == nil || manifest.Frontend.Module != "web/plugin.js" || manifest.Frontend.Stylesheet != "web/plugin.css" {
+		return false, nil
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return false, fmt.Errorf("remove obsolete System fixture: %w", err)
+	}
+	return true, nil
+}
 
 // EnsureReferenceSystem installs the nonpublic technical fixture for tests
 // through the same archive validation and atomic installer as any plugin.

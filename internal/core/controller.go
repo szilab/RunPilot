@@ -108,6 +108,23 @@ func Open(dataDir string) (*Controller, error) {
 		setting, ok := c.config.Snapshot().Plugins[id]
 		return boolValue(setting.Enabled), ok && setting.Enabled != nil
 	})
+	removedSystemFixture, err := plugins.CleanupObsoleteSystemFixture(c.plugins.Root())
+	if err != nil {
+		return nil, err
+	}
+	if removedSystemFixture {
+		if err := c.config.Update(func(cfg *model.Config) error {
+			if setting, ok := cfg.Plugins["system"]; ok && boolValue(setting.Enabled) {
+				disabled := false
+				setting.Enabled = &disabled
+				cfg.Plugins["system"] = setting
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		log.Printf("removed obsolete automatically installed System fixture")
+	}
 	for _, pluginErr := range c.plugins.Reload() {
 		log.Printf("plugin discovery: %v", pluginErr)
 	}
