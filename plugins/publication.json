@@ -6,6 +6,6 @@
     {"id": "remote.vnc", "source": "plugins/remote-vnc", "publish": false},
     {"id": "hello", "source": "plugins/examples/hello", "publish": false},
     {"id": "tasks", "source": "plugins/tasks", "publish": false},
-    {"id": "terminal", "source": "plugins/terminal", "publish": false}
+    {"id": "terminal", "source": "plugins/terminal", "publish": true}
   ]
 }
