@@ -16,6 +16,15 @@ architecture description elsewhere.
   implementation. Remove legacy code only after plugin parity and tests.
 - New feature semantics belong in plugins, not in core. Core may expose narrow,
   reusable host capabilities.
+- Backend contracts and host capabilities are intentionally extensible. When a
+  plugin needs functionality that existing capabilities cannot correctly
+  provide, first design a new reusable host capability. A capability is
+  appropriate when it represents generic infrastructure reusable by multiple
+  features; do not duplicate platform-specific infrastructure in plugins just
+  to avoid extending a contract, or move feature semantics into core because a
+  capability is missing. For example, an interactive PTY-backed process session
+  may be a core capability for terminal-like features, while terminal page
+  behavior remains plugin-owned.
 - New plugin browser RPC/events use the common authenticated application
   WebSocket. Do not add feature-specific REST APIs or WebSockets.
 - Keep raw WASM ABI, backend contract, frontend contract, RunPilot version and
