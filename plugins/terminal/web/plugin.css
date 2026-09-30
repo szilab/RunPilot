@@ -1,0 +1,2 @@
+.terminal-plugin-screen { height: min(68vh, 720px); min-height: 320px; overflow: hidden; border: 1px solid var(--rp-border); border-radius: var(--rp-radius); background: var(--rp-surface); padding: var(--rp-space-2); }
+.terminal-plugin-screen .xterm { height: 100%; }
