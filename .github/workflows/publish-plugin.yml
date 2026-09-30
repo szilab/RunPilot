@@ -1,0 +1,127 @@
+name: Publish plugin version
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: Plugin ID enabled in plugins/publication.json
+        required: true
+        type: string
+      version:
+        description: Exact plugin.yaml version (must be a new version)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Serialize catalog replacement across ALL plugins. Never cancel a publication.
+concurrency:
+  group: plugin-publication
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.package.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: acifani/setup-tinygo@v3
+        with:
+          tinygo-version: '0.38.0'
+      - name: Validate and build selected version
+        id: package
+        env:
+          PLUGIN_ID: ${{ inputs.plugin }}
+          PLUGIN_VERSION: ${{ inputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir=$(go run ./cmd/plugin-catalog -source "$PLUGIN_ID")
+          tag="plugin-${PLUGIN_ID}-v${PLUGIN_VERSION}"
+          go run ./cmd/plugin-build -manifest -tag "$tag" "$source_dir" > manifest.json
+          test "$(jq -r .id manifest.json)" = "$PLUGIN_ID"
+          module=$(jq -r '.backend.module // empty' manifest.json)
+          if [ -n "$module" ]; then
+            GOOS=js GOARCH=wasm tinygo build -target=wasm-unknown -tags=runpilot_wasm -scheduler=none -gc=conservative -stack-size=64kb -no-debug -o "$source_dir/$module" "./$source_dir/backend"
+          fi
+          while IFS= read -r -d '' script; do node --input-type=module --check < "$script"; done < <(find "$source_dir" -name '*.js' -print0)
+          go test ./internal/plugins ./internal/pluginapi ./cmd/plugin-build ./cmd/plugin-catalog
+          go run ./cmd/plugin-build -tag "$tag" -out dist "$source_dir"
+          package="${PLUGIN_ID}-${PLUGIN_VERSION}.rpplugin"
+          go run ./cmd/plugin-catalog -package "dist/$package" -repository "$REPOSITORY" -tag "$tag" -out dist/publication.json
+          (cd dist && sha256sum "$package" > "$package.sha256")
+          go run ./cmd/plugin-catalog -out dist/catalog-preview.json dist/publication.json
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-publication
+          path: |
+            dist/*.rpplugin
+            dist/*.sha256
+            dist/publication.json
+          if-no-files-found: error
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - uses: actions/download-artifact@v4
+        with:
+          name: plugin-publication
+          path: dist
+      - name: Create immutable plugin release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Fail closed: the successful list request distinguishes absence from an API error.
+          gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[].tag_name' > release-tags.txt
+          if grep -Fxq "$RELEASE_TAG" release-tags.txt; then
+            echo "Plugin version already published; increment plugin.yaml version." >&2
+            exit 1
+          fi
+          gh api --paginate "repos/$GH_REPO/tags?per_page=100" --jq '.[].name' > git-tags.txt
+          if grep -Fxq "$RELEASE_TAG" git-tags.txt; then
+            echo "Plugin tag already exists; refusing to reuse it." >&2
+            exit 1
+          fi
+          # Draft first: only advertise a release once every asset has uploaded.
+          gh release create "$RELEASE_TAG" --target "$RELEASE_COMMIT" --title "$RELEASE_TAG" --notes "Independently versioned RunPilot plugin." --draft dist/*.rpplugin dist/*.sha256 dist/publication.json
+          gh release edit "$RELEASE_TAG" --draft=false --latest=false
+      - name: Regenerate and replace catalog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./cmd/plugin-catalog -github -repository "$GH_REPO" -out dist/catalog.json
+          gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[].tag_name' > release-tags.txt
+          if ! grep -Fxq plugin-catalog release-tags.txt; then
+            gh release create plugin-catalog --title 'Plugin catalog' --notes 'Generated mutable first-party plugin catalog.' --latest=false
+          fi
+          gh release upload plugin-catalog dist/catalog.json --clobber
