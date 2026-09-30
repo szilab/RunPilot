@@ -122,6 +122,24 @@ func TestProcessSessionCapabilitiesDispatchThroughHost(t *testing.T) {
 	}
 }
 
+type failingEventHost struct {
+	testHost
+	err error
+}
+
+func (h failingEventHost) PublishEvent(context.Context, string, string, json.RawMessage) error {
+	return h.err
+}
+
+func TestEventPublishPreservesHostFailure(t *testing.T) {
+	host := failingEventHost{err: &HostFailure{Code: "io_error", Message: "event queue is full"}}
+	runtime := &Runtime{host: host, manifest: Manifest{ID: "terminal"}}
+	response := runtime.dispatchCapability(context.Background(), []byte(`{"apiVersion":1,"capability":"events.publish","params":{"event":"process.session.output","data":{"id":"s"}}}`))
+	if response.Error == nil || response.Error.Code != "io_error" || response.Error.Message != "event queue is full" {
+		t.Fatalf("event publish failure was not preserved: %#v", response)
+	}
+}
+
 // TestSystemSourceWASM proves the checked-in System module is produced by a
 // real compiler and uses the normal ABI/capability bridge, not a core bypass.
 func TestSystemSourceWASM(t *testing.T) {

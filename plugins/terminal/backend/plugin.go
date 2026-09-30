@@ -21,9 +21,11 @@ func hostError(err error) *rpcError {
 }
 
 type session struct {
-	ID      string `json:"id"`
-	State   string `json:"state"`
-	Command string `json:"command,omitempty"`
+	ID       string `json:"id"`
+	State    string `json:"state"`
+	Command  string `json:"command,omitempty"`
+	ExitCode *int   `json:"exitCode,omitempty"`
+	Reason   string `json:"reason,omitempty"`
 }
 type plugin struct{ sessions map[string]session }
 
@@ -61,6 +63,11 @@ func (p *plugin) open(raw json.RawMessage) (any, *rpcError) {
 	}
 	if e := decode(raw, &req); e != nil {
 		return nil, e
+	}
+	for id, current := range p.sessions {
+		if current.State != "running" {
+			delete(p.sessions, id)
+		}
 	}
 	if len(p.sessions) >= 8 {
 		return nil, fail("resource_limit", "terminal session limit reached")
@@ -159,10 +166,26 @@ func (p *plugin) status(raw json.RawMessage) (any, *rpcError) {
 	}
 	var out json.RawMessage
 	if err := callHost("process.session.status", map[string]string{"id": r.ID}, &out); err != nil {
+		if current, ok := p.sessions[r.ID]; ok && current.State != "running" {
+			return map[string]any{"id": current.ID, "state": current.State, "exitCode": current.ExitCode, "reason": current.Reason}, nil
+		}
 		return nil, hostError(err)
 	}
 	var view map[string]any
 	_ = json.Unmarshal(out, &view)
+	if current, ok := p.sessions[r.ID]; ok {
+		if state, ok := view["state"].(string); ok {
+			current.State = state
+		}
+		if reason, ok := view["reason"].(string); ok {
+			current.Reason = reason
+		}
+		if code, ok := view["exitCode"].(float64); ok {
+			value := int(code)
+			current.ExitCode = &value
+		}
+		p.sessions[r.ID] = current
+	}
 	return view, nil
 }
 func (p *plugin) close(raw json.RawMessage) (any, *rpcError) {
@@ -176,34 +199,60 @@ func (p *plugin) close(raw json.RawMessage) (any, *rpcError) {
 	if e := p.owned(r.ID); e != nil {
 		return nil, e
 	}
+	if current := p.sessions[r.ID]; current.State != "running" {
+		delete(p.sessions, r.ID)
+		return map[string]any{"ok": true}, nil
+	}
 	var out json.RawMessage
 	if err := callHost("process.session.terminate", map[string]any{"id": r.ID, "force": r.Force}, &out); err != nil {
+		if cap, ok := pluginapi.AsCapabilityError(err); ok && cap.Code == "not_found" {
+			delete(p.sessions, r.ID)
+			return map[string]any{"ok": true}, nil
+		}
 		return nil, hostError(err)
 	}
 	delete(p.sessions, r.ID)
 	return map[string]any{"ok": true}, nil
 }
-func (p *plugin) event(name string, raw json.RawMessage) {
+func (p *plugin) event(name string, raw json.RawMessage) *rpcError {
 	if name != "process.session.output" && name != "process.session.exit" && name != "process.session.error" {
-		return
+		return nil
 	}
 	var data struct {
 		ID string `json:"id"`
 	}
 	if json.Unmarshal(raw, &data) != nil {
-		return
+		return fail("invalid_argument", "invalid process session event")
 	}
 	if _, ok := p.sessions[data.ID]; !ok {
-		return
+		return nil
 	}
-	_ = callHost("events.publish", map[string]any{"event": name, "data": json.RawMessage(raw)}, nil)
+	if err := callHost("events.publish", map[string]any{"event": name, "data": json.RawMessage(raw)}, nil); err != nil {
+		return hostError(err)
+	}
 	if name == "process.session.exit" || name == "process.session.error" {
-		delete(p.sessions, data.ID)
+		current := p.sessions[data.ID]
+		if name == "process.session.exit" {
+			var exit struct {
+				State    string `json:"state"`
+				ExitCode *int   `json:"exitCode"`
+				Reason   string `json:"reason"`
+			}
+			if json.Unmarshal(raw, &exit) == nil {
+				current.State, current.ExitCode, current.Reason = exit.State, exit.ExitCode, exit.Reason
+			}
+		} else {
+			current.State, current.Reason = "exited", "io_error"
+		}
+		p.sessions[data.ID] = current
 	}
+	return nil
 }
 func (p *plugin) shutdown() {
-	for id := range p.sessions {
-		_ = callHost("process.session.terminate", map[string]any{"id": id, "force": true}, nil)
+	for id, session := range p.sessions {
+		if session.State == "running" {
+			_ = callHost("process.session.terminate", map[string]any{"id": id, "force": true}, nil)
+		}
 	}
 	p.sessions = map[string]session{}
 }

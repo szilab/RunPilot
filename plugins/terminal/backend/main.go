@@ -56,7 +56,10 @@ func runpilot_event(handle uint32) {
 		writeFailure(handle, "invalid_argument", "invalid event input")
 		return
 	}
-	current.event(in.Operation, in.Request)
+	if err := current.event(in.Operation, in.Request); err != nil {
+		writeFailure(handle, err.Code, err.Message)
+		return
+	}
 	_ = pluginapi.WriteOutput(handle, map[string]any{"ok": true})
 }
 

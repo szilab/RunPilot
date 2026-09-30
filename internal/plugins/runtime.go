@@ -220,8 +220,27 @@ func (r *Runtime) Event(ctx context.Context, event string, data any) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, err = r.invoke(ctx, exportEvent, lifecycleRequest{APIVersion: r.manifest.Requires.RunPilotAPI, Operation: event, Request: payload})
-	return err
+	var result []byte
+	result, err = r.invoke(ctx, exportEvent, lifecycleRequest{APIVersion: r.manifest.Requires.RunPilotAPI, Operation: event, Request: payload})
+	if err != nil {
+		return err
+	}
+	var output map[string]json.RawMessage
+	if err := json.Unmarshal(result, &output); err != nil || output == nil {
+		return nil // ABI-v1 event handlers may return any valid JSON value.
+	}
+	errorValue, ok := output["error"]
+	if !ok || string(errorValue) == "null" {
+		return nil
+	}
+	var eventError struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(errorValue, &eventError); err != nil {
+		return fmt.Errorf("plugin %q returned an invalid event error: %w", r.manifest.ID, err)
+	}
+	return fmt.Errorf("plugin %q event %s failed: %s: %s", r.manifest.ID, event, eventError.Code, eventError.Message)
 }
 
 func (r *Runtime) invoke(parent context.Context, name string, value any) ([]byte, error) {
@@ -593,7 +612,7 @@ func (r *Runtime) dispatchCapability(ctx context.Context, payload []byte) capabi
 			return capabilityFailure("unavailable", "event publication is unavailable")
 		}
 		if err := events.PublishEvent(ctx, r.manifest.ID, args.Event, args.Data); err != nil {
-			return capabilityFailure("failed", "events.publish failed")
+			return detailedFailure("events.publish", err)
 		}
 		return capabilitySuccess(nil)
 	default:

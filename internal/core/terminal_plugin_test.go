@@ -129,30 +129,217 @@ func TestTerminalPluginInstallEnableRestartAndInteractiveSession(t *testing.T) {
 	opened := terminalCall(t, c, "terminal.open", map[string]any{"rows": 24, "columns": 80})
 	session := opened["session"].(map[string]any)
 	id := session["id"].(string)
+	first := awaitTerminalOutput(t, events, id)
+	if first.sequence != 1 || len(first.bytes) == 0 {
+		t.Fatalf("first terminal event was not an initial prompt/output chunk: %+v", first)
+	}
 	terminalCall(t, c, "terminal.resize", map[string]any{"id": id, "rows": 31, "columns": 101})
 	terminalCall(t, c, "terminal.status", map[string]any{"id": id})
-	input := base64.StdEncoding.EncodeToString([]byte("printf 'RP_TERMINAL_PLUGIN_OK\\n'\n"))
+	input := base64.StdEncoding.EncodeToString([]byte("head -c 20000 /dev/zero | tr '\\000' X; printf '\\nRP_END_1\\n'; sleep 0.1; printf 'RP_LATE_1\\n'\n"))
 	terminalCall(t, c, "terminal.write", map[string]any{"id": id, "data": input})
-	seenOutput := false
+	var output strings.Builder
+	output.Write(first.bytes)
+	previousSequence := first.sequence
+	chunks := 1
+	seenLate := false
 	deadline := time.After(8 * time.Second)
-	for !seenOutput {
+	for !seenLate {
 		select {
 		case event := <-events:
 			if event.Plugin != terminalPluginID || event.Event != "process.session.output" {
 				continue
 			}
-			var output struct {
-				ID   string `json:"id"`
-				Data string `json:"data"`
-			}
-			_ = json.Unmarshal(event.Data, &output)
-			if output.ID == id {
-				bytes, _ := base64.StdEncoding.DecodeString(output.Data)
-				seenOutput = strings.Contains(string(bytes), "RP_TERMINAL_PLUGIN_OK")
+			chunk := decodeTerminalOutput(t, event.Data)
+			if chunk.id == id {
+				if chunk.sequence != previousSequence+1 {
+					t.Fatalf("output sequence %d followed %d", chunk.sequence, previousSequence)
+				}
+				previousSequence = chunk.sequence
+				chunks++
+				output.Write(chunk.bytes)
+				seenLate = strings.Contains(output.String(), "RP_LATE_1")
 			}
 		case <-deadline:
-			t.Fatal("timed out waiting for terminal output")
+			t.Fatal("timed out waiting for terminal output marker")
 		}
 	}
-	terminalCall(t, c, "terminal.close", map[string]any{"id": id, "force": true})
+	if chunks < 3 || strings.Count(output.String(), "RP_END_1") != 1 || !strings.Contains(output.String(), "RP_LATE_1") || strings.Index(output.String(), "RP_END_1") > strings.Index(output.String(), "RP_LATE_1") {
+		t.Fatalf("multi-chunk output was missing, duplicated, or out of order (chunks=%d)", chunks)
+	}
+
+	input = base64.StdEncoding.EncodeToString([]byte("printf 'RP_NONZERO_7\\n'; exit 7\n"))
+	terminalCall(t, c, "terminal.write", map[string]any{"id": id, "data": input})
+	exit := awaitTerminalExit(t, events, id)
+	if exit.Reason != "exited" || exit.ExitCode == nil || *exit.ExitCode != 7 {
+		t.Fatalf("non-zero shell completion: %+v", exit)
+	}
+	duplicateWindow := time.NewTimer(100 * time.Millisecond)
+	for {
+		select {
+		case event := <-events:
+			if event.Plugin == terminalPluginID && event.Event == "process.session.exit" {
+				var duplicate struct {
+					ID string `json:"id"`
+				}
+				_ = json.Unmarshal(event.Data, &duplicate)
+				if duplicate.ID == id {
+					t.Fatal("session completion was delivered more than once")
+				}
+			}
+		case <-duplicateWindow.C:
+			goto completionChecked
+		}
+	}
+
+completionChecked:
+
+	// Opening another shell after completion must create fresh state and receive
+	// only output tagged for the new opaque session ID.
+	opened = terminalCall(t, c, "terminal.open", map[string]any{"rows": 24, "columns": 80})
+	secondID := opened["session"].(map[string]any)["id"].(string)
+	if secondID == id {
+		t.Fatal("reopened terminal reused the previous session ID")
+	}
+	_ = awaitTerminalOutput(t, events, secondID)
+	input = base64.StdEncoding.EncodeToString([]byte("printf 'RP_SECOND_SESSION\\n'\n"))
+	terminalCall(t, c, "terminal.write", map[string]any{"id": secondID, "data": input})
+	var secondOutput strings.Builder
+	deadline = time.After(8 * time.Second)
+	for !strings.Contains(secondOutput.String(), "RP_SECOND_SESSION") {
+		select {
+		case event := <-events:
+			if event.Plugin == terminalPluginID && event.Event == "process.session.output" {
+				chunk := decodeTerminalOutput(t, event.Data)
+				if chunk.id == secondID {
+					secondOutput.Write(chunk.bytes)
+				}
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for second terminal session output")
+		}
+	}
+	terminalCall(t, c, "terminal.close", map[string]any{"id": secondID, "force": true})
+	waitForPluginSessionExit(t, c, secondID, "terminated")
+	third := terminalCall(t, c, "terminal.open", map[string]any{"rows": 24, "columns": 80})
+	thirdID := third["session"].(map[string]any)["id"].(string)
+	if thirdID == id || thirdID == secondID {
+		t.Fatal("session ID leaked after termination")
+	}
+	terminalCall(t, c, "terminal.close", map[string]any{"id": thirdID, "force": true})
+	waitForPluginSessionExit(t, c, thirdID, "terminated")
+
+	// Saturate the shared application event subscriber. Output publication must
+	// fail back through ABI v2 so the core session ends explicitly with io_error.
+	fourth := terminalCall(t, c, "terminal.open", map[string]any{"rows": 24, "columns": 80})
+	fourthID := fourth["session"].(map[string]any)["id"].(string)
+	_ = awaitTerminalOutput(t, events, fourthID)
+	drainTerminalEvents(events, 150*time.Millisecond)
+	for i := 0; i < cap(events); i++ {
+		c.publishPluginEvent("other", "test.noise", json.RawMessage(`{}`))
+	}
+	input = base64.StdEncoding.EncodeToString([]byte("printf 'RP_OVERFLOW_TRIGGER\\n'\n"))
+	terminalCall(t, c, "terminal.write", map[string]any{"id": fourthID, "data": input})
+	waitForPluginSessionExit(t, c, fourthID, "io_error")
+	status := terminalCall(t, c, "terminal.status", map[string]any{"id": fourthID})
+	if status["reason"] != "io_error" || status["state"] != "exited" {
+		t.Fatalf("event overflow was not visible as an explicit terminal error: %#v", status)
+	}
+}
+
+func drainTerminalEvents(events <-chan plugins.Event, duration time.Duration) {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	for {
+		select {
+		case <-events:
+		case <-timer.C:
+			return
+		}
+	}
+}
+
+type terminalOutput struct {
+	id       string
+	sequence int
+	bytes    []byte
+}
+
+func decodeTerminalOutput(t *testing.T, raw json.RawMessage) terminalOutput {
+	t.Helper()
+	var event struct {
+		ID       string `json:"id"`
+		Sequence int    `json:"sequence"`
+		Data     string `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &event); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(event.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return terminalOutput{id: event.ID, sequence: event.Sequence, bytes: decoded}
+}
+func awaitTerminalOutput(t *testing.T, events <-chan plugins.Event, id string) terminalOutput {
+	t.Helper()
+	deadline := time.After(8 * time.Second)
+	for {
+		select {
+		case event := <-events:
+			if event.Plugin == terminalPluginID && event.Event == "process.session.output" {
+				chunk := decodeTerminalOutput(t, event.Data)
+				if chunk.id == id {
+					return chunk
+				}
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for initial output for %s", id)
+		}
+	}
+}
+func awaitTerminalExit(t *testing.T, events <-chan plugins.Event, id string) struct {
+	Reason   string `json:"reason"`
+	ExitCode *int   `json:"exitCode"`
+} {
+	t.Helper()
+	deadline := time.After(8 * time.Second)
+	for {
+		select {
+		case event := <-events:
+			if event.Plugin == terminalPluginID && event.Event == "process.session.exit" {
+				var got struct {
+					ID       string `json:"id"`
+					Reason   string `json:"reason"`
+					ExitCode *int   `json:"exitCode"`
+				}
+				if err := json.Unmarshal(event.Data, &got); err != nil {
+					t.Fatal(err)
+				}
+				if got.ID == id {
+					return struct {
+						Reason   string `json:"reason"`
+						ExitCode *int   `json:"exitCode"`
+					}{got.Reason, got.ExitCode}
+				}
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for terminal exit for %s", id)
+		}
+	}
+}
+
+func waitForPluginSessionExit(t *testing.T, c *Controller, id, reason string) {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		raw, err := c.pluginSessions.status(terminalPluginID, json.RawMessage(`{"id":"`+id+`"}`))
+		if err == nil {
+			var status pluginSessionStatus
+			if json.Unmarshal(raw, &status) == nil && status.State == "exited" && status.Reason == reason {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("session %s did not exit with reason %s", id, reason)
 }
