@@ -49,6 +49,15 @@ contract/platform requirements match. Build metadata does not imply an update.
 
 ## Release policy and build
 
+The immutable GitHub plugin releases and their `publication.json` assets are
+the publication source of truth. `plugin-catalog/catalog.json` is a generated,
+replaceable discovery index rebuilt from every published release record; GitHub
+Release titles and descriptions are not runtime metadata. The record carries the
+plugin's display metadata, version, package URL/checksum and compatibility
+requirements. There is no separate RunPilot version constraint: platform,
+backend/frontend contract ranges and (for backends) raw WASM ABI determine
+compatibility.
+
 `plugins/publication.json` is repository-only publication policy. Each rule
 maps an ID to its source directory and an explicit `publish` boolean. It is not
 part of runtime manifests. System is `publish: false`; it remains a technical
@@ -206,6 +215,22 @@ Catalog installations carry host-owned `.runpilot-source.json` inside the atomic
 installation with ID, version, registry and checksum. Archives cannot supply this
 reserved file. Manual/local installations need no source metadata, remain usable
 without any catalog entry, and do not receive catalog update suggestions.
+
+For development, edit the source plugin under `plugins/<id>` and build a local
+`.rpplugin` with `plugin-build`; this artifact is for local validation and is not
+published. A package installed outside the catalog has no catalog update
+tracking. The published workflow builds the same immutable package format, then
+creates its tagged GitHub release and regenerates the catalog. There is not yet a
+Settings workflow for installing a local archive.
+
+Updates are detected only when the user checks the catalog, and installation is
+explicit. A newly installed version is selected on the next startup; the running
+version stays active until then. Older version directories are retained, but the
+current manager always selects the highest installed SemVer and does not expose
+a rollback selector. A backend load failure is reported and does not stop
+RunPilot, but it does not automatically restore an older plugin version. A future
+rollback control should let an administrator select a retained version and
+restart; activation remains restart-based.
 
 ## Trust and future scope
 
