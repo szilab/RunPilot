@@ -26,7 +26,6 @@
         <button class="nav" type="button" data-page="tasks" title="Tasks"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="m8.5 12 2.3 2.3 4.7-5"/></svg><span class="nav-label">Tasks</span></button>
         <button class="nav" type="button" data-page="software" title="Software"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 5h14v14H5zM8 9h8M8 13h5"/></svg><span class="nav-label">Software</span></button>
         <button class="nav" type="button" data-page="remote" title="Remote"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="1"/><path d="M8 21h8M12 17v4"/></svg><span class="nav-label">Remote</span></button>
-        <button id="terminalNav" class="nav hidden" type="button" data-page="terminal" title="Terminal"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg><span class="nav-label">Terminal</span></button>
       </nav>
       <div class="sidebar-bottom">
         <button class="nav sidebar-settings-nav" type="button" data-page="settings" title="Settings"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.4 1A7 7 0 0 0 14.5 6L14.2 3h-4.4L9.5 6a7 7 0 0 0-2 .9l-2.4-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.4-1a7 7 0 0 0 2 .9l.3 3h4.4l.3-3a7 7 0 0 0 2-.9l2.4 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg><span class="nav-label">Settings</span></button>
@@ -94,15 +93,6 @@
         <div id="softwareSearchBar" class="software-search hidden"><input id="softwareSearchInput" placeholder="Search the managed Scoop main bucket"><button id="softwareSearchButton" class="button primary small">Search</button></div>
         <div id="softwareBucketBar" class="software-bucket-bar hidden"><input id="softwareBucketName" placeholder="Bucket name"><input id="softwareBucketSource" placeholder="Optional HTTPS bucket URL"><button id="softwareAddBucket" class="button primary small">Add bucket</button></div>
         <div id="softwarePackages" class="row-list"></div>
-      </section>
-
-      <section id="terminalPage" class="page">
-        <div class="terminal-toolbar">
-          <select id="terminalShell" aria-label="Terminal shell"></select>
-          <button id="newTerminal" class="button primary" type="button">+ New terminal</button>
-        </div>
-        <div id="terminalUnavailable" class="empty hidden"><h2>Terminal unavailable</h2><p id="terminalUnavailableMessage">Terminal is not supported on this host.</p></div>
-        <div id="terminalWorkspace" class="terminal-workspace hidden"><div id="terminalTabs" class="terminal-tabs"></div><div id="terminalPanes" class="terminal-panes"></div></div>
       </section>
 
       <section id="remotePage" class="page">

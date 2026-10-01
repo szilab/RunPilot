@@ -35,6 +35,7 @@ export async function activate(runpilot) {
   let opening = false;
   let earlyOutput = [];
   let observers = [];
+  let themeSubscription = null;
   const state = { error: "" };
   const ui = runpilot.ui;
   const escape = ui.escape;
@@ -45,6 +46,23 @@ export async function activate(runpilot) {
     return result;
   }
   function active() { return sessions.find(item => item.session.id === activeID); }
+  function xtermTheme(theme) {
+    const colors = theme.colors;
+    return {
+      background: colors.surfaceElevated,
+      foreground: colors.text,
+      cursor: colors.accent,
+      cursorAccent: colors.surfaceElevated,
+      selectionBackground: colors.selection,
+      black: colors.terminalBlack, red: colors.terminalRed, green: colors.terminalGreen,
+      yellow: colors.terminalYellow, blue: colors.terminalBlue, magenta: colors.terminalMagenta,
+      cyan: colors.terminalCyan, white: colors.terminalWhite,
+      brightBlack: colors.terminalBrightBlack, brightRed: colors.terminalBrightRed,
+      brightGreen: colors.terminalBrightGreen, brightYellow: colors.terminalBrightYellow,
+      brightBlue: colors.terminalBrightBlue, brightMagenta: colors.terminalBrightMagenta,
+      brightCyan: colors.terminalBrightCyan, brightWhite: colors.terminalBrightWhite,
+    };
+  }
   function cleanupTerminal(item) {
     item?.resizeObserver?.disconnect();
     item?.terminal?.dispose();
@@ -64,15 +82,17 @@ export async function activate(runpilot) {
       const id = item.session.id;
       const tab = document.createElement("div");
       tab.className = `terminal-plugin-tab${id === activeID ? " active" : ""}`;
-      tab.setAttribute("role", "tab"); tab.setAttribute("aria-selected", id === activeID ? "true" : "false");
-      const label = document.createElement("button"); label.type = "button";
+      const label = document.createElement("button"); label.type = "button"; label.className = "terminal-plugin-tab-label";
+      label.id = `terminal-tab-${id}`; label.setAttribute("role", "tab"); label.setAttribute("aria-selected", id === activeID ? "true" : "false");
       label.textContent = item.session.command || `Shell ${sessions.indexOf(item) + 1}`;
       label.addEventListener("click", () => { activeID = id; render(); item.terminal?.focus(); fit(item); });
       const closeTab = document.createElement("button"); closeTab.type = "button"; closeTab.className = "terminal-plugin-tab-close"; closeTab.textContent = "×";
-      closeTab.setAttribute("aria-label", "Close terminal session"); closeTab.addEventListener("click", () => close(id));
+      closeTab.setAttribute("aria-label", `Close ${label.textContent}`); closeTab.addEventListener("click", () => close(id));
       tab.append(label, closeTab); tabs.append(tab);
       const pane = document.createElement("div"); pane.className = "terminal-plugin-screen";
-      pane.hidden = id !== activeID; pane.setAttribute("aria-label", "Terminal output"); panes.append(pane);
+      pane.id = `terminal-pane-${id}`; pane.setAttribute("role", "tabpanel"); pane.setAttribute("aria-labelledby", label.id);
+      pane.hidden = id !== activeID; panes.append(pane);
+      label.setAttribute("aria-controls", pane.id);
       if (!item.terminal) attachTerminal(item, pane);
       else pane.append(item.terminal.element);
       if (id === activeID) queueMicrotask(() => { fit(item); item.terminal?.focus(); });
@@ -136,7 +156,8 @@ export async function activate(runpilot) {
     } catch (_) { /* hidden navigation pages have no measurable size */ }
   }
   function attachTerminal(item, host) {
-    item.terminal = new window.Terminal({ convertEol: true, cursorBlink: true, fontSize: 13, scrollback: 2000, allowTransparency: true, theme: { background: "transparent" } });
+    const theme = ui.theme.get();
+    item.terminal = new window.Terminal({ convertEol: true, cursorBlink: true, fontSize: 15, fontFamily: theme.fontFamily, scrollback: 3000, allowTransparency: true, theme: xtermTheme(theme) });
     item.terminal.fitAddon = new window.FitAddon.FitAddon();
     item.terminal.loadAddon(item.terminal.fitAddon);
     item.terminal.open(host);
@@ -149,12 +170,15 @@ export async function activate(runpilot) {
     item.resizeObserver.observe(host);
   }
   runpilot.navigation.register({
-    id: "terminal-plugin", title: "Terminal", icon: ">_",
+    id: "terminal", title: "Terminal", icon: ">_",
     render: root => {
       page = root;
       render();
       if (!sessions.length && !opening) void open();
     },
+  });
+  themeSubscription = ui.theme.subscribe(theme => {
+    for (const item of sessions) if (item.terminal) item.terminal.options.theme = xtermTheme(theme);
   });
   observers = [
     runpilot.ws.on(PLUGIN, "process.session.output", event => {
@@ -178,6 +202,7 @@ export async function activate(runpilot) {
   ];
   return () => {
     observers.forEach(off => off()); observers = [];
+    themeSubscription?.(); themeSubscription = null;
     sessions.forEach(item => { clearTimeout(item.statusTimer); void call("terminal.close", { id: item.session.id, force: true }); cleanupTerminal(item); });
     sessions = []; page = null;
   };

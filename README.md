@@ -197,16 +197,14 @@ substitute both handshake keys. Do not call this E2EE.
 Use the same flags with `service install` to persist them in the installed
 service command line. With the example above, publish the application
 through a reverse proxy at `https://mydomain.com/runpilot/`, forwarding that
-prefix unchanged to RunPilot. The UI, REST API, and Terminal WebSocket all use
-this one RunPilot listener and configured prefix. No terminal-specific port or
-proxy target is required.
+prefix unchanged to RunPilot. The UI, REST API, plugin terminal sessions, and
+Docker attach WebSocket all use this one RunPilot listener and configured
+prefix. No terminal-specific port or proxy target is required.
 
-The Terminal WebSocket endpoint is `api/v1/terminal/connect`. It is therefore
-`/api/v1/terminal/connect` with the root base path and
-`/runpilot/api/v1/terminal/connect` when `basePath: /runpilot` is configured.
-The browser builds its `ws:`/`wss:` URL from the GUI page's base URI, so the
-public host, port, TLS scheme, and prefix are preserved when TLS terminates at
-a reverse proxy.
+Docker attach uses `/api/v1/docker/attach` (or
+`/runpilot/api/v1/docker/attach` with `basePath: /runpilot`). The browser builds
+its `ws:`/`wss:` URL from the GUI page's base URI, so the public host, port, TLS
+scheme, and prefix are preserved when TLS terminates at a reverse proxy.
 
 Configure a WebSocket-aware proxy to forward `/runpilot/*` (including Upgrade
 requests) to the same RunPilot upstream port, preserving both the `/runpilot`
@@ -215,19 +213,17 @@ RunPilot is configured with `basePath: /runpilot`.
 
 ## Interactive Terminal
 
-The Terminal page starts an interactive shell as the RunPilot service identity.
-It uses a real Linux PTY or Windows ConPTY, with embedded xterm.js assets; no
-Node.js runtime or public CDN is required after build. Each browser tab has one
-short-lived session: closing the tab, browser connection, or RunPilot shuts
-down its shell and process tree. Terminal bytes and commands are never saved by
-RunPilot.
+The Terminal plugin starts interactive sessions as the RunPilot service
+identity. It uses a real Linux PTY or Windows ConPTY with xterm.js assets
+packaged in the plugin; no Node.js runtime or public CDN is required after
+build. Terminal sessions use the common authenticated application WebSocket
+and are never recorded as task history.
 
 Terminal access is equivalent to arbitrary command execution as the account
 running RunPilot. On Linux this is the installing user's normal account; on
 Windows it is the configured service identity. It is protected by the same API
-token boundary as process and job management. The browser first obtains a short-lived, single-use connection
-ticket through the authenticated REST API; the permanent token is never placed
-in the WebSocket URL.
+token boundary as process and job management. Plugin requests and session
+events use the authenticated application WebSocket.
 
 ## Remote Access
 

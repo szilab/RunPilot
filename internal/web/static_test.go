@@ -37,21 +37,18 @@ func TestSecureWebSocketDefersApplicationTrafficUntilHandshakeCompletes(t *testi
 	}
 }
 
-func TestTerminalSessionIDsDoNotRequireCryptoRandomUUID(t *testing.T) {
-	source, err := staticFS.ReadFile("static/app.js")
+func TestLegacyTerminalUIIsRemoved(t *testing.T) {
+	index, err := staticFS.ReadFile("static/index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := string(source)
-	for _, want := range []string{
-		"function terminalSessionID()",
-		"typeof crypto.randomUUID === \"function\"",
-		"crypto.getRandomValues(new Uint8Array(16))",
-		"const id = terminalSessionID();",
-		"error?.message || \"Terminal connection failed.\"",
-	} {
-		if !strings.Contains(script, want) {
-			t.Fatalf("terminal UUID compatibility behavior is missing %q", want)
+	app, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, removed := range []string{`id="terminalPage"`, `id="terminalNav"`, `id="terminalShell"`, `api/v1/terminal/ticket`, `api/v1/terminal/connect`} {
+		if strings.Contains(string(index)+string(app), removed) {
+			t.Fatalf("legacy terminal UI still contains %q", removed)
 		}
 	}
 }
@@ -96,9 +93,6 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		`runpilot-logo.png`,
 		`id="themeToggle"`,
 		`data-page="software"`,
-		`data-page="terminal"`,
-		`id="terminalPage"`,
-		`id="terminalTabs"`,
 		`vendor/xterm/xterm.js`,
 		`vendor/xterm/addon-fit.js`,
 		`id="softwarePage"`,
@@ -181,13 +175,13 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	if !strings.Contains(script, "function applyTheme") {
 		t.Fatal("app.js does not support theme selection")
 	}
-	for _, want := range []string{"function loadTerminalInfo", "function terminalWebSocketURL", "api/v1/terminal/ticket", "new WebSocket", "FitAddon.FitAddon", `new URL("api/v1/terminal/connect", document.baseURI)`, `wsURL.searchParams.set("ticket", ticket)`} {
+	for _, want := range []string{"function loadSystemInfo", "function dockerAttachWebSocketURL", "api/v1/docker/containers/", "new RunPilotSecureWebSocket", "FitAddon.FitAddon", `new URL("api/v1/docker/attach", document.baseURI)`, `wsURL.searchParams.set("ticket", ticket)`, "theme: Object.freeze({", "subscribe: listener =>"} {
 		if !strings.Contains(script, want) {
-			t.Fatalf("app.js does not contain terminal integration %q", want)
+			t.Fatalf("app.js does not contain shared UI or Docker attach integration %q", want)
 		}
 	}
 	if strings.Contains(script, "ticket.url") {
-		t.Fatal("terminal WebSocket must be derived from document.baseURI, not a server-provided URL")
+		t.Fatal("Docker attach WebSocket must be derived from document.baseURI, not a server-provided URL")
 	}
 	if strings.Contains(page+script, "cdn.jsdelivr") || strings.Contains(page+script, "unpkg.com") {
 		t.Fatal("terminal assets must not load from a CDN")

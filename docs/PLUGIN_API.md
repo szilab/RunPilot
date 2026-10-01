@@ -310,6 +310,24 @@ runpilot.settings
 runpilot.ui
 ```
 
+`runpilot.ui.theme` exposes the active semantic design tokens and reports
+changes when the user switches color schemes:
+
+```javascript
+const theme = runpilot.ui.theme.get();
+const unsubscribe = runpilot.ui.theme.subscribe(nextTheme => {
+    // Update colors in long-lived controls such as terminal emulators.
+});
+```
+
+The returned object contains `scheme`, `resolvedScheme`, `fontFamily`, and a
+`colors` object with `surface`, `surfaceElevated`, `text`, `textStrong`,
+`textMuted`, `border`, `accent`, `selection`, and terminal palette keys
+`terminalBlack`, `terminalRed`, `terminalGreen`, `terminalYellow`,
+`terminalBlue`, `terminalMagenta`, `terminalCyan`, `terminalWhite`, and the
+matching `terminalBright*` keys. Plugins should use these values rather than
+define their own color schemes. `subscribe()` returns an unsubscribe function.
+
 Plugins use `runpilot.ws.call()` for RPC and `runpilot.ws.on()` for events
 instead of opening their own application WebSocket. Navigation/pages, Overview
 cards and Settings sections are registered through the corresponding extension

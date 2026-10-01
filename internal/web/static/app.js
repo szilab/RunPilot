@@ -8,7 +8,7 @@ let storage = [], storageLocation = null, storagePath = "";
 let softwareProviders = [], softwareProviderID = "", softwarePackages = [], softwareUpdates = [], softwareSearchResults = [], softwareBuckets = [], softwareTab = "installed", softwareBusy = false, softwareBusyLabel = "", softwareLoading = false, softwareLoadingKey = "", softwareLoadedKey = "", softwareLoadSequence = 0, softwareRootDrafts = {};
 let storageClipboard = null, editingTextPath = null, storageShowHidden = false, storagePathCapabilities = null;
 let overview = null;
-let systemInfo = null, terminalInfo = null, terminalTabs = [], activeTerminalID = "";
+let systemInfo = null;
 let dockerRuntime = null, dockerProjects = [], dockerVolumes = [], dockerNetworks = [], dockerBusy = new Set(), dockerPendingContainerStates = new Map(), dockerProjectErrors = new Map(), dockerEditing = null, dockerAttachTerminal = null;
 let remoteProviders = [], remoteTargets = [], remoteSessions = [], remoteSessionID = "", remoteStartingTargets = new Set(), remoteRDPInteraction = null, remoteVNCInteraction = null, remotePendingTarget = null, remoteVNCPendingCredentials = null;
 let pluginStatuses = [], pluginBusy = new Set();
@@ -16,6 +16,7 @@ let pluginDiscoveryErrors = [], pluginRestartRequired = false;
 let pluginCatalog = [], pluginCatalogError = "", pluginCatalogLoaded = false, pluginCatalogLoading = false;
 let pluginExtensions = new Map();
 const pluginNavigation = new Map(), pluginOverview = new Map(), pluginSettings = new Map();
+const pluginThemeListeners = new Set();
 let applicationSocket = null, applicationSocketPromise = null, applicationSequence = 0;
 const applicationPending = new Map(), applicationListeners = new Map();
 let logTimer = null, toastTimer = null;
@@ -55,7 +56,57 @@ const pluginWS=Object.freeze({
   call: async (plugin,method,params={})=>{ const socket=await connectApplicationSocket(); const id=String(++applicationSequence); return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{applicationPending.delete(id);reject(new Error("plugin request timed out"));},10000); applicationPending.set(id,{resolve,reject,timer}); socket.send(JSON.stringify({id,plugin,method,params}));}); },
   on: (plugin,event,listener)=>{ const key=`${plugin}:${event}`, listeners=applicationListeners.get(key)||new Set(); listeners.add(listener); applicationListeners.set(key,listeners); return ()=>{listeners.delete(listener);if(!listeners.size)applicationListeners.delete(key);}; },
 });
-function pluginUI() { return Object.freeze({ escape: escapeHtml, toast, Card: ({title="",body="",className=""}={})=>{const card=document.createElement("article");card.className=`metric ${className}`;card.innerHTML=`<span>${escapeHtml(title)}</span>${body}`;return card;}, SectionTitle: title=>{const head=document.createElement("div");head.className="section-head";head.innerHTML=`<h2>${escapeHtml(title)}</h2>`;return head;}, EmptyState: ({title="Nothing here",message=""}={})=>{const root=document.createElement("div");root.className="empty";root.innerHTML=`<h2>${escapeHtml(title)}</h2><p>${escapeHtml(message)}</p>`;return root;} }); }
+function pluginTheme() {
+  const style = getComputedStyle(document.documentElement);
+  const token = name => style.getPropertyValue(`--rp-${name}`).trim();
+  const colors = {
+    surface: token("surface"), surfaceElevated: token("surface-elevated"),
+    text: token("text"), textStrong: token("text-strong"), textMuted: token("text-muted"),
+    border: token("border"), accent: token("accent"), selection: token("selection"),
+  };
+  for (const color of ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "bright-black", "bright-red", "bright-green", "bright-yellow", "bright-blue", "bright-magenta", "bright-cyan", "bright-white"]) {
+    colors[`terminal${color.split("-").map(word => word[0].toUpperCase() + word.slice(1)).join("")}`] = token(`terminal-${color}`);
+  }
+  return Object.freeze({ scheme: document.documentElement.dataset.scheme || "system", resolvedScheme: document.documentElement.dataset.theme || "light", fontFamily: token("font-mono"), colors: Object.freeze(colors) });
+}
+function notifyPluginThemeListeners() {
+  const theme = pluginTheme();
+  for (const listener of pluginThemeListeners) {
+    try { listener(theme); } catch (error) { console.error("plugin theme listener", error); }
+  }
+}
+function pluginUI() {
+  return Object.freeze({
+    escape: escapeHtml,
+    toast,
+    theme: Object.freeze({
+      get: pluginTheme,
+      subscribe: listener => {
+        if (typeof listener !== "function") throw new TypeError("theme listener must be a function");
+        pluginThemeListeners.add(listener);
+        return () => pluginThemeListeners.delete(listener);
+      },
+    }),
+    Card: ({title="",body="",className=""}={}) => {
+      const card = document.createElement("article");
+      card.className = `metric ${className}`;
+      card.innerHTML = `<span>${escapeHtml(title)}</span>${body}`;
+      return card;
+    },
+    SectionTitle: title => {
+      const head = document.createElement("div");
+      head.className = "section-head";
+      head.innerHTML = `<h2>${escapeHtml(title)}</h2>`;
+      return head;
+    },
+    EmptyState: ({title="Nothing here",message=""}={}) => {
+      const root = document.createElement("div");
+      root.className = "empty";
+      root.innerHTML = `<h2>${escapeHtml(title)}</h2><p>${escapeHtml(message)}</p>`;
+      return root;
+    },
+  });
+}
 function registerPluginNavigation(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginNavigation.has(entry.id)||$(entry.id+"Page")) throw new Error("invalid or duplicate plugin navigation entry"); const button=document.createElement("button");button.className="nav";button.type="button";button.dataset.page=entry.id;button.title=entry.title||entry.id;button.innerHTML=`<span class="nav-icon">${escapeHtml(entry.icon||"•")}</span><span class="nav-label">${escapeHtml(entry.title||entry.id)}</span>`;document.querySelector("nav").insertBefore(button,$('[data-page="settings"]'));const page=document.createElement("section");page.id=entry.id+"Page";page.className="page";document.querySelector("main").append(page);pluginNavigation.set(entry.id,{...entry,button,page,extension});button.addEventListener("click",()=>setPage(entry.id));}
 function registerPluginOverview(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginOverview.has(entry.id)) throw new Error("invalid or duplicate overview card"); pluginOverview.set(entry.id,{...entry,extension}); }
 function registerPluginSettings(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginSettings.has(entry.id)) throw new Error("invalid or duplicate settings section"); pluginSettings.set(entry.id,{...entry,extension}); }
@@ -109,6 +160,7 @@ function applyTheme(theme) {
   toggle.setAttribute("aria-pressed", String(isDark));
   toggle.title = `Color scheme: ${scheme}. Click to change.`;
   toggle.innerHTML = `${isDark ? "☾" : "☀"} <span>${scheme === "system" ? "System theme" : `${scheme[0].toUpperCase()+scheme.slice(1)} theme`}</span>`;
+  notifyPluginThemeListeners();
 }
 
 function initializeTheme() {
@@ -1055,7 +1107,7 @@ async function dockerAttachContainer(id) {
   try {
     const ticket = await api(`api/v1/docker/containers/${encodeURIComponent(id)}/attach-ticket`, {method:"POST", body:JSON.stringify({cols:term.cols, rows:term.rows})});
     if (dockerAttachTerminal !== session) return;
-    const socket = new RunPilotSecureWebSocket(terminalWebSocketURL(ticket.ticket), systemInfo?.websocketPayloadMode || "disabled"); session.socket = socket; socket.binaryType = "arraybuffer";
+    const socket = new RunPilotSecureWebSocket(dockerAttachWebSocketURL(ticket.ticket), systemInfo?.websocketPayloadMode || "disabled"); session.socket = socket; socket.binaryType = "arraybuffer";
     socket.onmessage = event => { if (dockerAttachTerminal === session && event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data)); };
     socket.onerror = () => { if (dockerAttachTerminal === session) term.writeln("\r\nTerminal connection failed."); };
     socket.onclose = event => { if (dockerAttachTerminal === session && !event.wasClean) term.writeln(`\r\n${event.reason || "Terminal connection closed."}`); };
@@ -1078,27 +1130,13 @@ $("saveDockerFile").addEventListener("click", saveDockerFile); $("closeDockerFil
 $("closeDockerAttach").addEventListener("click",()=>$("dockerAttachDialog").close());
 $("dockerAttachDialog").addEventListener("close",disposeDockerAttachTerminal);
 
-async function loadTerminalInfo() {
+async function loadSystemInfo() {
   systemInfo = await api("api/v1/system");
   $("systemVersion").textContent = systemInfo?.version ? `v${systemInfo.version}` : "";
   window.runPilotWebSocketPayloadMode = systemInfo?.websocketPayloadMode || "disabled";
   if (connectionOnline) setConnected(true);
   configurePlatformAwareFields(systemInfo.capabilities || {});
-  const enabled = !!systemInfo?.capabilities?.terminal;
-  $("terminalNav").classList.toggle("hidden", !enabled);
 	$("dockerNav").classList.toggle("hidden", !systemInfo?.capabilities?.dockerCompose);
-  if (!enabled) return;
-  terminalInfo = await api("api/v1/terminal");
-  const select = $("terminalShell");
-  select.replaceChildren();
-  for (const shell of terminalInfo.shells || []) {
-    const option = document.createElement("option"); option.value = shell.id; option.textContent = shell.name; select.append(option);
-  }
-  select.value = terminalInfo.defaultShell || "";
-  $("terminalUnavailableMessage").textContent = terminalInfo.available ? "" : "No supported interactive shell could be started on this host.";
-  $("terminalUnavailable").classList.toggle("hidden", !!terminalInfo.available);
-  $("terminalWorkspace").classList.toggle("hidden", !terminalInfo.available);
-  $("newTerminal").disabled = !terminalInfo.available;
 }
 
 function configurePlatformAwareFields(capabilities) {
@@ -1120,75 +1158,11 @@ function configurePlatformAwareFields(capabilities) {
   if (vss) vss.classList.toggle("hidden", !capabilities.windows);
 }
 
-function renderTerminalTabs() {
-  const tabs = $("terminalTabs"); tabs.replaceChildren();
-  for (const tab of terminalTabs) {
-    const button = document.createElement("div"); button.className = `terminal-tab${tab.id === activeTerminalID ? " active" : ""}`; button.tabIndex = 0; button.setAttribute("role", "tab");
-    const label = document.createElement("span"); label.textContent = tab.shell.name; button.append(label);
-    const close = document.createElement("button"); close.type = "button"; close.className = "terminal-tab-close"; close.textContent = "×"; close.setAttribute("aria-label", `Close ${tab.shell.name}`);
-    close.addEventListener("click", event => { event.stopPropagation(); closeTerminal(tab.id); }); button.append(close);
-    button.addEventListener("click", () => activateTerminal(tab.id)); button.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); activateTerminal(tab.id); } }); tabs.append(button);
-  }
-  $("terminalWorkspace").classList.toggle("hidden", !terminalInfo?.available || terminalTabs.length === 0);
-}
-
-function activateTerminal(id) {
-  activeTerminalID = id;
-  terminalTabs.forEach(tab => tab.pane.classList.toggle("active", tab.id === id));
-  renderTerminalTabs();
-  const tab = terminalTabs.find(item => item.id === id); if (tab) { tab.fit.fit(); tab.term.focus(); sendTerminalResize(tab); }
-}
-
-function terminalWebSocketURL(ticket) {
-  const wsURL = new URL("api/v1/terminal/connect", document.baseURI);
+function dockerAttachWebSocketURL(ticket) {
+  const wsURL = new URL("api/v1/docker/attach", document.baseURI);
   wsURL.protocol = wsURL.protocol === "https:" ? "wss:" : "ws:";
   wsURL.searchParams.set("ticket", ticket);
   return wsURL;
-}
-
-function terminalSessionID() {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("").replace(/^(.{8})(.{4})(.{4})(.{4})(.+)$/, "$1-$2-$3-$4-$5");
-}
-// RunPilotSecureWebSocket owns the underlying new WebSocket and preserves the
-// native event/message surface expected by terminal consumers.
-
-function sendTerminalResize(tab) {
-  if (tab.socket?.readyState === WebSocket.OPEN) tab.socket.send(JSON.stringify({type:"resize", cols:tab.term.cols, rows:tab.term.rows}));
-}
-
-async function openTerminalSession(shell, requestTicket) {
-  const id = terminalSessionID();
-  const pane = document.createElement("div"); pane.className = "terminal-pane active"; pane.id = `terminal-pane-${id}`; $("terminalPanes").append(pane);
-  const term = new Terminal({cursorBlink:true, scrollback:5000, fontFamily:'"Cascadia Code", Consolas, monospace', fontSize:14, theme:{background:'#0b1220'}});
-  const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(pane); fit.fit();
-  const tab = {id, shell, pane, term, fit, socket:null, observer:null}; terminalTabs.push(tab); activateTerminal(id);
-  term.onData(data => { if (tab.socket?.readyState === WebSocket.OPEN) tab.socket.send(new TextEncoder().encode(data)); });
-  tab.observer = new ResizeObserver(() => { fit.fit(); sendTerminalResize(tab); }); tab.observer.observe(pane);
-  try {
-    const ticket = await requestTicket(term);
-    const socket = new RunPilotSecureWebSocket(terminalWebSocketURL(ticket.ticket), systemInfo?.websocketPayloadMode || "disabled"); tab.socket = socket; socket.binaryType = "arraybuffer";
-    socket.onmessage = event => { if (event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data)); };
-    socket.onerror = error => term.writeln(`\r\n${error?.message || "Terminal connection failed."}`);
-    socket.onclose = event => { if (!event.wasClean) term.writeln(`\r\n${event.reason || "Terminal connection closed."}`); };
-    socket.onopen = () => { sendTerminalResize(tab); term.focus(); };
-  } catch (error) { term.writeln(`\r\n${error.message}`); toast(error.message); }
-}
-
-async function newTerminal() {
-  if (!terminalInfo?.available) { toast("Terminal is unavailable"); return; }
-  const shell = (terminalInfo.shells || []).find(item => item.id === $("terminalShell").value) || terminalInfo.shells[0];
-  if (!shell) { toast("Shell executable was not found."); return; }
-  await openTerminalSession(shell, term => api("api/v1/terminal/ticket", {method:"POST", body:JSON.stringify({shell:shell.id, cols:term.cols, rows:term.rows})}));
-}
-
-function closeTerminal(id) {
-  const index = terminalTabs.findIndex(tab => tab.id === id); if (index < 0) return;
-  const [tab] = terminalTabs.splice(index, 1); tab.observer?.disconnect(); tab.socket?.close(); tab.term.dispose(); tab.pane.remove();
-  activeTerminalID = terminalTabs[0]?.id || ""; if (activeTerminalID) activateTerminal(activeTerminalID); else renderTerminalTabs();
 }
 
 function setPage(page) {
@@ -1209,7 +1183,6 @@ function setPage(page) {
 	if (page === "docker") renderDocker();
 	if (page === "remote") renderRemote();
 	if (page === "settings") renderPluginSettings();
-	if (page === "terminal" && terminalInfo?.available && terminalTabs.length === 0) newTerminal();
 	if (registered) { registered.page.replaceChildren(); registered.render(registered.page); }
   refresh();
 }
@@ -1223,7 +1196,6 @@ $("softwareAddBucket").addEventListener("click", softwareAddBucket);
 $("softwareProviderSelect").addEventListener("change", event => changeSoftwareProvider(event.target.value));
 $("softwareSearchInput").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareSearch(); } });
 $("softwareBucketSource").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareAddBucket(); } });
-$("newTerminal").addEventListener("click", newTerminal);
 $("dockerVolumeAction").addEventListener("click", openDockerVolumeCreate);
 $("dockerNetworkAction").addEventListener("click", openDockerNetworkCreate);
 $("rdpSettingsAction").addEventListener("click", openGuacdSettings);
@@ -1461,7 +1433,7 @@ $("loginForm").addEventListener("submit", async e => {
     $("loginError").classList.add("hidden");
     $("loginDialog").close();
     setConnected(true);
-    await loadTerminalInfo();
+    await loadSystemInfo();
     await connectApplicationSocket();
     await refresh();
     startAutoRefresh();
@@ -1486,7 +1458,7 @@ $("loginForm").addEventListener("submit", async e => {
   await refresh();
   const requestedSession = new URLSearchParams(location.search).get("remoteSession");
   if (requestedSession) { setPage("remote"); await openRemoteSession(requestedSession); }
-  try { await loadTerminalInfo(); } catch (e) { if (e.message !== "Unauthorized") toast(e.message); }
+  try { await loadSystemInfo(); } catch (e) { if (e.message !== "Unauthorized") toast(e.message); }
   startAutoRefresh();
 })();
 

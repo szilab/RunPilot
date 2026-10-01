@@ -11,7 +11,7 @@ import (
 // Session is a single shell attached to a real OS pseudo-terminal.
 type Session struct {
 	id         string
-	shell      Shell
+	name       string
 	createdAt  time.Time
 	cols, rows uint16
 	process    *processsession.Session
@@ -24,7 +24,6 @@ type Session struct {
 }
 
 func (s *Session) ID() string           { return s.id }
-func (s *Session) Shell() Shell         { return s.shell }
 func (s *Session) CreatedAt() time.Time { return s.createdAt }
 
 func (s *Session) Read(p []byte) (int, error)  { return s.process.Read(p) }

@@ -40,9 +40,9 @@ type Server struct {
 	restartHandler      func()
 	tickets             map[string]downloadTicket
 	ticketMu            sync.Mutex
-	terminal            *terminal.Manager
-	terminalTickets     map[string]terminalTicket
-	terminalTicketMu    sync.Mutex
+	dockerTerminal      *terminal.Manager
+	dockerAttachTickets map[string]dockerAttachTicket
+	dockerAttachMu      sync.Mutex
 	remoteTickets       map[string]remoteClientTicket
 	remoteTicketMu      sync.Mutex
 	transportTickets    map[string]remoteTransportTicket
@@ -53,8 +53,7 @@ type Server struct {
 	applicationTicketMu sync.Mutex
 	docker              *dockercompose.Manager
 }
-type terminalTicket struct {
-	Shell        string
+type dockerAttachTicket struct {
 	DockerExecID string
 	Cols, Rows   uint16
 	Expires      time.Time
@@ -83,7 +82,7 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, terminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), terminalTickets: map[string]terminalTicket{}, remoteTickets: map[string]remoteClientTicket{}, transportTickets: map[string]remoteTransportTicket{}, rdpCredentials: map[string]rdpCredentials{}, applicationTickets: map[string]time.Time{}, docker: ctrl.Docker()}, nil
+	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, dockerTerminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), dockerAttachTickets: map[string]dockerAttachTicket{}, remoteTickets: map[string]remoteClientTicket{}, transportTickets: map[string]remoteTransportTicket{}, rdpCredentials: map[string]rdpCredentials{}, applicationTickets: map[string]time.Time{}, docker: ctrl.Docker()}, nil
 }
 
 func (s *Server) BasePath() string { return s.basePath }
@@ -138,7 +137,6 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/v1/docker/projects/{name}/actions/{action}", s.handleDockerAction)
 	api.HandleFunc("GET /api/v1/docker/projects/{name}/files/{kind}", s.handleDockerReadFile)
 	api.HandleFunc("PUT /api/v1/docker/projects/{name}/files/{kind}", s.handleDockerWriteFile)
-	api.HandleFunc("GET /api/v1/terminal", s.handleTerminalInfo)
 	api.HandleFunc("GET /api/v1/remote/providers", s.handleRemoteProviders)
 	api.HandleFunc("GET /api/v1/remote/guacd", s.handleGuacdConfig)
 	api.HandleFunc("PUT /api/v1/remote/guacd", s.handleUpdateGuacdConfig)
@@ -153,7 +151,6 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("DELETE /api/v1/remote/sessions/{id}", s.handleStopRemoteSession)
 	api.HandleFunc("POST /api/v1/remote/sessions/{id}/client-ticket", s.handleRemoteClientTicket)
 	api.HandleFunc("POST /api/v1/remote/sessions/{id}/transport-ticket", s.handleRemoteTransportTicket)
-	api.HandleFunc("POST /api/v1/terminal/ticket", s.handleTerminalTicket)
 	api.HandleFunc("GET /api/v1/overview", s.handleOverview)
 	api.HandleFunc("GET /api/v1/processes", s.handleListProcesses)
 	api.HandleFunc("POST /api/v1/processes", s.handleCreateProcess)
@@ -207,9 +204,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/remote/sessions/{id}/client/{path...}", s.handleRemoteClient)
 	mux.HandleFunc("GET /api/v1/remote/sessions/{id}/transport", s.handleRemoteTransport)
 	mux.HandleFunc("GET /remote/session/{id}", s.handleRemoteSessionPage)
-	// A terminal connection is authenticated by its short-lived, single-use
-	// ticket. It intentionally does not accept the permanent API token in a URL.
-	mux.HandleFunc("GET /api/v1/terminal/connect", s.handleTerminalConnect)
+	// Docker attach uses a scoped, short-lived ticket rather than the API token.
+	mux.HandleFunc("GET /api/v1/docker/attach", s.handleDockerAttach)
 	mux.HandleFunc("GET /plugins/{id}/{path...}", s.handlePluginAsset)
 
 	sub, _ := fs.Sub(staticFS, "static")
@@ -238,7 +234,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 // Close releases all interactive shell sessions during RunPilot shutdown.
-func (s *Server) Close() error { return s.terminal.Close() }
+func (s *Server) Close() error { return s.dockerTerminal.Close() }
 
 func normalizeBasePath(value string) (string, error) {
 	value = strings.TrimSpace(value)
@@ -527,9 +523,9 @@ func (s *Server) handleDockerContainerAttachTicket(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.terminalTicketMu.Lock()
-	s.terminalTickets[ticket] = terminalTicket{DockerExecID: r.PathValue("id"), Cols: request.Cols, Rows: request.Rows, Expires: time.Now().Add(time.Minute)}
-	s.terminalTicketMu.Unlock()
+	s.dockerAttachMu.Lock()
+	s.dockerAttachTickets[ticket] = dockerAttachTicket{DockerExecID: r.PathValue("id"), Cols: request.Cols, Rows: request.Rows, Expires: time.Now().Add(time.Minute)}
+	s.dockerAttachMu.Unlock()
 	writeJSON(w, http.StatusCreated, map[string]string{"ticket": ticket})
 }
 func (s *Server) handleDockerCreateProject(w http.ResponseWriter, r *http.Request) {
@@ -625,66 +621,7 @@ func dockerError(w http.ResponseWriter, err error) {
 	}
 }
 
-func (s *Server) handleTerminalInfo(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"available":    s.terminal.Available(),
-		"shells":       s.terminal.Shells(),
-		"defaultShell": s.terminal.DefaultShell(),
-	})
-}
-
-func (s *Server) handleTerminalTicket(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		Shell string `json:"shell"`
-		Cols  uint16 `json:"cols"`
-		Rows  uint16 `json:"rows"`
-	}
-	if !decodeJSON(w, r, &request) {
-		return
-	}
-	if !s.terminal.Available() {
-		writeError(w, http.StatusServiceUnavailable, errors.New("terminal is not available on this host"))
-		return
-	}
-	if request.Shell != "" {
-		found := false
-		for _, shell := range s.terminal.Shells() {
-			if shell.ID == request.Shell {
-				found = true
-				break
-			}
-		}
-		if !found {
-			writeError(w, http.StatusBadRequest, terminal.ErrUnknownShell)
-			return
-		}
-	}
-	if request.Cols == 0 {
-		request.Cols = 80
-	}
-	if request.Rows == 0 {
-		request.Rows = 24
-	}
-	if request.Cols > 500 || request.Rows > 300 {
-		writeError(w, http.StatusBadRequest, errors.New("terminal dimensions are too large"))
-		return
-	}
-	ticket, err := secureTicket()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	s.terminalTicketMu.Lock()
-	s.terminalTickets[ticket] = terminalTicket{Shell: request.Shell, Cols: request.Cols, Rows: request.Rows, Expires: time.Now().Add(time.Minute)}
-	s.terminalTicketMu.Unlock()
-	// The browser resolves the WebSocket endpoint from document.baseURI so it
-	// retains the public scheme, host, port, and any configured base path.
-	// Returning only the ticket prevents a backend address from leaking into
-	// the browser-facing connection URL.
-	writeJSON(w, http.StatusCreated, map[string]string{"ticket": ticket})
-}
-
-func (s *Server) handleTerminalConnect(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleDockerAttach(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("ticket") == "" {
 		http.Error(w, "terminal ticket required", http.StatusUnauthorized)
 		return
@@ -699,8 +636,8 @@ func (s *Server) handleTerminalConnect(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(websocketsecure.MaxEncryptedMessageSize)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	ticket, ok := s.consumeTerminalTicket(r.URL.Query().Get("ticket"))
-	if !ok {
+	ticket, ok := s.consumeDockerAttachTicket(r.URL.Query().Get("ticket"))
+	if !ok || ticket.DockerExecID == "" {
 		_ = conn.Close(websocket.StatusPolicyViolation, "terminal connection expired or already used")
 		return
 	}
@@ -709,12 +646,7 @@ func (s *Server) handleTerminalConnect(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close(websocket.StatusPolicyViolation, "secure WebSocket negotiation failed")
 		return
 	}
-	var session *terminal.Session
-	if ticket.DockerExecID != "" {
-		session, err = s.terminal.StartCommand("Container terminal", "docker", []string{"exec", "-i", "-t", ticket.DockerExecID, "/bin/sh"}, ticket.Cols, ticket.Rows)
-	} else {
-		session, err = s.terminal.Start(ticket.Shell, ticket.Cols, ticket.Rows)
-	}
+	session, err := s.dockerTerminal.StartCommand("Container terminal", "docker", []string{"exec", "-i", "-t", ticket.DockerExecID, "/bin/sh"}, ticket.Cols, ticket.Rows)
 	if err != nil {
 		_ = conn.Close(websocket.StatusInternalError, err.Error())
 		return
@@ -763,15 +695,15 @@ func (s *Server) handleTerminalConnect(w http.ResponseWriter, r *http.Request) {
 	<-done
 }
 
-func (s *Server) consumeTerminalTicket(value string) (terminalTicket, bool) {
-	s.terminalTicketMu.Lock()
-	defer s.terminalTicketMu.Unlock()
-	ticket, ok := s.terminalTickets[value]
+func (s *Server) consumeDockerAttachTicket(value string) (dockerAttachTicket, bool) {
+	s.dockerAttachMu.Lock()
+	defer s.dockerAttachMu.Unlock()
+	ticket, ok := s.dockerAttachTickets[value]
 	if ok {
-		delete(s.terminalTickets, value)
+		delete(s.dockerAttachTickets, value)
 	}
 	if !ok || time.Now().After(ticket.Expires) {
-		return terminalTicket{}, false
+		return dockerAttachTicket{}, false
 	}
 	return ticket, true
 }

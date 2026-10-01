@@ -2,22 +2,12 @@ package terminal
 
 import (
 	"errors"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
-
-func shID(t *testing.T, manager *Manager) string {
-	t.Helper()
-	for _, shell := range manager.Shells() {
-		if shell.ID == "sh" {
-			return shell.ID
-		}
-	}
-	t.Skip("a POSIX sh shell is not available")
-	return ""
-}
 
 func TestManagerConcurrentStartRespectsLimit(t *testing.T) {
 	if !Supported() {
@@ -25,7 +15,10 @@ func TestManagerConcurrentStartRespectsLimit(t *testing.T) {
 	}
 	manager := NewManager(t.TempDir(), 2)
 	defer manager.Close()
-	shell := shID(t, manager)
+	command := "/bin/sh"
+	if runtime.GOOS == "windows" {
+		command = "cmd.exe"
+	}
 	var wg sync.WaitGroup
 	type result struct {
 		session *Session
@@ -36,7 +29,7 @@ func TestManagerConcurrentStartRespectsLimit(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			session, err := manager.Start(shell, 80, 24)
+			session, err := manager.StartCommand("test shell", command, nil, 80, 24)
 			results <- result{session, err}
 		}()
 	}
@@ -58,46 +51,33 @@ func TestManagerConcurrentStartRespectsLimit(t *testing.T) {
 	}
 }
 
-func TestDiscoverShellsDoesNotDuplicateEquivalentPaths(t *testing.T) {
-	if !Supported() {
-		t.Skip("terminal is unsupported on this platform")
-	}
-	seen := map[string]bool{}
-	for _, shell := range DiscoverShells() {
-		key := canonicalShellPath(shell.Path)
-		if seen[key] {
-			t.Fatalf("shell %q is duplicated at %q", shell.Name, shell.Path)
-		}
-		seen[key] = true
-	}
-}
-
-func TestManagerRejectsUnknownShellAndEnforcesLimit(t *testing.T) {
+func TestManagerEnforcesLimit(t *testing.T) {
 	if !Supported() {
 		t.Skip("terminal is unsupported on this platform")
 	}
 	manager := NewManager(t.TempDir(), 1)
 	defer manager.Close()
-	if _, err := manager.Start("does-not-exist", 80, 24); !errors.Is(err, ErrUnknownShell) {
-		t.Fatalf("unknown shell error = %v", err)
+	command := "/bin/sh"
+	if runtime.GOOS == "windows" {
+		command = "cmd.exe"
 	}
-	session, err := manager.Start(shID(t, manager), 80, 24)
+	session, err := manager.StartCommand("test shell", command, nil, 80, 24)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer session.Close()
-	if _, err := manager.Start(shID(t, manager), 80, 24); !errors.Is(err, ErrSessionLimit) {
+	if _, err := manager.StartCommand("test shell", command, nil, 80, 24); !errors.Is(err, ErrSessionLimit) {
 		t.Fatalf("session limit error = %v", err)
 	}
 }
 
 func TestLinuxPTYSmoke(t *testing.T) {
-	if !Supported() {
-		t.Skip("terminal is unsupported on this platform")
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux PTY smoke test")
 	}
 	manager := NewManager(t.TempDir(), 1)
 	defer manager.Close()
-	session, err := manager.Start(shID(t, manager), 100, 30)
+	session, err := manager.StartCommand("sh", "/bin/sh", nil, 100, 30)
 	if err != nil {
 		t.Fatal(err)
 	}
