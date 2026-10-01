@@ -64,8 +64,8 @@ func TestTerminalPluginUserLifecycleHTTP(t *testing.T) {
 	packageBytes := terminalPluginPackage(t)
 	hash := sha256.Sum256(packageBytes)
 	catalog := plugins.Catalog{SchemaVersion: 1, Plugins: []plugins.CatalogEntry{{
-		ID: "terminal", Name: "Terminal", Latest: "0.1.0",
-		Versions: []plugins.CatalogVersion{{Version: "0.1.0", Platforms: []string{"linux", "windows"}, Requires: plugins.Requires{RunPilotAPI: 2, Backend: ">=1.0.0 <2.0.0", Frontend: ">=1.0.0 <2.0.0"}, URL: "PACKAGE", SHA256: hex.EncodeToString(hash[:])}},
+		ID: "terminal", Name: "Terminal", Latest: "0.1.1",
+		Versions: []plugins.CatalogVersion{{Version: "0.1.1", Platforms: []string{"linux", "windows"}, Requires: plugins.Requires{RunPilotAPI: 2, Backend: ">=1.0.0 <2.0.0", Frontend: ">=1.0.0 <2.0.0"}, URL: "PACKAGE", SHA256: hex.EncodeToString(hash[:])}},
 	}}}
 	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/catalog.json" {
@@ -140,7 +140,7 @@ func TestTerminalPluginUserLifecycleHTTP(t *testing.T) {
 	if response := request("GET", "/api/v1/plugins/catalog", "", http.StatusOK); !bytes.Contains(response.Body.Bytes(), []byte(`"id":"terminal"`)) {
 		t.Fatal("Terminal was not discoverable in plugin catalog")
 	}
-	request("POST", "/api/v1/plugins/terminal/install", `{"version":"0.1.0"}`, http.StatusOK)
+	request("POST", "/api/v1/plugins/terminal/install", `{"version":"0.1.1"}`, http.StatusOK)
 	status := ctrl.Plugins().Statuses()[0]
 	if status.Enabled || status.Loaded {
 		t.Fatalf("installed plugin should remain disabled until requested: %+v", status)
