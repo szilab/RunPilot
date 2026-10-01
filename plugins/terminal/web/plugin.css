@@ -35,8 +35,9 @@
 .terminal-plugin-tab.active {
   position: relative;
   z-index: 1;
-  color: var(--rp-text-strong);
-  background: var(--rp-surface-elevated);
+  color: var(--rp-on-accent);
+  background: var(--rp-accent);
+  border-color: var(--rp-accent);
 }
 
 .terminal-plugin-tab button {
@@ -65,6 +66,11 @@
 .terminal-plugin-tab button:focus-visible {
   color: var(--rp-text-strong);
   outline-color: var(--rp-accent);
+}
+
+.terminal-plugin-tab.active button:hover,
+.terminal-plugin-tab.active button:focus-visible {
+  color: var(--rp-on-accent);
 }
 
 .terminal-plugin-panes {
