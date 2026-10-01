@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -63,7 +64,15 @@ func runForeground(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return daemon.Run(ctx, *dataDir, daemon.Options{Port: *port, BasePath: *basePath})
+	option := daemon.Options{Port: *port, BasePath: *basePath}
+	for {
+		err := daemon.Run(ctx, *dataDir, option)
+		if errors.Is(err, daemon.ErrRestartRequested) {
+			log.Printf("RunPilot restarting")
+			continue
+		}
+		return err
+	}
 }
 
 func runServiceCommand(args []string) error {

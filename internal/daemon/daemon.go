@@ -8,11 +8,16 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/szilab/RunPilot/internal/core"
 	webui "github.com/szilab/RunPilot/internal/web"
 )
+
+// ErrRestartRequested signals that RunPilot should reopen its controller and
+// web server while retaining the process arguments and service configuration.
+var ErrRestartRequested = errors.New("RunPilot restart requested")
 
 // Options override the corresponding YAML server settings for this run.
 // Zero-value fields leave the YAML setting unchanged.
@@ -22,6 +27,10 @@ type Options struct {
 }
 
 func Run(ctx context.Context, dataDir string, options ...Options) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var restartOnce sync.Once
+	restartRequested := make(chan struct{})
 	ctrl, err := core.Open(dataDir)
 	if err != nil {
 		return err
@@ -46,6 +55,12 @@ func Run(ctx context.Context, dataDir string, options ...Options) error {
 	if err != nil {
 		return err
 	}
+	ui.SetRestartHandler(func() {
+		restartOnce.Do(func() {
+			close(restartRequested)
+			cancel()
+		})
+	})
 	defer ui.Close()
 	if ctrl.TokenCreated() {
 		log.Printf("RunPilot API token (save it now): %s", cfg.Server.Token)
@@ -68,16 +83,24 @@ func Run(ctx context.Context, dataDir string, options ...Options) error {
 	}()
 
 	select {
-	case <-ctx.Done():
+	case <-runCtx.Done():
 	case err := <-errCh:
 		if err != nil {
 			return fmt.Errorf("web server: %w", err)
 		}
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	return server.Shutdown(shutdownCtx)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		return err
+	}
+	select {
+	case <-restartRequested:
+		return ErrRestartRequested
+	default:
+		return nil
+	}
 }
 
 func listenAddr(bind string, configuredPort, overridePort int) (string, error) {

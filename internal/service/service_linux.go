@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -107,7 +108,13 @@ func Run(dataDir string, options ...daemon.Options) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return daemon.Run(ctx, dataDir, option)
+	for {
+		err := daemon.Run(ctx, dataDir, option)
+		if errors.Is(err, daemon.ErrRestartRequested) {
+			continue
+		}
+		return err
+	}
 }
 
 func systemctl(args ...string) error {

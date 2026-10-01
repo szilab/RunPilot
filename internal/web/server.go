@@ -37,6 +37,7 @@ var staticFS embed.FS
 type Server struct {
 	ctrl                *core.Controller
 	basePath            string
+	restartHandler      func()
 	tickets             map[string]downloadTicket
 	ticketMu            sync.Mutex
 	terminal            *terminal.Manager
@@ -87,6 +88,22 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 
 func (s *Server) BasePath() string { return s.basePath }
 
+// SetRestartHandler registers the daemon callback used by the authenticated
+// application restart endpoint.
+func (s *Server) SetRestartHandler(handler func()) { s.restartHandler = handler }
+
+func (s *Server) handleRestartApplication(w http.ResponseWriter, r *http.Request) {
+	if s.restartHandler == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "application restart is unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "restarting"})
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	go s.restartHandler()
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
@@ -98,6 +115,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/system", s.handleSystem)
 	api.HandleFunc("POST /api/v1/ws/ticket", s.handleApplicationTicket)
 	api.HandleFunc("GET /api/v1/plugins", s.handlePlugins)
+	api.HandleFunc("POST /api/v1/restart", s.handleRestartApplication)
 	api.HandleFunc("GET /api/v1/plugins/catalog", s.handlePluginCatalog)
 	api.HandleFunc("POST /api/v1/plugins/{id}/install", s.handlePluginInstall)
 	api.HandleFunc("DELETE /api/v1/plugins/{id}", s.handlePluginUninstall)
@@ -306,7 +324,10 @@ func (s *Server) handlePluginUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"plugins": s.ctrl.Plugins().Statuses()})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"plugins":         s.ctrl.Plugins().Statuses(),
+		"restartRequired": s.ctrl.Plugins().RestartRequired(),
+	})
 }
 
 func (s *Server) handlePluginRescan(w http.ResponseWriter, r *http.Request) {

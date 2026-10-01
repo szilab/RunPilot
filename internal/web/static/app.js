@@ -453,17 +453,24 @@ function renderPluginSettings() {
     const enabled=!!status?.enabled, compatible=entry?.latestCompatible, manual=status && !status.source;
     const update=!!status?.source && compatible && entry?.updateAvailable;
     const state=status ? (status.message ? `${status.state === "incompatible" ? "Incompatible" : "Failed"}: ${status.message}` : `Installed · ${enabled ? "Enabled" : "Disabled"}${status.loaded ? ` · Loaded ${status.loadedVersion || ""}` : ""}`) : compatible ? "Available" : "Incompatible";
+    const stateClass=status ? (status.message ? status.state === "incompatible" ? "is-incompatible" : "is-failed" : enabled ? "is-enabled" : "is-disabled") : compatible ? "is-available" : "is-incompatible";
     const buttons = status
-      ? `<button type="button" ${busy || (!enabled && status.state === "incompatible") ? "disabled" : ""} onclick="togglePlugin('${escapeHtml(id)}',${!enabled})">${enabled ? "Disable" : "Enable"}</button>${update ? `<button type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible)}')">Update to ${escapeHtml(compatible)}</button>` : ""}<button type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','uninstall')">Uninstall</button>`
-      : `<button type="button" ${busy || !compatible ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible || "")}')">Install${compatible ? " " + escapeHtml(compatible) : ""}</button>`;
-    return `<article class="row"><div><strong>${escapeHtml(manifest.name || id)}</strong><div class="meta">${escapeHtml(manifest.description || "")}</div><div class="meta">${status ? `Installed ${escapeHtml(manifest.version)} · ${manual ? "Local/manual" : "Catalog"}` : ""}${entry ? ` · Latest published ${escapeHtml(entry.latest)} · Latest compatible ${escapeHtml(compatible || "none")}` : ""}</div>${entry?.incompatibility ? `<div class="meta">Latest release: ${escapeHtml(entry.incompatibility)}</div>` : ""}<span class="status">${escapeHtml(busy ? "Updating…" : state)}${update ? " · Update available" : ""}${status?.restartRequired ? " · Restart required" : ""}</span></div><div class="actions">${buttons}</div></article>`;
+      ? `<button class="button secondary small" type="button" ${busy || (!enabled && status.state === "incompatible") ? "disabled" : ""} onclick="togglePlugin('${escapeHtml(id)}',${!enabled})">${enabled ? "Disable" : "Enable"}</button>${update ? `<button class="button primary small" type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible)}')">Update to ${escapeHtml(compatible)}</button>` : ""}<button class="button danger small" type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','uninstall')">Uninstall</button>`
+      : `<button class="button primary small" type="button" ${busy || !compatible ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible || "")}')">Install${compatible ? " " + escapeHtml(compatible) : ""}</button>`;
+    return `<article class="docker-card plugin-setting-card"><div class="plugin-setting-info"><strong>${escapeHtml(manifest.name || id)}</strong><div class="meta">${escapeHtml(manifest.description || "")}</div><div class="meta">${status ? `Installed ${escapeHtml(manifest.version)} · ${manual ? "Local/manual" : "Catalog"}` : ""}${entry ? ` · Latest published ${escapeHtml(entry.latest)} · Latest compatible ${escapeHtml(compatible || "none")}` : ""}</div>${entry?.incompatibility ? `<div class="meta">Latest release: ${escapeHtml(entry.incompatibility)}</div>` : ""}<span class="status plugin-setting-state ${stateClass}">${escapeHtml(busy ? "Updating…" : state)}${update ? " · Update available" : ""}${status?.restartRequired ? " · Restart required" : ""}</span></div><div class="plugin-setting-actions">${buttons}</div></article>`;
   }).join("");
   const featureRoot=$("pluginFeatureSettings"); featureRoot.replaceChildren();
   for (const entry of pluginSettings.values()) { try { const section=document.createElement("section"); section.className="overview-section"; const content=entry.render(); if(content) section.append(content); featureRoot.append(section); } catch(error) { console.error(`plugin settings ${entry.id}`,error); } }
 }
+async function requestRunPilotRestart() {
+  if (!confirm("Restart RunPilot now? The page will reconnect when RunPilot is ready.")) return;
+  const button=$("restartApplicationButton"); button.disabled=true;
+  try { await api("api/v1/restart",{method:"POST"}); toast("RunPilot is restarting. This page will reconnect shortly."); }
+  catch(error) { toastError(error.message); button.disabled=false; }
+}
 async function togglePlugin(id, enabled) {
   if (pluginBusy.has(id)) return; pluginBusy.add(id); renderPluginSettings();
-  try { const response=await api(`api/v1/plugins/${encodeURIComponent(id)}`,{method:"PUT",body:JSON.stringify({enabled})}); pluginStatuses=response.plugins||pluginStatuses; }
+  try { const response=await api(`api/v1/plugins/${encodeURIComponent(id)}`,{method:"PUT",body:JSON.stringify({enabled})}); pluginStatuses=response.plugins||pluginStatuses; pluginRestartRequired=!!response.restartRequired; }
   catch(error) { toastError(error.message); }
   finally { pluginBusy.delete(id); renderPluginSettings(); }
 }
@@ -1208,6 +1215,7 @@ function setPage(page) {
 }
 
 document.querySelectorAll(".nav").forEach(n => n.addEventListener("click", () => setPage(n.dataset.page)));
+$("restartApplicationButton").addEventListener("click", requestRunPilotRestart);
 document.querySelectorAll("[data-software-tab]").forEach(button => button.addEventListener("click", () => { softwareTab = button.dataset.softwareTab; renderSoftware(); loadSoftwareView(); }));
 $("softwareSearchButton").addEventListener("click", softwareSearch);
 $("softwareUpgradeAll").addEventListener("click", softwareUpgradeAll);

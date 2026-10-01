@@ -64,7 +64,7 @@ func TestTerminalPluginUserLifecycleHTTP(t *testing.T) {
 	packageBytes := terminalPluginPackage(t)
 	hash := sha256.Sum256(packageBytes)
 	catalog := plugins.Catalog{SchemaVersion: 1, Plugins: []plugins.CatalogEntry{{
-		ID: "terminal", Name: "Terminal (plugin)", Latest: "0.1.0",
+		ID: "terminal", Name: "Terminal", Latest: "0.1.0",
 		Versions: []plugins.CatalogVersion{{Version: "0.1.0", Platforms: []string{"linux", "windows"}, Requires: plugins.Requires{RunPilotAPI: 2, Backend: ">=1.0.0 <2.0.0", Frontend: ">=1.0.0 <2.0.0"}, URL: "PACKAGE", SHA256: hex.EncodeToString(hash[:])}},
 	}}}
 	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

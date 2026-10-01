@@ -4,6 +4,7 @@ package winservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -169,7 +170,16 @@ func serviceMain(argc uintptr, argv uintptr) uintptr {
 	runCtx, cancel := context.WithCancel(context.Background())
 	sc.cancel = cancel
 	sc.done = make(chan error, 1)
-	go func() { sc.done <- daemon.Run(runCtx, sc.dataDir, sc.options) }()
+	go func() {
+		for {
+			err := daemon.Run(runCtx, sc.dataDir, sc.options)
+			if errors.Is(err, daemon.ErrRestartRequested) {
+				continue
+			}
+			sc.done <- err
+			return
+		}
+	}()
 
 	setStatus(sc, serviceRunning, serviceAcceptStop|serviceAcceptShutdown, 0)
 	errRun := <-sc.done

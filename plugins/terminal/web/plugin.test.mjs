@@ -24,7 +24,7 @@ const runpilot = {
 };
 const deactivate = await activate(runpilot);
 assert.equal(entry.id, "terminal-plugin");
-assert.equal(entry.title, "Terminal (plugin)");
+assert.equal(entry.title, "Terminal");
 assert.equal(subscriptions.length, 3);
 assert.ok(subscriptions.every(([plugin]) => plugin === "terminal"));
 assert.ok(assets.some(asset => asset.href?.endsWith("/vendor/xterm.css")));
