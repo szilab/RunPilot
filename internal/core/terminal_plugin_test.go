@@ -246,6 +246,57 @@ completionChecked:
 	}
 }
 
+func TestTerminalPluginSettingsPersistAcrossRestart(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("configured shell integration uses Linux /bin/sh")
+	}
+	dataDir := t.TempDir()
+	if _, err := plugins.InstallPackage(filepath.Join(dataDir, "plugins"), packageTerminalForTest(t), ""); err != nil {
+		t.Fatal(err)
+	}
+	controller, err := Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.SetPluginEnabled(terminalPluginID, true); err != nil {
+		controller.Close()
+		t.Fatal(err)
+	}
+	controller.Close()
+	controller, err = Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := terminalCall(t, controller, "terminal.settings.get", nil)
+	if settings["defaultCommand"] != "/bin/sh" || settings["settings"].(map[string]any)["command"] != "" {
+		controller.Close()
+		t.Fatalf("unexpected defaults: %#v", settings)
+	}
+	terminalCall(t, controller, "terminal.settings.set", map[string]any{"command": "/bin/sh", "args": []string{"-i"}})
+	controller.Close()
+	controller, err = Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controller.Close()
+	settings = terminalCall(t, controller, "terminal.settings.get", nil)
+	saved := settings["settings"].(map[string]any)
+	if saved["command"] != "/bin/sh" || len(saved["args"].([]any)) != 1 || saved["args"].([]any)[0] != "-i" {
+		t.Fatalf("settings did not survive restart: %#v", settings)
+	}
+	events, unsubscribe := controller.SubscribePluginEvents()
+	defer unsubscribe()
+	opened := terminalCall(t, controller, "terminal.open", map[string]any{"rows": 24, "columns": 80})
+	session := opened["session"].(map[string]any)
+	if session["command"] != "/bin/sh" {
+		t.Fatalf("configured command was not used: %#v", session)
+	}
+	id := session["id"].(string)
+	_ = awaitTerminalOutput(t, events, id)
+	terminalCall(t, controller, "terminal.close", map[string]any{"id": id, "force": true})
+	waitForPluginSessionExit(t, controller, id, "terminated")
+}
+
 func drainTerminalEvents(events <-chan plugins.Event, duration time.Duration) {
 	timer := time.NewTimer(duration)
 	defer timer.Stop()

@@ -171,3 +171,13 @@ is not installed or enabled automatically, and does not replace the legacy
 Tasks page (its navigation entry is "Tasks (plugin)"). Backup is not part of
 it. Unit tests inject a fake host; `internal/core/tasks_plugin_test.go` runs the
 real ABI-v2 WASM through the normal controller path.
+
+`plugins/terminal` provides interactive sessions through the generic process
+session capability. Its tab strip uses `+` to open a session and per-tab close
+buttons. The Terminal settings card accepts an executable path and plain-text
+arguments, with quotes for values containing spaces. Arguments are converted
+to an array and saved through plugin-namespaced `storage.*`; changes apply to new
+sessions without interrupting existing ones. An empty command preserves the
+platform default, including the Linux service's `SHELL` selection and the
+Windows `cmd.exe` fallback. The `terminal.settings.get` and
+`terminal.settings.set` methods use the common application WebSocket.

@@ -1,5 +1,29 @@
 const PLUGIN = "terminal";
 
+export function splitArgs(text) {
+  const args = [];
+  let argument = "", quote = null, escaped = false, started = false;
+  for (const character of String(text || "")) {
+    if (escaped) { argument += character; escaped = false; started = true; continue; }
+    if (character === "\\" && quote !== "'") { escaped = true; started = true; continue; }
+    if (quote) {
+      if (character === quote) quote = null; else argument += character;
+    } else if (character === '"' || character === "'") { quote = character; started = true; }
+    else if (/\s/.test(character)) {
+      if (started) { args.push(argument); argument = ""; started = false; }
+    } else { argument += character; started = true; }
+  }
+  if (quote) throw new Error("Arguments contain an unclosed quote.");
+  if (escaped) throw new Error("Arguments end with an escape character.");
+  if (started) args.push(argument);
+  return args;
+}
+
+export function formatArgs(args = []) {
+  return args.map(argument => (argument === "" || /[\s"'\\]/.test(argument))
+    ? `"${argument.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"` : argument).join(" ");
+}
+
 function loadScript(source) {
   return new Promise((resolve, reject) => {
     const script = document.createElement("script");
@@ -37,6 +61,8 @@ export async function activate(runpilot) {
   let observers = [];
   let themeSubscription = null;
   const state = { error: "" };
+  let settingsForm = null;
+  const settings = { loaded: false, loading: false, saving: false, command: "", args: "", defaultCommand: "", error: "" };
   const ui = runpilot.ui;
   const escape = ui.escape;
 
@@ -45,7 +71,51 @@ export async function activate(runpilot) {
     if (result?.error) throw new Error(result.error.message || "Terminal request failed");
     return result;
   }
-  function active() { return sessions.find(item => item.session.id === activeID); }
+  function renderSettingsForm() {
+    if (!settingsForm) return;
+    const disabled = !settings.loaded || settings.saving;
+    settingsForm.innerHTML = `<div class="plugin-setting-info"><strong>Terminal settings</strong><div class="meta">terminal</div></div>
+      ${settings.error ? `<div class="notice" role="alert">${escape(settings.error)}</div>` : ""}
+      <div class="form-grid">
+        <label>Terminal command<input name="command" value="${escape(settings.command)}" placeholder="${escape(settings.defaultCommand)}" ${disabled ? "disabled" : ""}></label>
+        <label>Arguments<input name="args" value="${escape(settings.args)}" placeholder="--noprofile --norc" ${disabled ? "disabled" : ""}></label>
+      </div>
+      <div class="terminal-plugin-settings-actions"><button class="button primary small" type="submit" ${disabled ? "disabled" : ""}>${settings.saving ? "Saving…" : "Save"}</button>
+      ${!settings.loaded && !settings.loading && settings.error ? '<button class="button secondary small" type="button" data-settings-retry>Retry</button>' : ""}</div>`;
+    settingsForm.setAttribute("aria-busy", settings.loading || settings.saving ? "true" : "false");
+    settingsForm.elements.command.addEventListener("input", event => { settings.command = event.target.value; });
+    settingsForm.elements.args.addEventListener("input", event => { settings.args = event.target.value; });
+    settingsForm.querySelector("[data-settings-retry]")?.addEventListener("click", loadSettings);
+  }
+  async function loadSettings() {
+    if (settings.loading) return;
+    settings.loading = true; settings.error = ""; renderSettingsForm();
+    try {
+      const result = await call("terminal.settings.get");
+      settings.command = result.settings.command || "";
+      settings.args = formatArgs(result.settings.args || []);
+      settings.defaultCommand = result.defaultCommand || "";
+      settings.loaded = true;
+    } catch (error) { settings.error = error.message; }
+    finally { settings.loading = false; renderSettingsForm(); }
+  }
+  async function saveSettings(event) {
+    event.preventDefault();
+    if (!settings.loaded || settings.saving) return;
+    settings.error = "";
+    let args;
+    try {
+      args = splitArgs(settings.args);
+    } catch (error) { settings.error = error.message; renderSettingsForm(); return; }
+    settings.saving = true; renderSettingsForm();
+    try {
+      const result = await call("terminal.settings.set", { command: settings.command, args });
+      settings.command = result.settings.command || "";
+      settings.args = formatArgs(result.settings.args || []);
+      ui.toast("Terminal settings saved");
+    } catch (error) { settings.error = error.message; }
+    finally { settings.saving = false; renderSettingsForm(); }
+  }
   function xtermTheme(theme) {
     const colors = theme.colors;
     return {
@@ -71,8 +141,7 @@ export async function activate(runpilot) {
   function render() {
     if (!page?.isConnected) return;
     page.innerHTML = `<section class="terminal-plugin">
-      <div class="terminal-plugin-toolbar"><div class="terminal-plugin-tabs" role="tablist" aria-label="Terminal sessions"></div>
-      <div class="row-actions"><button class="button primary small" data-action="open" ${opening ? "disabled" : ""}>${opening ? "Opening…" : "New session"}</button><button class="button secondary small" data-action="close" ${active() ? "" : "disabled"}>Close session</button></div></div>
+      <div class="terminal-plugin-toolbar"><div class="terminal-plugin-tabs" role="tablist" aria-label="Terminal sessions"></div></div>
       ${state.error ? `<div class="notice" role="alert">${escape(state.error)}</div>` : ""}
       <div class="terminal-plugin-panes"></div>
     </section>`;
@@ -87,7 +156,7 @@ export async function activate(runpilot) {
       label.textContent = item.session.command || `Shell ${sessions.indexOf(item) + 1}`;
       label.addEventListener("click", () => { activeID = id; render(); item.terminal?.focus(); fit(item); });
       const closeTab = document.createElement("button"); closeTab.type = "button"; closeTab.className = "terminal-plugin-tab-close"; closeTab.textContent = "×";
-      closeTab.setAttribute("aria-label", `Close ${label.textContent}`); closeTab.addEventListener("click", () => close(id));
+      closeTab.setAttribute("aria-label", `Close ${label.textContent}`); closeTab.title = `Close ${label.textContent}`; closeTab.addEventListener("click", () => close(id));
       tab.append(label, closeTab); tabs.append(tab);
       const pane = document.createElement("div"); pane.className = "terminal-plugin-screen";
       pane.id = `terminal-pane-${id}`; pane.setAttribute("role", "tabpanel"); pane.setAttribute("aria-labelledby", label.id);
@@ -97,8 +166,11 @@ export async function activate(runpilot) {
       else pane.append(item.terminal.element);
       if (id === activeID) queueMicrotask(() => { fit(item); item.terminal?.focus(); });
     }
-    page.querySelector('[data-action="open"]').addEventListener("click", open);
-    page.querySelector('[data-action="close"]').addEventListener("click", () => close(activeID));
+    const newTab = document.createElement("button");
+    newTab.type = "button"; newTab.className = "terminal-plugin-new-tab"; newTab.textContent = "+";
+    newTab.disabled = opening; newTab.title = opening ? "Opening session" : "New session";
+    newTab.setAttribute("aria-label", newTab.title); newTab.addEventListener("click", open);
+    tabs.append(newTab);
   }
   async function open() {
     if (opening) return;
@@ -177,6 +249,17 @@ export async function activate(runpilot) {
       if (!sessions.length && !opening) void open();
     },
   });
+  runpilot.settings.register({
+    id: "terminal",
+    render: () => {
+      settingsForm = document.createElement("form");
+      settingsForm.className = "docker-card plugin-setting-card terminal-plugin-settings";
+      settingsForm.addEventListener("submit", saveSettings);
+      renderSettingsForm();
+      if (!settings.loaded && !settings.loading) void loadSettings();
+      return settingsForm;
+    },
+  });
   themeSubscription = ui.theme.subscribe(theme => {
     for (const item of sessions) if (item.terminal) item.terminal.options.theme = xtermTheme(theme);
   });
@@ -204,6 +287,6 @@ export async function activate(runpilot) {
     observers.forEach(off => off()); observers = [];
     themeSubscription?.(); themeSubscription = null;
     sessions.forEach(item => { clearTimeout(item.statusTimer); void call("terminal.close", { id: item.session.id, force: true }); cleanupTerminal(item); });
-    sessions = []; page = null;
+    sessions = []; page = null; settingsForm = null;
   };
 }

@@ -62,10 +62,18 @@ func TestTerminalPluginUserLifecycleHTTP(t *testing.T) {
 		t.Skip("lifecycle UI assertions run on the Linux integration host")
 	}
 	packageBytes := terminalPluginPackage(t)
+	packagePath := filepath.Join(t.TempDir(), "terminal.rpplugin")
+	if err := os.WriteFile(packagePath, packageBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := plugins.InspectPackage(packagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	hash := sha256.Sum256(packageBytes)
 	catalog := plugins.Catalog{SchemaVersion: 1, Plugins: []plugins.CatalogEntry{{
-		ID: "terminal", Name: "Terminal", Latest: "0.1.2",
-		Versions: []plugins.CatalogVersion{{Version: "0.1.2", Platforms: []string{"linux", "windows"}, Requires: plugins.Requires{RunPilotAPI: 2, Backend: ">=1.0.0 <2.0.0", Frontend: ">=1.0.0 <2.0.0"}, URL: "PACKAGE", SHA256: hex.EncodeToString(hash[:])}},
+		ID: manifest.ID, Name: manifest.Name, Description: manifest.Description, Latest: manifest.Version,
+		Versions: []plugins.CatalogVersion{{Version: manifest.Version, Platforms: manifest.Platforms, Requires: manifest.Requires, URL: "PACKAGE", SHA256: hex.EncodeToString(hash[:])}},
 	}}}
 	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/catalog.json" {
@@ -140,7 +148,11 @@ func TestTerminalPluginUserLifecycleHTTP(t *testing.T) {
 	if response := request("GET", "/api/v1/plugins/catalog", "", http.StatusOK); !bytes.Contains(response.Body.Bytes(), []byte(`"id":"terminal"`)) {
 		t.Fatal("Terminal was not discoverable in plugin catalog")
 	}
-	request("POST", "/api/v1/plugins/terminal/install", `{"version":"0.1.2"}`, http.StatusOK)
+	installRequest, err := json.Marshal(map[string]string{"version": manifest.Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request("POST", "/api/v1/plugins/terminal/install", string(installRequest), http.StatusOK)
 	status := ctrl.Plugins().Statuses()[0]
 	if status.Enabled || status.Loaded {
 		t.Fatalf("installed plugin should remain disabled until requested: %+v", status)

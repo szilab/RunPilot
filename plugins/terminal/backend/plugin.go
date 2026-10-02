@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
+
 	"github.com/szilab/RunPilot/internal/pluginapi"
 )
 
@@ -29,6 +31,12 @@ type session struct {
 }
 type plugin struct{ sessions map[string]session }
 
+type terminalSettings struct {
+	Version int      `json:"version"`
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+}
+
 func newPlugin() *plugin { return &plugin{sessions: map[string]session{}} }
 func decode(raw json.RawMessage, v any) *rpcError {
 	if len(raw) == 0 {
@@ -41,6 +49,10 @@ func decode(raw json.RawMessage, v any) *rpcError {
 }
 func (p *plugin) handle(method string, raw json.RawMessage) (any, *rpcError) {
 	switch method {
+	case "terminal.settings.get":
+		return p.getSettings()
+	case "terminal.settings.set":
+		return p.setSettings(raw)
 	case "terminal.open":
 		return p.open(raw)
 	case "terminal.write":
@@ -55,6 +67,76 @@ func (p *plugin) handle(method string, raw json.RawMessage) (any, *rpcError) {
 		return nil, fail("unknown_method", "unknown terminal method")
 	}
 }
+
+func (p *plugin) readSettings() (terminalSettings, *rpcError) {
+	settings := terminalSettings{Version: 1, Args: []string{}}
+	var raw json.RawMessage
+	if err := callHost("storage.get", map[string]any{"key": "settings"}, &raw); err != nil {
+		return settings, hostError(err)
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return settings, nil
+	}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return settings, fail("invalid_configuration", "stored terminal settings are unreadable")
+	}
+	if settings.Version != 1 {
+		return settings, fail("invalid_configuration", "unsupported terminal settings version")
+	}
+	if settings.Args == nil {
+		settings.Args = []string{}
+	}
+	return settings, validateSettings(settings)
+}
+
+func validateSettings(settings terminalSettings) *rpcError {
+	if strings.ContainsRune(settings.Command, 0) {
+		return fail("invalid_argument", "terminal command must not contain NUL characters")
+	}
+	if settings.Command == "" && len(settings.Args) > 0 {
+		return fail("invalid_argument", "terminal arguments require a command")
+	}
+	for _, argument := range settings.Args {
+		if strings.ContainsRune(argument, 0) {
+			return fail("invalid_argument", "terminal arguments must not contain NUL characters")
+		}
+	}
+	return nil
+}
+
+func (p *plugin) getSettings() (any, *rpcError) {
+	settings, failure := p.readSettings()
+	if failure != nil {
+		return nil, failure
+	}
+	var host struct {
+		OS string `json:"os"`
+	}
+	if err := callHost("system.status", map[string]any{}, &host); err != nil {
+		return nil, hostError(err)
+	}
+	return map[string]any{"settings": settings, "defaultCommand": defaultShell(host.OS)}, nil
+}
+
+func (p *plugin) setSettings(raw json.RawMessage) (any, *rpcError) {
+	if _, failure := p.readSettings(); failure != nil {
+		return nil, failure
+	}
+	settings := terminalSettings{Version: 1, Args: []string{}}
+	if failure := decode(raw, &settings); failure != nil {
+		return nil, failure
+	}
+	settings.Version = 1
+	settings.Command = strings.TrimSpace(settings.Command)
+	if failure := validateSettings(settings); failure != nil {
+		return nil, failure
+	}
+	if err := callHost("storage.set", map[string]any{"key": "settings", "value": settings}, nil); err != nil {
+		return nil, hostError(err)
+	}
+	return map[string]any{"settings": settings}, nil
+}
+
 func (p *plugin) open(raw json.RawMessage) (any, *rpcError) {
 	var req struct {
 		WorkingDirectory string `json:"workingDirectory"`
@@ -87,9 +169,16 @@ func (p *plugin) open(raw json.RawMessage) (any, *rpcError) {
 	}
 	command := defaultShell(host.OS)
 	args := defaultShellArgs(host.OS)
+	settings, failure := p.readSettings()
+	if failure != nil {
+		return nil, failure
+	}
+	if settings.Command != "" {
+		command, args = settings.Command, settings.Args
+	}
 	var created session
 	err := callHost("process.session.create", map[string]any{"command": command, "args": args, "workingDirectory": req.WorkingDirectory, "size": map[string]int{"rows": rows, "columns": cols}}, &created)
-	if err != nil && host.OS == "windows" && command == "cmd.exe" {
+	if err != nil && host.OS == "windows" && settings.Command == "" && command == "cmd.exe" {
 		command = "powershell.exe"
 		args = nil
 		err = callHost("process.session.create", map[string]any{"command": command, "workingDirectory": req.WorkingDirectory, "size": map[string]int{"rows": rows, "columns": cols}}, &created)

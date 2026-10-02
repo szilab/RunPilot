@@ -472,14 +472,19 @@ async function loadPluginExtensions(extensions) {
   }
   for (const extension of extensions || []) {
     if (pluginExtensions.has(extension.id)) continue;
+    const assetRevision = Date.now().toString();
     if (extension.stylesheet) {
       const stylesheet = document.createElement("link");
       stylesheet.rel = "stylesheet";
-      stylesheet.href = extension.stylesheet;
+      const stylesheetURL = new URL(extension.stylesheet, window.location.href);
+      stylesheetURL.searchParams.set("_rp", assetRevision);
+      stylesheet.href = stylesheetURL.href;
       stylesheet.dataset.runpilotPlugin = extension.id;
       document.head.append(stylesheet);
     }
-    const module = await import(extension.module);
+    const moduleURL = new URL(extension.module, window.location.href);
+    moduleURL.searchParams.set("_rp", assetRevision);
+    const module = await import(moduleURL.href);
     if (typeof module.activate !== "function") throw new Error(`Plugin ${extension.id} does not export activate()`);
     const runpilot = Object.freeze({
       ui: pluginUI(),
