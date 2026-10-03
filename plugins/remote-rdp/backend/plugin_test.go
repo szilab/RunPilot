@@ -136,7 +136,7 @@ func installFakeHost(t *testing.T, host *fakeGuacdHost) {
 
 func TestRDPHandshakeMapsReturnedArgsAndNegotiatesVersion(t *testing.T) {
 	host := &fakeGuacdHost{
-		args:  []string{"VERSION_9_0_0", "password", "hostname", "server-layout", "security", "port", "ignore-cert", "disable-copy", "disable-paste", "resize-method", "timezone", "unknown"},
+		args:  []string{"VERSION_9_0_0", "password", "hostname", "server-layout", "security", "port", "ignore-cert", "disable-copy", "disable-paste", "normalize-clipboard", "resize-method", "timezone", "unknown"},
 		ready: []string{"guac-connection"},
 	}
 	installFakeHost(t, host)
@@ -162,7 +162,7 @@ func TestRDPHandshakeMapsReturnedArgsAndNegotiatesVersion(t *testing.T) {
 	if !reflect.DeepEqual(gotOpcodes, wantOpcodes) {
 		t.Fatalf("instruction sequence=%v", gotOpcodes)
 	}
-	wantConnect := []string{"VERSION_1_5_0", "do-not-leak", "rdp-target", "hu-hu-qwertz", "nla", "3390", "true", "true", "false", "display-update", "Europe/Budapest", ""}
+	wantConnect := []string{"VERSION_1_5_0", "do-not-leak", "rdp-target", "hu-hu-qwertz", "nla", "3390", "true", "true", "false", "unix", "display-update", "Europe/Budapest", ""}
 	if got := host.instructions[len(host.instructions)-1].Args; !reflect.DeepEqual(got, wantConnect) {
 		t.Fatalf("connect args=%q want=%q", got, wantConnect)
 	}

@@ -27,6 +27,8 @@ architecture description elsewhere.
   behavior remains plugin-owned.
 - New plugin browser RPC/events use the common authenticated application
   WebSocket. Do not add feature-specific REST APIs or WebSockets.
+- A plugin must package its feature-specific browser dependencies and must not
+  depend on globals or static assets loaded by legacy/core feature pages.
 - Keep raw WASM ABI, backend contract, frontend contract, RunPilot version and
   plugin SemVer as separate version domains.
 - ABI v2 is the preferred first-party backend path; ABI v1 remains compatibility

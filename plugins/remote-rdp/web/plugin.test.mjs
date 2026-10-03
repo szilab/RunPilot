@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { createGuacamoleStreamTunnel } from "./plugin.js";
+import { attachClipboardReader, createGuacamoleStreamTunnel, guacamoleAssetURL, loadGuacamole, normalizeClipboardText, receiveClipboard, sendClipboardText } from "./plugin.js";
 
 const frontendSource = readFileSync(new URL("./plugin.js", import.meta.url), "utf8");
 
@@ -107,4 +107,86 @@ test("guacd settings keep host and port visible and group other options in advan
   assert.match(frontendSource, /<summary>Advanced settings<\/summary><div class="form-grid"><label>Connect timeout/);
   assert.match(frontendSource, /settingsForm\.querySelector\("\.rdp-settings-advanced"\)\?\.open/);
   assert.match(frontendSource, /<\/details><div class="plugin-settings-actions rdp-settings-actions">/);
+});
+
+test("clipboard text normalization and bounds are explicit", () => {
+  assert.equal(normalizeClipboardText("a\r\nb\rc\n", "unix"), "a\nb\nc\n");
+  assert.equal(normalizeClipboardText("a\nb\r", "windows"), "a\r\nb\r\n");
+  assert.equal(normalizeClipboardText("a\r\nb", "preserve"), "a\r\nb");
+  const client = {};
+  assert.equal(receiveClipboard(client, true, "remote text"), true);
+  assert.equal(client.latestRemoteClipboard, "remote text");
+  assert.equal(receiveClipboard(client, false, "hidden"), false);
+  assert.equal(receiveClipboard(client, true, "x".repeat(1024 * 1024 + 1)), false);
+});
+
+test("Guacamole clipboard streams receive text, reject MIME/disabled data, bound size, and clean up", () => {
+  class StringReader { constructor(stream) { this.stream = stream; } }
+  class StringWriter { constructor(stream) { this.stream = stream; } sendText(text) { this.stream.text = text; } sendEnd() { this.stream.ended = true; } }
+  const guac = { StringReader, StringWriter }, client = {}, input = { sendEnd() { this.ended = true; } };
+  let active = true, completed = 0;
+  const reader = attachClipboardReader(guac, client, input, "text/plain; charset=utf-8", { clipboard: true, copy: true }, () => active, () => completed++);
+  reader.ontext("remote text"); reader.onend();
+  assert.equal(client.latestRemoteClipboard, "remote text"); assert.equal(completed, 1);
+  assert.equal(attachClipboardReader(guac, client, input, "image/png", { clipboard: true, copy: true }), null);
+  assert.equal(input.ended, true);
+  assert.equal(attachClipboardReader(guac, client, input, "text/plain", { clipboard: true, copy: false }), null);
+  const disabled = attachClipboardReader(guac, client, input, "text/plain", { clipboard: false, copy: true });
+  assert.equal(disabled, null);
+  const oversized = attachClipboardReader(guac, client, input, "text/plain", { clipboard: true, copy: true });
+  oversized.ontext("x".repeat(1024 * 1024 + 1)); oversized.onend();
+  assert.equal(client.latestRemoteClipboard, "remote text");
+  const stale = attachClipboardReader(guac, client, input, "text/plain", { clipboard: true, copy: true }, () => active);
+  active = false; stale.ontext("late"); stale.onend();
+  assert.equal(client.latestRemoteClipboard, "remote text");
+  stale.ontext = null; stale.onend = null;
+  assert.equal(stale.ontext, null); assert.equal(stale.onend, null);
+});
+
+test("Guacamole clipboard writer sends local text only when paste is enabled", () => {
+  class StringWriter { constructor(stream) { this.stream = stream; } sendText(text) { this.stream.text = text; } sendEnd() { this.stream.ended = true; } }
+  const guac = { StringWriter }, sent = [];
+  const client = { createOutputStream(mimetype) { const stream = { mimetype }; sent.push(stream); return stream; } };
+  assert.equal(sendClipboardText(guac, client, "local text", true), true);
+  assert.deepEqual(sent[0], { mimetype: "text/plain", text: "local text", ended: true });
+  assert.equal(sendClipboardText(guac, client, "blocked", false), false);
+  assert.equal(sendClipboardText(guac, client, "x".repeat(1024 * 1024 + 1), true), false);
+  assert.equal(sent.length, 1);
+});
+
+test("Guacamole loader obtains plugin asset with no core preload and memoizes concurrent loads", async () => {
+  const oldWindow = globalThis.window, oldDocument = globalThis.document;
+  const scripts = [];
+  globalThis.window = {};
+  globalThis.document = { createElement: () => ({}), head: { append(script) {
+    scripts.push(script);
+    queueMicrotask(() => {
+      if (scripts.length === 1) { script.onerror(); return; }
+      globalThis.window.Guacamole = { Client: function Client() {}, Tunnel: function Tunnel() {} }; script.onload();
+    });
+  } } };
+  try {
+    assert.equal(window.Guacamole, undefined);
+    await assert.rejects(loadGuacamole(), /packaged Guacamole client/);
+    const first = loadGuacamole(), second = loadGuacamole();
+    assert.equal(first, second);
+    const guac = await first;
+    assert.equal(typeof guac.Client, "function");
+    assert.equal(scripts.length, 2);
+    assert.equal(scripts[1].src, guacamoleAssetURL());
+  } finally {
+    globalThis.window = oldWindow; globalThis.document = oldDocument;
+  }
+});
+
+test("plugin asset URL stays under root and non-root plugin module paths", () => {
+  assert.equal(guacamoleAssetURL("https://host/plugins/remote.rdp/web/plugin.js"), "https://host/plugins/remote.rdp/web/vendor/guacamole/guacamole-common-js-1.6.0.min.js");
+  assert.equal(guacamoleAssetURL("https://host/runpilot/plugins/remote.rdp/web/plugin.js"), "https://host/runpilot/plugins/remote.rdp/web/vendor/guacamole/guacamole-common-js-1.6.0.min.js");
+});
+
+test("plugin package owns its frontend runtime and licensing files", () => {
+  for (const name of ["vendor/guacamole/guacamole-common-js-1.6.0.min.js", "vendor/guacamole/LICENSE", "vendor/guacamole/NOTICE"])
+    assert.ok(readFileSync(new URL(name, import.meta.url)).length > 0, `${name} must be packaged`);
+  assert.match(frontendSource, /new URL\("\.\/vendor\/guacamole/);
+  assert.doesNotMatch(frontendSource, /new window\.Guacamole/);
 });

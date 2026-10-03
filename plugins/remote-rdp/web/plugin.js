@@ -1,4 +1,66 @@
 const PLUGIN = "remote.rdp";
+let guacamoleLoadPromise;
+export function guacamoleAssetURL(moduleURL = import.meta.url) {
+  return new URL("./vendor/guacamole/guacamole-common-js-1.6.0.min.js", moduleURL).href;
+}
+export function loadGuacamole() {
+  if (guacamoleLoadPromise) return guacamoleLoadPromise;
+  guacamoleLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = guacamoleAssetURL();
+    script.async = true;
+    script.onload = () => window.Guacamole?.Client && window.Guacamole?.Tunnel
+      ? resolve(window.Guacamole) : reject(new Error("The packaged Guacamole client did not initialize."));
+    script.onerror = () => reject(new Error("Could not load the RDP plugin's packaged Guacamole client."));
+    document.head.append(script);
+  }).catch(error => { guacamoleLoadPromise = null; throw error; });
+  return guacamoleLoadPromise;
+}
+export function normalizeClipboardText(text, mode = "preserve") {
+  if (mode === "unix") return String(text).replace(/\r\n?/g, "\n");
+  if (mode === "windows") return String(text).replace(/\r\n|\r|\n/g, "\r\n");
+  return String(text);
+}
+const MAX_CLIPBOARD_BYTES = 1024 * 1024;
+export function receiveClipboard(client, enabled, text) {
+  if (!enabled || typeof text !== "string" || new TextEncoder().encode(text).byteLength > MAX_CLIPBOARD_BYTES) return false;
+  // guacd applies the configured normalize-clipboard mode at the RDP boundary.
+  client.latestRemoteClipboard = text;
+  return true;
+}
+export function attachClipboardReader(Guacamole, client, stream, mimetype, options, isActive = () => true, onReceived = () => {}) {
+  if (!options?.clipboard || options.copy === false || !/^text\/plain(?:\s*;\s*charset=[^;]+)?$/i.test(String(mimetype || ""))) {
+    try { stream.sendEnd(); } catch {}
+    return null;
+  }
+  const reader = new Guacamole.StringReader(stream);
+  let incoming = "", byteCount = 0;
+  reader.ontext = chunk => {
+    if (!isActive()) return;
+    byteCount += new TextEncoder().encode(chunk).byteLength;
+    if (byteCount > MAX_CLIPBOARD_BYTES) { incoming = ""; try { stream.sendEnd(); } catch {} return; }
+    incoming += chunk;
+  };
+  reader.onend = () => {
+    if (!isActive() || byteCount > MAX_CLIPBOARD_BYTES) return;
+    if (receiveClipboard(client, true, incoming)) onReceived(incoming);
+  };
+  return reader;
+}
+export function sendClipboardText(Guacamole, client, text, enabled = true) {
+  if (!enabled || typeof text !== "string" || new TextEncoder().encode(text).byteLength > MAX_CLIPBOARD_BYTES) return false;
+  const stream = client.createOutputStream("text/plain");
+  const writer = new Guacamole.StringWriter(stream);
+  writer.sendText(text); writer.sendEnd();
+  return true;
+}
+function clearClipboardState(state) {
+  try {
+    if (state.clipboardReader) { state.clipboardReader.ontext = null; state.clipboardReader.onend = null; }
+    state.clipboardWriter?.sendEnd?.();
+  } catch {}
+  state.clipboardReader = null; state.clipboardWriter = null;
+}
 const DEFAULT_OPTIONS = Object.freeze({
   host: "", port: 3389, username: "", domain: "", securityMode: "automatic",
   resizeMethod: "display-update", dpiMode: "auto", dpi: 96, colorDepth: 0,
@@ -181,15 +243,17 @@ export async function activate(runpilot) {
 
   function editTarget(existing) {
     const options = { ...DEFAULT_OPTIONS, ...(existing?.options || {}) };
+    const clipboardEnabled = options.clipboard !== false && options.copy !== false && options.paste !== false;
     const certificates = [["validate", "Validate certificate"], ["tofu", "Trust on first use"], ["ignore", "Ignore certificate"]];
     if (options.certificatePolicy === "fingerprint") certificates.push(["fingerprint", "Pinned fingerprint"]);
     const performance = [["balanced", "Balanced"], ["quality", "Quality"], ["low-bandwidth", "Low bandwidth"]];
     if (options.performanceProfile === "custom") performance.push(["custom", "Custom"]);
-    const content = `<div class="form-grid"><label class="span-2">Name<input name="name" required maxlength="100" value="${escapeHTML(existing?.name || "")}"></label><section class="remote-xpra-settings span-2"><div class="section-head"><div><h3>RDP / Guacamole</h3><p class="muted">Credentials are requested for each connection and never saved.</p></div></div><div class="form-grid remote-xpra-grid"><label>Host<input name="host" required placeholder="rdp.example" inputmode="url" value="${escapeHTML(options.host)}"></label><label>Port<input name="port" type="number" min="1" max="65535" value="${escapeHTML(options.port)}"></label><label class="span-2">Username<input name="username" autocomplete="username" placeholder="DOMAIN\\username" value="${escapeHTML(formatUsername(options.username, options.domain))}"></label></div><details class="remote-xpra-advanced"><summary>Advanced settings</summary><div class="form-grid remote-xpra-grid">${selectField("Server keyboard layout", "serverLayout", LAYOUTS, options.serverLayout, "span-2")}${selectField("Security", "securityMode", [["automatic", "Automatic"], ["nla", "NLA"], ["nla-ext", "NLA Extended"], ["tls", "TLS"], ["rdp", "Legacy RDP"]], options.securityMode)}${selectField("Resize", "resizeMethod", [["display-update", "Dynamic / Display Update"], ["reconnect", "Reconnect on resize"], ["fixed", "Fixed"]], options.resizeMethod)}${selectField("Certificate", "certificatePolicy", certificates, options.certificatePolicy)}<label>Connection timeout<input name="timeoutSeconds" type="number" min="1" max="120" value="${escapeHTML(options.timeoutSeconds)}"></label>${selectField("Clipboard", "clipboardNormalization", [["preserve", "Enabled — preserve line endings"], ["unix", "Enabled — Unix line endings"], ["windows", "Enabled — Windows line endings"]], options.clipboardNormalization)}${selectField("Performance", "performanceProfile", performance, options.performanceProfile)}</div></details></section></div>`;
+    const content = `<div class="form-grid"><label class="span-2">Name<input name="name" required maxlength="100" value="${escapeHTML(existing?.name || "")}"></label><section class="remote-xpra-settings span-2"><div class="section-head"><div><h3>RDP / Guacamole</h3><p class="muted">Credentials are requested for each connection and never saved.</p></div></div><div class="form-grid remote-xpra-grid"><label>Host<input name="host" required placeholder="rdp.example" inputmode="url" value="${escapeHTML(options.host)}"></label><label>Port<input name="port" type="number" min="1" max="65535" value="${escapeHTML(options.port)}"></label><label class="span-2">Username<input name="username" autocomplete="username" placeholder="DOMAIN\\username" value="${escapeHTML(formatUsername(options.username, options.domain))}"></label></div><details class="remote-xpra-advanced"><summary>Advanced settings</summary><div class="form-grid remote-xpra-grid">${selectField("Server keyboard layout", "serverLayout", LAYOUTS, options.serverLayout, "span-2")}${selectField("Security", "securityMode", [["automatic", "Automatic"], ["nla", "NLA"], ["nla-ext", "NLA Extended"], ["tls", "TLS"], ["rdp", "Legacy RDP"]], options.securityMode)}${selectField("Resize", "resizeMethod", [["display-update", "Dynamic / Display Update"], ["reconnect", "Reconnect on resize"], ["fixed", "Fixed"]], options.resizeMethod)}${selectField("Certificate", "certificatePolicy", certificates, options.certificatePolicy)}<label>Connection timeout<input name="timeoutSeconds" type="number" min="1" max="120" value="${escapeHTML(options.timeoutSeconds)}"></label>${selectField("Clipboard line endings", "clipboardNormalization", [["preserve", "Preserve"], ["unix", "Unix (LF)"], ["windows", "Windows (CRLF)"]], options.clipboardNormalization)}<label class="check"><input name="clipboard" type="checkbox" ${clipboardEnabled ? "checked" : ""}> Enable clipboard in both directions</label>${selectField("Performance", "performanceProfile", performance, options.performanceProfile)}</div></details></section></div>`;
     const { form } = dialog(existing ? "Edit RDP target" : "Add RDP target", "Connect to a remote desktop through guacd.", content, async form => {
       const value = name => form.elements.namedItem(name).value;
       const identity = splitUsername(value("username"));
-      const target = { id: existing?.id || "", name: value("name").trim(), options: { ...(existing?.options || {}), host: value("host").trim(), port: Number(value("port")), username: identity.username, domain: identity.domain, securityMode: value("securityMode"), serverLayout: value("serverLayout"), resizeMethod: value("resizeMethod"), certificatePolicy: value("certificatePolicy"), timeoutSeconds: Number(value("timeoutSeconds")), clipboardNormalization: value("clipboardNormalization"), performanceProfile: value("performanceProfile"), clipboard: true, copy: true, paste: true } };
+      const clipboardEnabled = form.elements.clipboard.checked;
+      const target = { id: existing?.id || "", name: value("name").trim(), options: { ...(existing?.options || {}), host: value("host").trim(), port: Number(value("port")), username: identity.username, domain: identity.domain, securityMode: value("securityMode"), serverLayout: value("serverLayout"), resizeMethod: value("resizeMethod"), certificatePolicy: value("certificatePolicy"), timeoutSeconds: Number(value("timeoutSeconds")), clipboardNormalization: value("clipboardNormalization"), clipboard: clipboardEnabled, copy: clipboardEnabled, paste: clipboardEnabled, performanceProfile: value("performanceProfile") } };
       await call("rdp.targets.save", { target });
       await loadTargets();
     }, "Save target");
@@ -269,6 +333,10 @@ export async function activate(runpilot) {
     activeSession = state;
     const diagnose = document.createElement("button"); diagnose.type = "button"; diagnose.className = "button secondary small"; diagnose.textContent = "Diagnose"; diagnose.title = "View credential-safe session diagnostics"; diagnose.addEventListener("click", () => showDiagnostics(state));
     view.actions.insertBefore(diagnose, view.actions.lastElementChild);
+    const copyButton = button(view.actions, "Copy remote clipboard", () => copyRemoteClipboard(state));
+    const pasteButton = button(view.actions, "Paste local clipboard", () => pasteLocalClipboard(state));
+    copyButton.hidden = !target.options.clipboard || target.options.copy === false;
+    pasteButton.hidden = !target.options.clipboard || target.options.paste === false;
     addDiagnostic(state, "RDP session startup requested");
     try {
       view.setLoading(true, "Measuring desktop surface…");
@@ -288,16 +356,18 @@ export async function activate(runpilot) {
       state.stream = stream;
       addDiagnostic(state, "application WebSocket stream attached");
       view.setLoading(true, "Starting desktop…");
-      if (!window.Guacamole?.Client || !window.Guacamole?.Tunnel) throw new Error("The Guacamole client asset is unavailable.");
-      const tunnel = createGuacamoleStreamTunnel(window.Guacamole, stream, session.connectionId);
-      const client = new window.Guacamole.Client(tunnel); state.client = client;
+      const Guacamole = await loadGuacamole();
+      if (state.closing || activeSession !== state) { stream.close(); return; }
+      state.guacamole = Guacamole;
+      const tunnel = createGuacamoleStreamTunnel(Guacamole, stream, session.connectionId);
+      const client = new Guacamole.Client(tunnel); state.client = client;
       addDiagnostic(state, "Guacamole client initialized");
       const display = client.getDisplay();
       view.surface.element.classList.add("rdp-session-surface");
       view.surface.element.append(display.getElement());
-      const mouse = new window.Guacamole.Mouse(display.getElement());
+      const mouse = new Guacamole.Mouse(display.getElement());
       mouse.onEach(["mousedown", "mousemove", "mouseup"], event => client.sendMouseState(event.state));
-      const keyboard = new window.Guacamole.Keyboard(view.surface.element);
+      const keyboard = new Guacamole.Keyboard(view.surface.element);
       keyboard.onkeydown = keysym => client.sendKeyEvent(1, keysym);
       keyboard.onkeyup = keysym => client.sendKeyEvent(0, keysym);
       const fitDisplay = () => {
@@ -305,6 +375,11 @@ export async function activate(runpilot) {
         if (scale !== null) display.scale(scale);
       };
       display.onresize = fitDisplay;
+      client.onclipboard = (clipboardStream, mimetype) => {
+        const reader = attachClipboardReader(Guacamole, client, clipboardStream, mimetype, target.options, () => !state.closing && activeSession === state, () => { state.clipboardReader = null; });
+        if (!reader) return;
+        state.clipboardReader = reader;
+      };
       const sendSurfaceSize = next => {
         if (!state.connected || target.options.resizeMethod === "fixed" || !next?.width || !next?.height) return;
         if (state.lastResize?.width === next.width && state.lastResize?.height === next.height) return;
@@ -318,15 +393,16 @@ export async function activate(runpilot) {
       });
       client.onstatechange = clientState => {
         if (activeSession !== state || state.closing) return;
-        if (clientState === window.Guacamole.Client.State.CONNECTED) {
+        if (clientState === Guacamole.Client.State.CONNECTED) {
           state.connected = true; addDiagnostic(state, "RDP desktop connected"); view.setLoading(false); view.setError(""); view.setStatus("connected"); view.surface.focus(); fitDisplay(); sendSurfaceSize(view.surface.getSize());
-        } else if (clientState === window.Guacamole.Client.State.DISCONNECTED) {
+        } else if (clientState === Guacamole.Client.State.DISCONNECTED) {
           state.connected = false;
+          clearClipboardState(state);
           if (!state.closing) { addDiagnostic(state, "RDP desktop disconnected"); view.setLoading(false); view.setStatus("disconnected"); view.setError("The RDP session disconnected."); }
         }
       };
-      client.onerror = status => { if (activeSession === state && !state.closing) { addDiagnostic(state, `Guacamole client error (code=${Number(status?.code) || 0})`); view.setError(guacError(status)); } };
-      stream.onclose = () => { if (activeSession === state && !state.closing) { addDiagnostic(state, "application WebSocket stream closed"); state.connected = false; view.setStatus("disconnected"); view.setError("The RDP stream closed."); } };
+      client.onerror = status => { clearClipboardState(state); if (activeSession === state && !state.closing) { addDiagnostic(state, `Guacamole client error (code=${Number(status?.code) || 0})`); view.setError(guacError(status)); } };
+      stream.onclose = () => { clearClipboardState(state); if (activeSession === state && !state.closing) { addDiagnostic(state, "application WebSocket stream closed"); state.connected = false; view.setStatus("disconnected"); view.setError("The RDP stream closed."); } };
       client.connect("");
     } catch (error) {
       addDiagnostic(state, `session startup failed (${error.code || "failed"})`);
@@ -337,11 +413,52 @@ export async function activate(runpilot) {
     }
   }
 
+  async function copyRemoteClipboard(state) {
+    const text = state?.client?.latestRemoteClipboard;
+    if (typeof text !== "string" || state.closing) { ui.toast("No remote clipboard text is available yet"); return; }
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable");
+      await navigator.clipboard.writeText(text); ui.toast("Remote clipboard copied locally");
+    } catch {
+      showClipboardFallback("Copy remote clipboard", text, false);
+    }
+  }
+
+  async function pasteLocalClipboard(state) {
+    if (!state || state.closing || !state.target.options.clipboard || state.target.options.paste === false) return;
+    let text;
+    try {
+      if (!navigator.clipboard?.readText) throw new Error("Clipboard access is unavailable");
+      text = await navigator.clipboard.readText();
+    } catch {
+      text = await showClipboardFallback("Paste local clipboard", "", true);
+    }
+    if (typeof text !== "string" || state.closing || activeSession !== state || !text) return;
+    if (new TextEncoder().encode(text).byteLength > MAX_CLIPBOARD_BYTES) { ui.toast("Clipboard text exceeds the 1 MiB limit"); return; }
+    try {
+      if (!sendClipboardText(state.guacamole, state.client, text, true)) { ui.toast("Clipboard text exceeds the 1 MiB limit"); return; }
+    } catch { ui.toast("Could not send clipboard text to the RDP session"); }
+  }
+
+  function showClipboardFallback(title, text, editable) {
+    return new Promise(resolve => {
+      const dialog = document.createElement("dialog"); dialog.className = "dialog rdp-clipboard-dialog";
+      dialog.innerHTML = `<div class="dialog-head"><h2>${escapeHTML(title)}</h2><button type="button" class="icon-btn" data-close aria-label="Close">×</button></div><p>${editable ? "Paste text here, then select Send." : "Select and copy this text manually."}</p><textarea rows="8" maxlength="1048576" aria-label="Clipboard text"></textarea><div class="dialog-actions"><button class="button secondary" data-close type="button">Cancel</button>${editable ? '<button class="button primary" data-send type="button">Send</button>' : ""}</div>`;
+      const area = dialog.querySelector("textarea"); area.value = text; area.readOnly = !editable;
+      let result;
+      dialog.querySelectorAll("[data-close]").forEach(node => node.addEventListener("click", () => dialog.close()));
+      dialog.querySelector("[data-send]")?.addEventListener("click", () => { result = area.value; dialog.close(); });
+      dialog.addEventListener("close", () => { dialog.remove(); resolve(result); }, { once: true });
+      document.body.append(dialog); dialog.showModal(); area.focus(); area.select();
+    });
+  }
+
   async function closeSession(returnToTargets) {
     const state = activeSession;
     if (!state || state.closing) return;
     state.closing = true; activeSession = null;
     state.resizeOff?.();
+    clearClipboardState(state);
     state.diagnosticsOutput?.closest("dialog")?.close();
     try { state.client?.disconnect(); } catch {}
     state.stream?.close();

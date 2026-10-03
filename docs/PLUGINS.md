@@ -192,7 +192,9 @@ plugin-namespaced storage; the guacd endpoint is edited in a Settings card.
 Passwords are supplied for each session only. The
 plugin owns Guacamole negotiation over the generic TCP/TLS stream capability
 and uses the shared interactive-session view for sizing, fullscreen, focus and
-cleanup. Its Diagnose action reads a bounded plugin-owned stage log; live
+cleanup. The plugin package includes its Guacamole 1.6.0 browser client and
+license notices, so it does not depend on the legacy Remote page's core asset.
+Its Diagnose action reads a bounded plugin-owned stage log; live
 diagnostic events include endpoint and handshake progress but no usernames or
 passwords. Deleting a target with an active session is rejected. The legacy
 Remote/RDP UI and provider remain available as the production path and are not

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"os"
 	"path/filepath"
@@ -17,6 +18,13 @@ func TestBuildPackageIsDeterministicAndValidatesAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(source, "web", "plugin.js"), []byte("export function activate() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(source, "web", "vendor", "runtime", "LICENSE")
+	if err := os.MkdirAll(filepath.Dir(nested), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nested, []byte("license"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	first, second := filepath.Join(t.TempDir(), "first.rpplugin"), filepath.Join(t.TempDir(), "second.rpplugin")
@@ -36,6 +44,20 @@ func TestBuildPackageIsDeterministicAndValidatesAssets(t *testing.T) {
 	}
 	if !bytes.Equal(a, b) {
 		t.Fatal("package output is not deterministic")
+	}
+	archive, err := zip.OpenReader(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundNested := false
+	for _, entry := range archive.File {
+		if entry.Name == "web/vendor/runtime/LICENSE" {
+			foundNested = true
+		}
+	}
+	_ = archive.Close()
+	if !foundNested {
+		t.Fatal("nested plugin dependency was omitted from package")
 	}
 	if err := os.Remove(filepath.Join(source, "web", "plugin.js")); err != nil {
 		t.Fatal(err)

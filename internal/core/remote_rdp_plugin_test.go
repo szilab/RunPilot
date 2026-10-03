@@ -188,7 +188,7 @@ func TestRemoteRDPPluginWASMNegotiatesThroughController(t *testing.T) {
 func copyRemoteRDPPlugin(t *testing.T, dataDir string) {
 	t.Helper()
 	source := filepath.Join("..", "..", "plugins", "remote-rdp")
-	destination := filepath.Join(dataDir, "plugins", remoteRDPPluginID, "1.0.0")
+	destination := filepath.Join(dataDir, "plugins", remoteRDPPluginID, "1.0.1")
 	for _, name := range []string{"plugin.yaml", "backend/plugin.wasm", "web/plugin.js", "web/plugin.css"} {
 		data, err := os.ReadFile(filepath.Join(source, filepath.FromSlash(name)))
 		if err != nil {
