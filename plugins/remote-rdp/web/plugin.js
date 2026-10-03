@@ -327,14 +327,25 @@ export async function activate(runpilot) {
       onBack: () => closeSession(true),
       onDisconnect: () => closeSession(true),
     });
+    view.element.classList.add("rdp-interactive-view");
     view.setStatus("connecting"); view.setLoading(true, "Opening RDP session…");
     const diagnosticId = globalThis.crypto?.randomUUID?.().replaceAll("-", "") || `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
     const state = { target, view, client: null, stream: null, session: null, diagnosticId, diagnostics: [], diagnosticsOutput: null, resizeOff: null, closing: false, connected: false, lastResize: null };
     activeSession = state;
+    const labelIcon = (element, name, label) => { element.classList.add("rdp-toolbar-icon", `rdp-toolbar-${name}`); element.setAttribute("aria-label", label); element.title = label; };
+    const backButton = view.element.querySelector(".rp-interactive-heading > button");
+    const [fullscreenButton, disconnectButton] = view.actions.querySelectorAll("button");
+    view.actions.prepend(backButton);
+    labelIcon(backButton, "back", "Back to RDP targets");
+    labelIcon(fullscreenButton, "fullscreen", "Toggle fullscreen");
+    labelIcon(disconnectButton, "disconnect", "Disconnect");
     const diagnose = document.createElement("button"); diagnose.type = "button"; diagnose.className = "button secondary small"; diagnose.textContent = "Diagnose"; diagnose.title = "View credential-safe session diagnostics"; diagnose.addEventListener("click", () => showDiagnostics(state));
+    labelIcon(diagnose, "diagnose", "Session diagnostics");
     view.actions.insertBefore(diagnose, view.actions.lastElementChild);
     const copyButton = button(view.actions, "Copy remote clipboard", () => copyRemoteClipboard(state));
     const pasteButton = button(view.actions, "Paste local clipboard", () => pasteLocalClipboard(state));
+    labelIcon(copyButton, "copy", "Copy remote clipboard locally");
+    labelIcon(pasteButton, "paste", "Paste local clipboard to remote");
     copyButton.hidden = !target.options.clipboard || target.options.copy === false;
     pasteButton.hidden = !target.options.clipboard || target.options.paste === false;
     addDiagnostic(state, "RDP session startup requested");
