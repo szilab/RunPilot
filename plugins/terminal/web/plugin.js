@@ -62,7 +62,7 @@ export async function activate(runpilot) {
   let themeSubscription = null;
   const state = { error: "" };
   let settingsForm = null;
-  const settings = { loaded: false, loading: false, saving: false, command: "", args: "", defaultCommand: "", error: "" };
+  const settings = { loaded: false, loading: false, saving: false, testing: false, command: "", args: "", defaultCommand: "", error: "", status: "" };
   const ui = runpilot.ui;
   const escape = ui.escape;
 
@@ -73,19 +73,21 @@ export async function activate(runpilot) {
   }
   function renderSettingsForm() {
     if (!settingsForm) return;
-    const disabled = !settings.loaded || settings.saving;
-    settingsForm.innerHTML = `<div class="plugin-setting-info"><strong>Terminal settings</strong><div class="meta">terminal</div></div>
+    const disabled = !settings.loaded || settings.saving || settings.testing;
+    settingsForm.innerHTML = `<div class="plugin-setting-info"><strong>Terminal settings</strong><div class="meta">Shell used for new terminal sessions.</div></div>
       ${settings.error ? `<div class="notice" role="alert">${escape(settings.error)}</div>` : ""}
+      ${settings.status ? `<div class="notice" role="status">${escape(settings.status)}</div>` : ""}
       <div class="form-grid">
         <label>Terminal command<input name="command" value="${escape(settings.command)}" placeholder="${escape(settings.defaultCommand)}" ${disabled ? "disabled" : ""}></label>
         <label>Arguments<input name="args" value="${escape(settings.args)}" placeholder="--noprofile --norc" ${disabled ? "disabled" : ""}></label>
       </div>
-      <div class="terminal-plugin-settings-actions"><button class="button primary small" type="submit" ${disabled ? "disabled" : ""}>${settings.saving ? "Saving…" : "Save"}</button>
+      <div class="plugin-settings-actions terminal-plugin-settings-actions"><button class="button secondary small" type="button" data-settings-test ${disabled ? "disabled" : ""}>${settings.testing ? "Testing…" : "Test connection"}</button><button class="button primary small" type="submit" ${disabled ? "disabled" : ""}>${settings.saving ? "Saving…" : "Save"}</button>
       ${!settings.loaded && !settings.loading && settings.error ? '<button class="button secondary small" type="button" data-settings-retry>Retry</button>' : ""}</div>`;
-    settingsForm.setAttribute("aria-busy", settings.loading || settings.saving ? "true" : "false");
+    settingsForm.setAttribute("aria-busy", settings.loading || settings.saving || settings.testing ? "true" : "false");
     settingsForm.elements.command.addEventListener("input", event => { settings.command = event.target.value; });
     settingsForm.elements.args.addEventListener("input", event => { settings.args = event.target.value; });
     settingsForm.querySelector("[data-settings-retry]")?.addEventListener("click", loadSettings);
+    settingsForm.querySelector("[data-settings-test]").addEventListener("click", testSettings);
   }
   async function loadSettings() {
     if (settings.loading) return;
@@ -99,10 +101,23 @@ export async function activate(runpilot) {
     } catch (error) { settings.error = error.message; }
     finally { settings.loading = false; renderSettingsForm(); }
   }
+  async function testSettings() {
+    if (!settings.loaded || settings.saving || settings.testing) return;
+    settings.error = ""; settings.status = "";
+    let args;
+    try { args = splitArgs(settings.args); }
+    catch (error) { settings.error = error.message; renderSettingsForm(); return; }
+    settings.testing = true; renderSettingsForm();
+    try {
+      await call("terminal.settings.test", { command: settings.command, args });
+      settings.status = "Terminal command started successfully.";
+    } catch (error) { settings.error = error.message; }
+    finally { settings.testing = false; renderSettingsForm(); }
+  }
   async function saveSettings(event) {
     event.preventDefault();
-    if (!settings.loaded || settings.saving) return;
-    settings.error = "";
+    if (!settings.loaded || settings.saving || settings.testing) return;
+    settings.error = ""; settings.status = "";
     let args;
     try {
       args = splitArgs(settings.args);
@@ -253,7 +268,7 @@ export async function activate(runpilot) {
     id: "terminal",
     render: () => {
       settingsForm = document.createElement("form");
-      settingsForm.className = "docker-card plugin-setting-card terminal-plugin-settings";
+      settingsForm.className = "plugin-settings-form terminal-plugin-settings";
       settingsForm.addEventListener("submit", saveSettings);
       renderSettingsForm();
       if (!settings.loaded && !settings.loading) void loadSettings();

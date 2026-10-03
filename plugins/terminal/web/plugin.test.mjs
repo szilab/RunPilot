@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { activate, splitArgs, formatArgs } from "./plugin.js";
+
+const frontendSource = readFileSync(new URL("./plugin.js", import.meta.url), "utf8");
+assert.match(frontendSource, /data-settings-test/);
+assert.match(frontendSource, /call\("terminal.settings.test", \{ command: settings.command, args \}\)/);
+assert.match(frontendSource, /settings\.saving \|\| settings\.testing/);
+assert.match(frontendSource, /settings\.status = "Terminal command started successfully\."/);
 
 assert.deepEqual(splitArgs(""), []);
 assert.deepEqual(splitArgs(" --noprofile   --norc "), ["--noprofile", "--norc"]);

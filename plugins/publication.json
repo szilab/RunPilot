@@ -2,7 +2,7 @@
   "plugins": [
     {"id": "system", "source": "plugins/system", "publish": false},
     {"id": "remote.xpra", "source": "plugins/remote-xpra", "publish": false},
-    {"id": "remote.rdp", "source": "plugins/remote-rdp", "publish": false},
+    {"id": "remote.rdp", "source": "plugins/remote-rdp", "publish": true},
     {"id": "remote.vnc", "source": "plugins/remote-vnc", "publish": false},
     {"id": "hello", "source": "plugins/examples/hello", "publish": false},
     {"id": "tasks", "source": "plugins/tasks", "publish": false},

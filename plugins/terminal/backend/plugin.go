@@ -53,6 +53,8 @@ func (p *plugin) handle(method string, raw json.RawMessage) (any, *rpcError) {
 		return p.getSettings()
 	case "terminal.settings.set":
 		return p.setSettings(raw)
+	case "terminal.settings.test":
+		return p.testSettings(raw)
 	case "terminal.open":
 		return p.open(raw)
 	case "terminal.write":
@@ -135,6 +137,47 @@ func (p *plugin) setSettings(raw json.RawMessage) (any, *rpcError) {
 		return nil, hostError(err)
 	}
 	return map[string]any{"settings": settings}, nil
+}
+
+func (p *plugin) testSettings(raw json.RawMessage) (any, *rpcError) {
+	settings := terminalSettings{Args: []string{}}
+	if failure := decode(raw, &settings); failure != nil {
+		return nil, failure
+	}
+	settings.Command = strings.TrimSpace(settings.Command)
+	if failure := validateSettings(settings); failure != nil {
+		return nil, failure
+	}
+	if len(p.sessions) >= 8 {
+		return nil, fail("resource_limit", "terminal session limit reached")
+	}
+	var host struct {
+		OS string `json:"os"`
+	}
+	if err := callHost("system.status", map[string]any{}, &host); err != nil {
+		return nil, hostError(err)
+	}
+	command, args := settings.Command, settings.Args
+	if command == "" {
+		command, args = defaultShell(host.OS), defaultShellArgs(host.OS)
+	}
+	var created session
+	err := callHost("process.session.create", map[string]any{"command": command, "args": args, "size": map[string]int{"rows": 24, "columns": 80}}, &created)
+	if err != nil && host.OS == "windows" && settings.Command == "" {
+		err = callHost("process.session.create", map[string]any{"command": "powershell.exe", "size": map[string]int{"rows": 24, "columns": 80}}, &created)
+	}
+	if err != nil {
+		return nil, hostError(err)
+	}
+	p.sessions[created.ID] = created
+	request, err := json.Marshal(map[string]any{"id": created.ID, "force": true})
+	if err != nil {
+		return nil, hostError(err)
+	}
+	if _, failure := p.close(request); failure != nil {
+		return nil, failure
+	}
+	return map[string]any{"ok": true}, nil
 }
 
 func (p *plugin) open(raw json.RawMessage) (any, *rpcError) {

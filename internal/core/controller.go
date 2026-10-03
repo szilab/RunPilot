@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -31,25 +32,26 @@ import (
 )
 
 type Controller struct {
-	dataDir             string
-	config              *config.Store
-	history             *history.Store
-	processes           *processmgr.Manager
-	jobs                *jobs.Runner
-	scheduler           *scheduler.Scheduler
-	software            *software.Manager
-	docker              *dockercompose.Manager
-	storage             *storage.Registry
-	remote              *remote.Service
-	plugins             *plugins.Manager
-	pluginMu            sync.Mutex
-	runtimeMu           sync.RWMutex
-	runtimes            map[string]*plugins.Runtime
-	pluginProcesses     *pluginProcessManager
-	pluginSessions      *pluginSessionManager
-	eventMu             sync.RWMutex
-	eventSubscribers    map[uint64]chan plugins.Event
-	nextEventSubscriber uint64
+	dataDir              string
+	config               *config.Store
+	history              *history.Store
+	processes            *processmgr.Manager
+	jobs                 *jobs.Runner
+	scheduler            *scheduler.Scheduler
+	software             *software.Manager
+	docker               *dockercompose.Manager
+	storage              *storage.Registry
+	remote               *remote.Service
+	plugins              *plugins.Manager
+	pluginMu             sync.Mutex
+	runtimeMu            sync.RWMutex
+	runtimes             map[string]*plugins.Runtime
+	pluginProcesses      *pluginProcessManager
+	pluginSessions       *pluginSessionManager
+	pluginNetworkStreams *pluginNetworkStreamManager
+	eventMu              sync.RWMutex
+	eventSubscribers     map[uint64]chan plugins.Event
+	nextEventSubscriber  uint64
 	// loading holds a channel per plugin whose backend is initializing; events
 	// for it wait for the load to finish instead of being lost.
 	loading     map[string]chan struct{}
@@ -98,6 +100,9 @@ func Open(dataDir string) (*Controller, error) {
 	}
 	c.pluginProcesses = newPluginProcessManager(func(owner, event string, data any) { c.deliverPluginEvent(owner, event, data) })
 	c.pluginSessions = newPluginSessionManager(c.deliverPluginEvent)
+	c.pluginNetworkStreams = newPluginNetworkStreamManager(func(owner, id string) {
+		c.deliverPluginEvent(owner, "network.stream.closed", map[string]string{"id": id})
+	})
 	c.pluginProcesses.history = h
 	c.pluginProcesses.publish = func(owner, event string, data any) {
 		if raw, err := json.Marshal(data); err == nil {
@@ -166,6 +171,7 @@ func (c *Controller) Close() {
 	}
 	c.pluginProcesses.close()
 	c.pluginSessions.close()
+	c.pluginNetworkStreams.close()
 	close(c.stopEvents)
 	c.remote.Close()
 	c.scheduler.Stop()
@@ -438,6 +444,31 @@ func (h controllerPluginHost) PluginStopped(pluginID string) {
 	h.controller.scheduler.RemovePluginOwner(pluginID)
 	h.controller.pluginProcesses.stopOwner(pluginID)
 	h.controller.pluginSessions.stopOwner(pluginID)
+	h.controller.pluginNetworkStreams.stopOwner(pluginID)
+}
+
+func (h controllerPluginHost) NetworkStreamOpen(ctx context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginNetworkStreams.open(ctx, owner, raw)
+}
+func (h controllerPluginHost) NetworkStreamRead(ctx context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginNetworkStreams.read(ctx, owner, raw)
+}
+func (h controllerPluginHost) NetworkStreamWrite(ctx context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginNetworkStreams.write(ctx, owner, raw)
+}
+func (h controllerPluginHost) NetworkStreamClose(ctx context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginNetworkStreams.closeStream(owner, raw)
+}
+
+// AttachPluginNetworkStream claims an owned stream for one browser WebSocket.
+func (c *Controller) AttachPluginNetworkStream(owner, id string) (net.Conn, func(), error) {
+	return c.pluginNetworkStreams.attach(owner, id)
+}
+
+// OpenPluginNetworkStream is the controller-side equivalent of the generic
+// network.stream.open capability, used by trusted host integrations.
+func (c *Controller) OpenPluginNetworkStream(ctx context.Context, owner string, params json.RawMessage) (json.RawMessage, error) {
+	return c.pluginNetworkStreams.open(ctx, owner, params)
 }
 func (h controllerPluginHost) ScheduleRegister(_ context.Context, pluginID string, raw json.RawMessage) (json.RawMessage, error) {
 	var value struct {

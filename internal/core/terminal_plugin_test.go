@@ -133,6 +133,12 @@ func TestTerminalPluginInstallEnableRestartAndInteractiveSession(t *testing.T) {
 	if first.sequence != 1 || len(first.bytes) == 0 {
 		t.Fatalf("first terminal event was not an initial prompt/output chunk: %+v", first)
 	}
+	settingsBefore, _ := json.Marshal(terminalCall(t, c, "terminal.settings.get", nil))
+	terminalCall(t, c, "terminal.settings.test", map[string]any{"command": "/bin/sh", "args": []string{"-i"}})
+	settingsAfter, _ := json.Marshal(terminalCall(t, c, "terminal.settings.get", nil))
+	if string(settingsBefore) != string(settingsAfter) {
+		t.Fatal("testing terminal settings changed the saved settings")
+	}
 	terminalCall(t, c, "terminal.resize", map[string]any{"id": id, "rows": 31, "columns": 101})
 	terminalCall(t, c, "terminal.status", map[string]any{"id": id})
 	input := base64.StdEncoding.EncodeToString([]byte("head -c 20000 /dev/zero | tr '\\000' X; printf '\\nRP_END_1\\n'; sleep 0.1; printf 'RP_LATE_1\\n'\n"))

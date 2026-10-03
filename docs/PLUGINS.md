@@ -179,5 +179,21 @@ arguments, with quotes for values containing spaces. Arguments are converted
 to an array and saved through plugin-namespaced `storage.*`; changes apply to new
 sessions without interrupting existing ones. An empty command preserves the
 platform default, including the Linux service's `SHELL` selection and the
-Windows `cmd.exe` fallback. The `terminal.settings.get` and
-`terminal.settings.set` methods use the common application WebSocket.
+Windows `cmd.exe` fallback. The `terminal.settings.get`,
+`terminal.settings.set`, and `terminal.settings.test` methods use the common
+application WebSocket. Testing starts and immediately closes a temporary
+process session with the entered command and arguments, without saving them
+or interrupting existing sessions. Regenerate its WASM backend with
+`go generate ./plugins/terminal/backend` after backend changes.
+
+`plugins/remote-rdp` includes a publishable ABI-v2 backend and a plugin-
+owned target/connect page. Target definitions and guacd settings use
+plugin-namespaced storage; the guacd endpoint is edited in a Settings card.
+Passwords are supplied for each session only. The
+plugin owns Guacamole negotiation over the generic TCP/TLS stream capability
+and uses the shared interactive-session view for sizing, fullscreen, focus and
+cleanup. Its Diagnose action reads a bounded plugin-owned stage log; live
+diagnostic events include endpoint and handshake progress but no usernames or
+passwords. Deleting a target with an active session is rejected. The legacy
+Remote/RDP UI and provider remain available as the production path and are not
+replaced by this migration phase.

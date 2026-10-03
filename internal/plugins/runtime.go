@@ -63,6 +63,12 @@ type ProcessSessionHost interface {
 	ProcessSessionStatus(context.Context, string, json.RawMessage) (json.RawMessage, error)
 	ProcessSessionTerminate(context.Context, string, json.RawMessage) (json.RawMessage, error)
 }
+type NetworkStreamHost interface {
+	NetworkStreamOpen(context.Context, string, json.RawMessage) (json.RawMessage, error)
+	NetworkStreamRead(context.Context, string, json.RawMessage) (json.RawMessage, error)
+	NetworkStreamWrite(context.Context, string, json.RawMessage) (json.RawMessage, error)
+	NetworkStreamClose(context.Context, string, json.RawMessage) (json.RawMessage, error)
+}
 
 // SchedulerValidator optionally checks a schedule definition without
 // registering it.
@@ -562,6 +568,27 @@ func (r *Runtime) dispatchCapability(ctx context.Context, payload []byte) capabi
 			value, err = sessions.ProcessSessionStatus(ctx, r.manifest.ID, request.Params)
 		case "process.session.terminate":
 			value, err = sessions.ProcessSessionTerminate(ctx, r.manifest.ID, request.Params)
+		}
+		if err != nil {
+			return detailedFailure(request.Capability, err)
+		}
+		return capabilitySuccess(value)
+	case "network.stream.open", "network.stream.read", "network.stream.write", "network.stream.close":
+		streams, ok := r.host.(NetworkStreamHost)
+		if !ok {
+			return capabilityFailure("unavailable", "network streams are unavailable")
+		}
+		var value json.RawMessage
+		var err error
+		switch request.Capability {
+		case "network.stream.open":
+			value, err = streams.NetworkStreamOpen(ctx, r.manifest.ID, request.Params)
+		case "network.stream.read":
+			value, err = streams.NetworkStreamRead(ctx, r.manifest.ID, request.Params)
+		case "network.stream.write":
+			value, err = streams.NetworkStreamWrite(ctx, r.manifest.ID, request.Params)
+		case "network.stream.close":
+			value, err = streams.NetworkStreamClose(ctx, r.manifest.ID, request.Params)
 		}
 		if err != nil {
 			return detailedFailure(request.Capability, err)

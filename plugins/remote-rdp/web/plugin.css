@@ -1,1 +1,47 @@
-.runpilot-plugin-remote-rdp { color: var(--text-color, inherit); }
+.rdp-plugin { min-width: 0; }
+.rdp-plugin-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.rdp-plugin-head h2 { margin: 0; color: var(--rp-text-strong); font-size: 18px; }
+.rdp-plugin-actions, .rdp-target-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
+.rdp-plugin-notice { margin: 0 0 12px; padding: 9px 11px; border: 1px solid #f0b4ae; border-radius: var(--rp-radius); color: #8f2018; background: #fff4f2; font-size: 13px; }
+.rdp-target-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.rdp-target-card { grid-template-rows: auto 1fr; border-radius: var(--rp-radius); background: var(--rp-surface-elevated); }
+.rdp-target-meta-row { display:flex; min-width:0; align-items:flex-end; justify-content:space-between; gap:10px; margin-top:auto; }
+.rdp-target-card .rdp-target-actions { flex:0 0 auto; padding-top:8px; }
+.rdp-target-facts { display: grid; min-width: 0; gap: 3px; }
+.rdp-target-facts h2 { margin: 0; color: var(--rp-text-strong); font-size: 17px; overflow-wrap: anywhere; }
+.rdp-target-facts span { overflow:hidden; color:var(--rp-text); font:12px/1.4 var(--rp-font-mono); text-overflow:ellipsis; white-space:nowrap; }
+.rdp-target-identity { overflow:hidden; color:var(--rp-text-muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.rdp-target-empty { grid-column: 1 / -1; color: var(--rp-text-muted); }
+.rdp-settings-actions { display: flex; gap: 6px; }
+.rdp-settings-advanced summary { cursor: pointer; color: var(--rp-text); font-size: 13px; font-weight: 600; }
+.rdp-settings-advanced .form-grid { margin-top: 12px; }
+.rdp-plugin-settings .rdp-tls-toggle { align-self: center; padding-bottom: 0; cursor: pointer; }
+.rdp-plugin-settings .rdp-tls-toggle input { appearance: none; flex: 0 0 38px; width: 38px; height: 22px; margin: 0; padding: 2px; border: 1px solid var(--rp-text-muted); border-radius: 999px; background: var(--rp-border); cursor: pointer; transition: background .15s ease, border-color .15s ease; }
+.rdp-plugin-settings .rdp-tls-toggle input::before { content: ""; display: block; width: 16px; height: 16px; border-radius: 50%; background: var(--rp-text-muted); transition: transform .15s ease, background .15s ease; }
+.rdp-plugin-settings .rdp-tls-toggle input:checked { border-color: var(--rp-accent); background: var(--rp-accent); }
+.rdp-plugin-settings .rdp-tls-toggle input:checked::before { background: var(--rp-on-accent); transform: translateX(16px); }
+.rdp-plugin-settings .rdp-tls-toggle input:focus-visible { outline: 2px solid var(--rp-accent); outline-offset: 3px; }
+.rdp-plugin-settings .rdp-tls-toggle input:disabled { cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) {
+	.rdp-plugin-settings .rdp-tls-toggle input, .rdp-plugin-settings .rdp-tls-toggle input::before { transition: none; }
+}
+.rdp-plugin-settings .form-error, .rdp-plugin-settings .notice { margin: 10px 0; }
+.rdp-diagnostics-dialog { width: min(760px, calc(100vw - 32px)); }
+.rdp-diagnostics-state { margin: 3px 0 0; color: var(--rp-text-muted); font-size: 12px; }
+.rdp-diagnostics-log { max-height: min(55vh, 520px); min-height: 180px; margin: 0; padding: 10px; overflow: auto; border: 1px solid var(--rp-border); border-radius: var(--rp-radius-sm); color: var(--rp-text); background: var(--rp-surface-elevated); font: 12px/1.5 var(--rp-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.rdp-session-surface { background: #080d16; }
+/* Guacamole draws the remote cursor; the local one would be a second cursor. */
+.rdp-session-surface, .rdp-session-surface * { cursor: none; }
+.rdp-plugin .rp-interactive-surface:focus-visible { box-shadow: inset 0 0 0 2px var(--rp-accent); }
+.rdp-plugin .rp-interactive-surface > div { max-width: 100%; max-height: 100%; }
+@media (max-width: 1100px) {
+	.rdp-target-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 680px) {
+	.rdp-plugin-head { align-items: flex-start; flex-direction: column; }
+	.rdp-plugin-actions { justify-content: flex-start; }
+	.rdp-target-list { grid-template-columns: minmax(0, 1fr); }
+	.rdp-target-meta-row { gap:6px; }
+	.rdp-target-card .rdp-target-actions { gap:4px; }
+	.rdp-target-card .rdp-target-actions .button { padding:5px 6px; font-size:11px; }
+}

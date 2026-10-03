@@ -5,6 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -16,6 +19,26 @@ import (
 )
 
 const applicationTicketTTL = time.Minute
+
+const (
+	applicationStreamChunk = 32 << 10
+	applicationStreamFrame = 38 + applicationStreamChunk
+	applicationStreamCount = 64
+)
+
+var applicationStreamMagic = [4]byte{'R', 'P', 'S', '1'}
+
+type applicationStreamAttachment struct {
+	plugin  string
+	conn    net.Conn
+	release func()
+}
+
+type applicationStreamControl struct {
+	Type     string `json:"type"`
+	Plugin   string `json:"plugin"`
+	StreamID string `json:"streamId"`
+}
 
 func (s *Server) handleApplicationTicket(w http.ResponseWriter, r *http.Request) {
 	var raw [24]byte
@@ -64,6 +87,25 @@ func (s *Server) handleApplicationWS(w http.ResponseWriter, r *http.Request) {
 		defer writeMu.Unlock()
 		return secure.Write(ctx, websocket.MessageText, data)
 	}
+	writeRaw := func(ctx context.Context, kind websocket.MessageType, value []byte) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return secure.Write(ctx, kind, value)
+	}
+	var attachmentMu sync.Mutex
+	attachments := map[string]applicationStreamAttachment{}
+	defer func() {
+		attachmentMu.Lock()
+		remaining := make([]applicationStreamAttachment, 0, len(attachments))
+		for _, attachment := range attachments {
+			remaining = append(remaining, attachment)
+		}
+		attachments = map[string]applicationStreamAttachment{}
+		attachmentMu.Unlock()
+		for _, attachment := range remaining {
+			attachment.release()
+		}
+	}()
 	events, unsubscribe := s.ctrl.SubscribePluginEvents()
 	defer unsubscribe()
 	go func() {
@@ -78,9 +120,83 @@ func (s *Server) handleApplicationWS(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
+		if kind == websocket.MessageBinary {
+			streamID, payload, frameErr := decodeApplicationStreamFrame(data, 1)
+			if frameErr != nil {
+				_ = write(r.Context(), map[string]any{"type": "stream.error", "code": "bad_request"})
+				continue
+			}
+			attachmentMu.Lock()
+			attachment, ok := attachments[streamID]
+			attachmentMu.Unlock()
+			if !ok {
+				_ = write(r.Context(), map[string]any{"type": "stream.error", "streamId": streamID, "code": "not_found"})
+				continue
+			}
+			if err := writeNetworkStream(r.Context(), attachment.conn, payload); err != nil {
+				attachmentMu.Lock()
+				delete(attachments, streamID)
+				attachmentMu.Unlock()
+				attachment.release()
+				_ = write(r.Context(), map[string]any{"type": "stream.closed", "streamId": streamID})
+			}
+			continue
+		}
 		if kind != websocket.MessageText {
 			_ = write(r.Context(), plugins.Failure("", "bad_request", "application messages must be JSON text"))
 			continue
+		}
+		var control applicationStreamControl
+		if json.Unmarshal(data, &control) == nil && control.Type != "" {
+			switch control.Type {
+			case "stream.attach":
+				if control.Plugin == "" || control.StreamID == "" {
+					_ = write(r.Context(), map[string]any{"type": "stream.error", "streamId": control.StreamID, "code": "invalid_argument"})
+					continue
+				}
+				attachmentMu.Lock()
+				_, duplicate := attachments[control.StreamID]
+				atLimit := len(attachments) >= applicationStreamCount
+				attachmentMu.Unlock()
+				if duplicate || atLimit {
+					_ = write(r.Context(), map[string]any{"type": "stream.error", "streamId": control.StreamID, "code": "failed_precondition"})
+					continue
+				}
+				stream, release, attachErr := s.ctrl.AttachPluginNetworkStream(control.Plugin, control.StreamID)
+				if attachErr != nil {
+					code := "not_found"
+					var failure *plugins.HostFailure
+					if errors.As(attachErr, &failure) {
+						code = failure.Code
+					}
+					_ = write(r.Context(), map[string]any{"type": "stream.error", "streamId": control.StreamID, "code": code})
+					continue
+				}
+				attachment := applicationStreamAttachment{plugin: control.Plugin, conn: stream, release: release}
+				attachmentMu.Lock()
+				attachments[control.StreamID] = attachment
+				attachmentMu.Unlock()
+				if err := write(r.Context(), map[string]any{"type": "stream.attached", "streamId": control.StreamID}); err != nil {
+					return
+				}
+				go s.forwardNetworkStream(r.Context(), control.StreamID, stream, release, attachments, &attachmentMu, writeRaw, write)
+				continue
+			case "stream.close":
+				attachmentMu.Lock()
+				attachment, ok := attachments[control.StreamID]
+				delete(attachments, control.StreamID)
+				attachmentMu.Unlock()
+				if ok {
+					attachment.release()
+					_ = write(r.Context(), map[string]any{"type": "stream.closed", "streamId": control.StreamID})
+				} else {
+					_ = write(r.Context(), map[string]any{"type": "stream.error", "streamId": control.StreamID, "code": "not_found"})
+				}
+				continue
+			default:
+				_ = write(r.Context(), map[string]any{"type": "stream.error", "streamId": control.StreamID, "code": "bad_request"})
+				continue
+			}
 		}
 		request, err := plugins.ParseRequest(data)
 		if err != nil {
@@ -102,6 +218,77 @@ func (s *Server) handleApplicationWS(w http.ResponseWriter, r *http.Request) {
 		// data update with pages/cards without a feature-specific socket.
 		if protocolErr == nil && strings.HasSuffix(request.Method, ".get") {
 			_ = write(r.Context(), plugins.Event{Plugin: request.Plugin, Event: strings.TrimSuffix(request.Method, ".get") + ".changed", Data: result})
+		}
+	}
+}
+
+func decodeApplicationStreamFrame(data []byte, expectedType byte) (string, []byte, error) {
+	if len(data) < 6 || len(data) > applicationStreamFrame || string(data[:4]) != string(applicationStreamMagic[:]) || data[4] != expectedType {
+		return "", nil, errors.New("invalid stream frame")
+	}
+	idLength := int(data[5])
+	if idLength == 0 || len(data) <= 6+idLength {
+		return "", nil, errors.New("invalid stream frame")
+	}
+	return string(data[6 : 6+idLength]), data[6+idLength:], nil
+}
+
+func encodeApplicationStreamFrame(streamID string, payload []byte) []byte {
+	data := make([]byte, 6+len(streamID)+len(payload))
+	copy(data[:4], applicationStreamMagic[:])
+	data[4] = 2
+	data[5] = byte(len(streamID))
+	copy(data[6:], streamID)
+	copy(data[6+len(streamID):], payload)
+	return data
+}
+
+func writeNetworkStream(ctx context.Context, conn net.Conn, data []byte) error {
+	deadline := time.Now().Add(5 * time.Second)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	_ = conn.SetWriteDeadline(deadline)
+	for len(data) > 0 {
+		n, err := conn.Write(data)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		data = data[n:]
+	}
+	return nil
+}
+
+func (s *Server) forwardNetworkStream(ctx context.Context, streamID string, conn net.Conn, release func(), attachments map[string]applicationStreamAttachment, attachmentMu *sync.Mutex, writeRaw func(context.Context, websocket.MessageType, []byte) error, write func(context.Context, any) error) {
+	defer func() {
+		attachmentMu.Lock()
+		if current, ok := attachments[streamID]; ok && current.conn == conn {
+			delete(attachments, streamID)
+		}
+		attachmentMu.Unlock()
+		release()
+		if ctx.Err() == nil {
+			writeCtx, cancel := context.WithTimeout(ctx, time.Second)
+			_ = write(writeCtx, map[string]any{"type": "stream.closed", "streamId": streamID})
+			cancel()
+		}
+	}()
+	buffer := make([]byte, applicationStreamChunk)
+	for {
+		n, err := conn.Read(buffer)
+		if n > 0 {
+			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			writeErr := writeRaw(writeCtx, websocket.MessageBinary, encodeApplicationStreamFrame(streamID, buffer[:n]))
+			cancel()
+			if writeErr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
 		}
 	}
 }

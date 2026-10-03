@@ -18,7 +18,7 @@ let pluginExtensions = new Map();
 const pluginNavigation = new Map(), pluginOverview = new Map(), pluginSettings = new Map();
 const pluginThemeListeners = new Set();
 let applicationSocket = null, applicationSocketPromise = null, applicationSequence = 0;
-const applicationPending = new Map(), applicationListeners = new Map();
+const applicationPending = new Map(), applicationListeners = new Map(), applicationStreams = new Map();
 let logTimer = null, toastTimer = null;
 let logSource = null;
 let refreshTimer = null;
@@ -46,8 +46,8 @@ async function connectApplicationSocket() {
     const ticket=await api("api/v1/ws/ticket",{method:"POST"});
     const socket=new RunPilotSecureWebSocket(applicationWebSocketURL(ticket.ticket),systemInfo?.websocketPayloadMode||"disabled");
     await new Promise((resolve,reject)=>{ const timer=setTimeout(()=>reject(new Error("application WebSocket timed out")),10000); socket.onopen=()=>{clearTimeout(timer);resolve();}; socket.onerror=()=>{clearTimeout(timer);reject(new Error("application WebSocket connection failed"));}; });
-    socket.onmessage=event=>{ let message; try { message=JSON.parse(event.data); } catch { return; } if (message.id) { const pending=applicationPending.get(message.id); if (!pending) return; applicationPending.delete(message.id); clearTimeout(pending.timer); if(message.error){const error=new Error(message.error.message||"Plugin request failed");error.code=message.error.code;pending.reject(error);}else pending.resolve(message.result); return; } if(message.plugin&&message.event) for(const listener of applicationListeners.get(`${message.plugin}:${message.event}`)||[]) listener(message.data); };
-    socket.onclose=()=>{ if(applicationSocket===socket) { applicationSocket=null; applicationSocketPromise=null; for(const [id,pending] of applicationPending){clearTimeout(pending.timer);pending.reject(new Error("application WebSocket disconnected"));applicationPending.delete(id);} setTimeout(()=>connectApplicationSocket().catch(()=>{}),1000); } };
+    socket.onmessage=event=>{ if(typeof event.data!=="string"){let bytes;try{bytes=new Uint8Array(event.data);}catch{return;}if(bytes.length<7||bytes[0]!==82||bytes[1]!==80||bytes[2]!==83||bytes[3]!==49||bytes[4]!==2)return;const idLength=bytes[5],id=new TextDecoder().decode(bytes.slice(6,6+idLength)),stream=applicationStreams.get(id);if(stream?.opened)stream.ondata?.(bytes.slice(6+idLength));return;}let message;try{message=JSON.parse(event.data);}catch{return;}if(message.type==="stream.attached"){const stream=applicationStreams.get(message.streamId);if(stream&&!stream.opened){stream.opened=true;clearTimeout(stream.timer);stream.resolve(stream.handle);}return;}if(message.type==="stream.error"||message.type==="stream.closed"){const stream=applicationStreams.get(message.streamId);if(stream){applicationStreams.delete(message.streamId);clearTimeout(stream.timer);const error=new Error(message.code||"stream closed");if(!stream.opened)stream.reject(error);else stream.onclose?.({code:message.code||"closed",reason:message.code||"stream closed"});}return;}if(message.id){const pending=applicationPending.get(message.id);if(!pending)return;applicationPending.delete(message.id);clearTimeout(pending.timer);if(message.error){const error=new Error(message.error.message||"Plugin request failed");error.code=message.error.code;pending.reject(error);}else pending.resolve(message.result);return;}if(message.plugin&&message.event)for(const listener of applicationListeners.get(`${message.plugin}:${message.event}`)||[])listener(message.data);};
+    socket.onclose=event=>{ if(applicationSocket===socket) { applicationSocket=null; applicationSocketPromise=null; for(const [id,pending] of applicationPending){clearTimeout(pending.timer);pending.reject(new Error("application WebSocket disconnected"));applicationPending.delete(id);} for(const [id,stream] of applicationStreams){applicationStreams.delete(id);clearTimeout(stream.timer);if(!stream.opened)stream.reject(new Error("application WebSocket disconnected"));else stream.onclose?.(event);} setTimeout(()=>connectApplicationSocket().catch(()=>{}),1000); } };
     applicationSocket=socket; applicationSocketPromise=null; return socket;
   })();
   try{return await applicationSocketPromise;}catch(error){applicationSocketPromise=null;throw error;}
@@ -55,6 +55,7 @@ async function connectApplicationSocket() {
 const pluginWS=Object.freeze({
   call: async (plugin,method,params={})=>{ const socket=await connectApplicationSocket(); const id=String(++applicationSequence); return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{applicationPending.delete(id);reject(new Error("plugin request timed out"));},10000); applicationPending.set(id,{resolve,reject,timer}); socket.send(JSON.stringify({id,plugin,method,params}));}); },
   on: (plugin,event,listener)=>{ const key=`${plugin}:${event}`, listeners=applicationListeners.get(key)||new Set(); listeners.add(listener); applicationListeners.set(key,listeners); return ()=>{listeners.delete(listener);if(!listeners.size)applicationListeners.delete(key);}; },
+  openStream: async (plugin,streamId)=>{ if(typeof plugin!=="string"||!plugin||typeof streamId!=="string"||!streamId||new TextEncoder().encode(streamId).length>255)throw new TypeError("plugin and stream ID are required");if(applicationStreams.has(streamId))throw new Error("stream is already attached");if(applicationStreams.size>=64)throw new Error("application stream limit reached");const socket=await connectApplicationSocket();return new Promise((resolve,reject)=>{const stream={plugin,opened:false,ondata:null,onclose:null,resolve,reject,timer:null,handle:null};const handle={get ondata(){return stream.ondata;},set ondata(value){stream.ondata=value;},get onclose(){return stream.onclose;},set onclose(value){stream.onclose=value;},send(value){if(!stream.opened||socket.readyState!==WebSocket.OPEN)throw new Error("stream is not open");const bytes=value instanceof Uint8Array?value:value instanceof ArrayBuffer?new Uint8Array(value):ArrayBuffer.isView(value)?new Uint8Array(value.buffer,value.byteOffset,value.byteLength):null;if(!bytes)throw new TypeError("stream data must be binary");if(bytes.length>32768)throw new RangeError("stream frames are limited to 32768 bytes");const idBytes=new TextEncoder().encode(streamId),frame=new Uint8Array(6+idBytes.length+bytes.length);frame.set([82,80,83,49,1,idBytes.length]);frame.set(idBytes,6);frame.set(bytes,6+idBytes.length);socket.send(frame);},close(){if(!applicationStreams.has(streamId))return;applicationStreams.delete(streamId);clearTimeout(stream.timer);if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:"stream.close",streamId}));stream.onclose?.({code:1000,reason:"closed"});}};stream.handle=handle;stream.timer=setTimeout(()=>{if(applicationStreams.delete(streamId))reject(new Error("stream attachment timed out"));},10000);applicationStreams.set(streamId,stream);socket.send(JSON.stringify({type:"stream.attach",plugin,streamId}));}); },
 });
 function pluginTheme() {
   const style = getComputedStyle(document.documentElement);
@@ -75,10 +76,60 @@ function notifyPluginThemeListeners() {
     try { listener(theme); } catch (error) { console.error("plugin theme listener", error); }
   }
 }
+function createInteractiveSessionView({container,title="Interactive session",onBack,onDisconnect,onFullscreenChange}={}) {
+  if(!container||typeof container.replaceChildren!=="function") throw new TypeError("interactive session container is required");
+  const element=document.createElement("section");element.className="rp-interactive-session";
+  const toolbar=document.createElement("div");toolbar.className="rp-interactive-toolbar";
+  const left=document.createElement("div");left.className="rp-interactive-heading";
+  const back=document.createElement("button");back.type="button";back.className="button secondary small";back.textContent="Back";back.addEventListener("click",()=>onBack?.());
+  const heading=document.createElement("div");heading.className="rp-interactive-title";
+  const titleNode=document.createElement("strong");titleNode.textContent=String(title);
+  const status=document.createElement("span");status.className="rp-interactive-status";status.textContent="Connecting";status.setAttribute("role","status");status.setAttribute("aria-live","polite");
+  heading.append(titleNode,status);
+  const actions=document.createElement("div");actions.className="rp-interactive-actions";
+  const fullscreen=document.createElement("button");fullscreen.type="button";fullscreen.className="button secondary small";fullscreen.textContent="Fullscreen";fullscreen.setAttribute("aria-pressed","false");
+  const disconnect=document.createElement("button");disconnect.type="button";disconnect.className="button danger small";disconnect.textContent="Disconnect";disconnect.addEventListener("click",()=>onDisconnect?.());
+  actions.append(fullscreen,disconnect);left.append(back,heading);toolbar.append(left,actions);
+  const surfaceElement=document.createElement("div");surfaceElement.className="rp-interactive-surface";surfaceElement.tabIndex=0;surfaceElement.setAttribute("role","application");surfaceElement.setAttribute("aria-label",`${title} interactive surface`);
+  const loading=document.createElement("div");loading.className="rp-interactive-loading";loading.setAttribute("role","status");loading.textContent="Connecting…";
+  const error=document.createElement("div");error.className="rp-interactive-error";error.setAttribute("role","alert");error.hidden=true;
+  surfaceElement.append(loading,error);element.append(toolbar,surfaceElement);container.replaceChildren(element);
+  let disposed=false,frame=0,resizeTimer=0,lastSize=null,fullscreenState=null;
+  const resizeListeners=new Set(),fullscreenListeners=new Set();
+  const measure=()=>({width:Math.max(0,Math.round(surfaceElement.clientWidth)),height:Math.max(0,Math.round(surfaceElement.clientHeight))});
+  const fitViewport=()=>{if(disposed)return;if(isFullscreen()){element.style.height="";return;}const main=element.closest("main"),bottom=main?parseFloat(getComputedStyle(main).paddingBottom)||0:0,height=Math.max(300,Math.floor(window.innerHeight-element.getBoundingClientRect().top-bottom));if(element.style.height!==`${height}px`)element.style.height=`${height}px`;};
+  const reportSize=()=>{frame=0;if(disposed)return;const size=measure();if(size.width<1||size.height<1)return;if(lastSize&&lastSize.width===size.width&&lastSize.height===size.height)return;lastSize=size;for(const listener of resizeListeners)listener({...size});};
+  const scheduleSize=()=>{if(disposed)return;if(frame)cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{frame=0;fitViewport();clearTimeout(resizeTimer);resizeTimer=setTimeout(reportSize,60);});};
+  const isFullscreen=()=>document.fullscreenElement===element||element.contains(document.fullscreenElement);
+  const reportFullscreen=()=>{const next=isFullscreen();if(fullscreenState===next)return;fullscreenState=next;fullscreen.setAttribute("aria-pressed",String(next));fullscreen.textContent=next?"Exit fullscreen":"Fullscreen";for(const listener of fullscreenListeners)listener(next);onFullscreenChange?.(next);scheduleSize();if(!disposed)surfaceElement.focus({preventScroll:true});};
+  const resizeObserver=typeof ResizeObserver==="undefined"?null:new ResizeObserver(scheduleSize);
+  resizeObserver?.observe(surfaceElement);resizeObserver?.observe(toolbar);resizeObserver?.observe(element);
+  window.addEventListener("resize",scheduleSize);document.addEventListener("fullscreenchange",reportFullscreen);
+  surfaceElement.addEventListener("pointerdown",()=>surfaceElement.focus({preventScroll:true}));
+  fullscreen.addEventListener("click",async()=>{try{if(isFullscreen()){await document.exitFullscreen();}else await element.requestFullscreen();}catch(cause){setError(`Fullscreen unavailable: ${cause?.message||"request failed"}`);}});
+  function setStatus(state,label){const names={connecting:"Connecting",connected:"Connected",disconnected:"Disconnected",error:"Error"};status.dataset.state=names[state]?state:"connecting";status.textContent=label||names[state]||names.connecting;}
+  function setLoading(value,label="Connecting…"){loading.textContent=label;loading.hidden=!value;}
+  function setError(message=""){error.textContent=String(message||"");error.hidden=!message;setLoading(false);if(message)setStatus("error");}
+  const surface={
+    element:surfaceElement,
+    getSize:measure,
+    onResize(listener){if(typeof listener!=="function")throw new TypeError("resize listener must be a function");resizeListeners.add(listener);scheduleSize();return()=>resizeListeners.delete(listener);},
+    fitScale(content){const width=Number(content?.width)||0,height=Number(content?.height)||0,size=measure();return width>0&&height>0&&size.width>0&&size.height>0?Math.min(size.width/width,size.height/height):null;},
+    enterFullscreen:async()=>{if(!isFullscreen())await element.requestFullscreen();},
+    exitFullscreen:async()=>{if(isFullscreen())await document.exitFullscreen();},
+    get isFullscreen(){return isFullscreen();},
+    onFullscreenChange(listener){if(typeof listener!=="function")throw new TypeError("fullscreen listener must be a function");fullscreenListeners.add(listener);return()=>fullscreenListeners.delete(listener);},
+    focus(){surfaceElement.focus({preventScroll:true});},
+    dispose(){view.dispose();},
+  };
+  const view={element,surface,actions,setStatus,setLoading,setError,dispose(){if(disposed)return;disposed=true;if(frame)cancelAnimationFrame(frame);clearTimeout(resizeTimer);resizeObserver?.disconnect();window.removeEventListener("resize",scheduleSize);document.removeEventListener("fullscreenchange",reportFullscreen);resizeListeners.clear();fullscreenListeners.clear();element.remove();}};
+  scheduleSize();return view;
+}
 function pluginUI() {
   return Object.freeze({
     escape: escapeHtml,
     toast,
+    createInteractiveSessionView,
     theme: Object.freeze({
       get: pluginTheme,
       subscribe: listener => {
@@ -107,7 +158,11 @@ function pluginUI() {
     },
   });
 }
-function registerPluginNavigation(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginNavigation.has(entry.id)||$(entry.id+"Page")) throw new Error("invalid or duplicate plugin navigation entry"); const button=document.createElement("button");button.className="nav";button.type="button";button.dataset.page=entry.id;button.title=entry.title||entry.id;button.innerHTML=`<span class="nav-icon">${escapeHtml(entry.icon||"•")}</span><span class="nav-label">${escapeHtml(entry.title||entry.id)}</span>`;document.querySelector("nav").insertBefore(button,$('[data-page="settings"]'));const page=document.createElement("section");page.id=entry.id+"Page";page.className="page";document.querySelector("main").append(page);pluginNavigation.set(entry.id,{...entry,button,page,extension});button.addEventListener("click",()=>setPage(entry.id));}
+function pluginNavigationIcon(icon) {
+  if (icon === "monitor") return '<svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>';
+  return `<span class="nav-icon" aria-hidden="true">${escapeHtml(icon || "•")}</span>`;
+}
+function registerPluginNavigation(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginNavigation.has(entry.id)||$(entry.id+"Page")) throw new Error("invalid or duplicate plugin navigation entry"); const button=document.createElement("button");button.className="nav";button.type="button";button.dataset.page=entry.id;button.title=entry.title||entry.id;button.innerHTML=`${pluginNavigationIcon(entry.icon)}<span class="nav-label">${escapeHtml(entry.title||entry.id)}</span>`;document.querySelector("nav").insertBefore(button,$('[data-page="settings"]'));const page=document.createElement("section");page.id=entry.id+"Page";page.className="page";document.querySelector("main").append(page);pluginNavigation.set(entry.id,{...entry,button,page,extension});button.addEventListener("click",()=>setPage(entry.id));}
 function registerPluginOverview(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginOverview.has(entry.id)) throw new Error("invalid or duplicate overview card"); pluginOverview.set(entry.id,{...entry,extension}); }
 function registerPluginSettings(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginSettings.has(entry.id)) throw new Error("invalid or duplicate settings section"); pluginSettings.set(entry.id,{...entry,extension}); }
 
@@ -507,17 +562,29 @@ function renderPluginSettings() {
   const ids = [...new Set([...installed.keys(), ...catalog.keys()])].sort();
   root.innerHTML = `${pluginRestartRequired ? '<p class="meta">Restart required to apply package and activation changes.</p>' : ""}${pluginDiscoveryErrors.map(error=>`<p class="meta">${escapeHtml(error)}</p>`).join("")}<p class="meta">${escapeHtml(pluginCatalogLoading ? "Checking catalog…" : pluginCatalogError || "Install packages, then enable them. Activation changes require a restart.")}</p>` + ids.map(id => {
     const status=installed.get(id), entry=catalog.get(id), manifest=status?.manifest || entry || {}, busy=pluginBusy.has(id);
-    const enabled=!!status?.enabled, compatible=entry?.latestCompatible, manual=status && !status.source;
+    const enabled=!!status?.enabled, compatible=entry?.latestCompatible;
     const update=!!status?.source && compatible && entry?.updateAvailable;
-    const state=status ? (status.message ? `${status.state === "incompatible" ? "Incompatible" : "Failed"}: ${status.message}` : `Installed · ${enabled ? "Enabled" : "Disabled"}${status.loaded ? ` · Loaded ${status.loadedVersion || ""}` : ""}`) : compatible ? "Available" : "Incompatible";
+    const state=status ? (status.message ? `${status.state === "incompatible" ? "Incompatible" : "Failed"}: ${status.message}` : `Installed${status.loaded ? "" : ` ${manifest.version || ""}`} · ${enabled ? "Enabled" : "Disabled"}${status.loaded ? ` · Loaded ${status.loadedVersion || ""}` : ""}`) : compatible ? `Available ${compatible}` : "Incompatible";
     const stateClass=status ? (status.message ? status.state === "incompatible" ? "is-incompatible" : "is-failed" : enabled ? "is-enabled" : "is-disabled") : compatible ? "is-available" : "is-incompatible";
     const buttons = status
       ? `<button class="button secondary small" type="button" ${busy || (!enabled && status.state === "incompatible") ? "disabled" : ""} onclick="togglePlugin('${escapeHtml(id)}',${!enabled})">${enabled ? "Disable" : "Enable"}</button>${update ? `<button class="button primary small" type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible)}')">Update to ${escapeHtml(compatible)}</button>` : ""}<button class="button danger small" type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','uninstall')">Uninstall</button>`
       : `<button class="button primary small" type="button" ${busy || !compatible ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible || "")}')">Install${compatible ? " " + escapeHtml(compatible) : ""}</button>`;
-    return `<article class="docker-card plugin-setting-card"><div class="plugin-setting-info"><strong>${escapeHtml(manifest.name || id)}</strong><div class="meta">${escapeHtml(manifest.description || "")}</div><div class="meta">${status ? `Installed ${escapeHtml(manifest.version)} · ${manual ? "Local/manual" : "Catalog"}` : ""}${entry ? ` · Latest published ${escapeHtml(entry.latest)} · Latest compatible ${escapeHtml(compatible || "none")}` : ""}</div>${entry?.incompatibility ? `<div class="meta">Latest release: ${escapeHtml(entry.incompatibility)}</div>` : ""}<span class="status plugin-setting-state ${stateClass}">${escapeHtml(busy ? "Updating…" : state)}${update ? " · Update available" : ""}${status?.restartRequired ? " · Restart required" : ""}</span></div><div class="plugin-setting-actions">${buttons}</div></article>`;
+    return `<article class="docker-card plugin-setting-card" data-plugin-id="${escapeHtml(id)}"><div class="plugin-setting-info"><strong>${escapeHtml(manifest.name || id)}</strong><div class="meta">${escapeHtml(manifest.description || "")}</div></div><div class="plugin-setting-actions">${buttons}</div><span class="status plugin-setting-state ${stateClass}"${entry?.incompatibility ? ` title="${escapeHtml(entry.incompatibility)}"` : ""}>${escapeHtml(busy ? "Updating…" : state)}${update ? " · Update available" : ""}${status?.restartRequired ? " · Restart required" : ""}</span></article>`;
   }).join("");
-  const featureRoot=$("pluginFeatureSettings"); featureRoot.replaceChildren();
-  for (const entry of pluginSettings.values()) { try { const section=document.createElement("section"); section.className="overview-section"; const content=entry.render(); if(content) section.append(content); featureRoot.append(section); } catch(error) { console.error(`plugin settings ${entry.id}`,error); } }
+  const cards = new Map([...root.querySelectorAll(".plugin-setting-card")].map(card => [card.dataset.pluginId, card]));
+  for (const entry of pluginSettings.values()) {
+    if (!installed.get(entry.extension)?.enabled) continue;
+    const card = cards.get(entry.extension);
+    if (!card) continue;
+    try {
+      const content = entry.render();
+      if (!content) continue;
+      const section = document.createElement("section");
+      section.className = "plugin-settings-section";
+      section.append(content);
+      card.append(section);
+    } catch(error) { console.error(`plugin settings ${entry.id}`,error); }
+  }
 }
 async function requestRunPilotRestart() {
   if (!confirm("Restart RunPilot now? The page will reconnect when RunPilot is ready.")) return;

@@ -63,11 +63,12 @@ maps an ID to its source directory and an explicit `publish` boolean. It is not
 part of runtime manifests. System is `publish: false`; it remains a technical
 ABI/frontend/WebSocket fixture and is no longer installed on fresh startup.
 Existing manual System installations are not deleted. The Tasks plugin is
-registered with `publish: false` until its legacy cutover is reviewed. Remote packages are
-currently compatibility scaffolding, so publication stays disabled until they
-are complete. The hello example is buildable and locally testable; opt in using
-a temporary policy for publication tests. There is intentionally no public
-production plugin advertised by this change.
+registered with `publish: false` until its legacy cutover is reviewed. The RDP
+plugin is publishable after its backend, authenticated stream transport, target
+management and session lifecycle implementation. Other Remote packages remain
+disabled until their compatibility work is complete. The hello example is
+buildable and locally testable; opt in using a temporary policy for publication
+tests.
 
 Build a deterministic archive locally:
 

@@ -163,8 +163,8 @@ The capability protocol version is separate from the raw WASM ABI.
 
 Implemented generic capability work includes logging, host status,
 plugin-namespaced JSON storage, plugin-owned scheduler registrations, asynchronous
-process execution/status/termination, owner-scoped execution history, and
-browser event publication. Config
+process execution/status/termination, owner-scoped execution history, browser
+event publication, and owner-scoped TCP/TLS network streams. Config
 hooks exist in the host interface but are not yet a general plugin configuration
 service. Add new capability methods only for real reusable plugin needs.
 
@@ -249,6 +249,31 @@ seconds). On shutdown RunPilot calls `runpilot_shutdown` first, then
 terminates remaining plugin processes and flushes captured logs before history
 closes.
 
+### Network streams
+
+`network.stream.*` is generic TCP/TLS byte-stream infrastructure with no feature
+protocol or target semantics. IDs are cryptographically random and scoped to the
+calling plugin; other plugins cannot read, write, close, or attach to them. A
+plugin runtime stop closes every stream owned by that plugin.
+
+```text
+network.stream.open  {host, port, connectTimeoutSeconds, tls?} -> {id}
+network.stream.read  {id, maxBytes, timeoutMilliseconds, peek?, offset?} -> {data, eof, state}
+network.stream.write {id, data} -> {}
+network.stream.close {id} -> {} (idempotent; foreign-owner IDs still fail)
+```
+
+`host` and optional TLS `serverName` are hostnames or IP literals, not URLs.
+Ports are 1-65535; connection timeout is 1-30 seconds. TLS uses normal system
+certificate and hostname validation with a TLS 1.2 minimum. Reads return
+base64-encoded chunks of 1-65536 bytes and wait at most 5 seconds; writes accept
+at most 65536 decoded bytes. Optional `peek: true` with a nonnegative `offset`
+returns a bounded view into buffered input without consuming it; offset plus
+requested bytes cannot exceed 65536. This supports bounded protocol
+negotiation while leaving subsequent bytes available to a browser attachment.
+Active stream counts and retained closed records are bounded. WASM receives no
+Go connection or socket handle.
+
 ### Browser publication
 
 `events.publish` publishes a plugin event through the shared application
@@ -332,6 +357,63 @@ Plugins use `runpilot.ws.call()` for RPC and `runpilot.ws.on()` for events
 instead of opening their own application WebSocket. Navigation/pages, Overview
 cards and Settings sections are registered through the corresponding extension
 hosts.
+
+Navigation entries may use `icon: "monitor"` for the shared desktop icon.
+Other icon strings continue to render as text glyphs. Settings forms appear
+inside their owning plugin's card only while that plugin is enabled. Plugins
+provide their heading, fields, and actions using the host's shared responsive
+layout without imposing a custom section width.
+
+Interactive plugins may use `runpilot.ui.createInteractiveSessionView()` for a
+provider-neutral session shell and measured surface:
+
+```javascript
+const view = runpilot.ui.createInteractiveSessionView({
+  container, title: "Desktop", onBack, onDisconnect,
+  onFullscreenChange: isFullscreen => { /* provider-specific response */ },
+});
+view.setStatus("connecting"); // connecting, connected, disconnected, error
+view.setLoading(true, "Connecting…");
+view.setError("Connection failed");
+const stopObserving = view.surface.onResize(({width, height}) => {
+  // The plugin decides whether and how its protocol consumes these pixels.
+});
+view.surface.fitScale({width: remoteWidth, height: remoteHeight});
+await view.surface.enterFullscreen();
+view.surface.focus();
+view.dispose(); // idempotent; removes observers and listeners
+```
+
+The returned view exposes its root `element` so a plugin can reattach it when
+its navigation page is rerendered. `actions` is the toolbar slot for
+provider-owned controls. `surface.element` is the focusable content region;
+`getSize()` reports its available CSS-pixel width and height. Resize
+notifications observe the surface, toolbar, containing layout, window and
+fullscreen changes; changes are animation-frame coalesced, debounced by 60 ms,
+and duplicate dimensions are suppressed. Fullscreen state and focus restoration
+are shared behavior. The helper does not call RDP, VNC, Xpra, or other protocol
+APIs; the provider owns all resize and rendering policy.
+
+Interactive plugins may use `runpilot.ws.openStream(plugin, streamId)` to attach
+one owned stream to that same authenticated socket:
+
+```javascript
+const stream = await runpilot.ws.openStream("remote.rdp", streamId);
+stream.ondata = bytes => { /* Uint8Array */ };
+stream.onclose = event => { /* closed or disconnected */ };
+stream.send(bytes); // Uint8Array, ArrayBuffer, or typed-array view; <= 32 KiB
+stream.close();
+```
+
+The API uses a text `stream.attach` control containing the plugin owner and
+opaque stream ID, then binary frames for data. Frames contain `RPS1`, a direction
+byte (1 client-to-server, 2 server-to-client), one stream-ID-length byte, the
+UTF-8 stream ID, and raw payload. Existing optional payload encryption protects
+these frames too. A text `stream.close` closes an attachment. Malformed,
+unknown, or foreign-owned streams are rejected. Disconnects, failed writes, and
+stalled readers close streams; frame sizes and buffering are bounded, and bytes
+are not silently dropped. The owner receives `network.stream.closed` with only
+the stream ID for feature-local state cleanup.
 
 Core owns the shell and design system. Plugin CSS should use public semantic
 tokens. System/Light/Dark is a color-scheme choice separate from the selected

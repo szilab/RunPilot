@@ -5,6 +5,39 @@ import (
 	"testing"
 )
 
+func TestPluginSettingsUseSharedSectionsAndNamedNavigationIcons(t *testing.T) {
+	app, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`pluginNavigationIcon(entry.icon)`, `icon === "monitor"`, `viewBox="0 0 24 24" aria-hidden="true"`, `section.className = "plugin-settings-section"`, `data-plugin-id="${escapeHtml(id)}"`, `if (!installed.get(entry.extension)?.enabled) continue;`, `const card = cards.get(entry.extension);`, `card.append(section);`} {
+		if !strings.Contains(string(app), want) {
+			t.Fatalf("shared plugin presentation is missing %q", want)
+		}
+	}
+	for _, removed := range []string{"Latest published", "Latest compatible", "Local/manual"} {
+		if strings.Contains(string(app), removed) {
+			t.Fatalf("plugin cards retain redundant version details %q", removed)
+		}
+	}
+	styles, err := staticFS.ReadFile("static/styles.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr))`, `.plugin-settings-section > form`, `.plugin-settings-section { grid-column:1 / -1;`, `.plugin-settings-section .form-grid { grid-template-columns:minmax(0,1fr); }`, `.plugin-settings-grid .plugin-setting-state { white-space:normal`, `.plugin-settings-grid .plugin-setting-actions { grid-column:2; grid-row:1;`, `.plugin-settings-section .plugin-settings-actions { display:flex; align-items:center; justify-content:flex-end;`, `.plugin-settings-section .plugin-settings-actions button[type="submit"] { order:1; }`, `.plugin-settings-footer > .plugin-settings-actions { grid-column:2; grid-row:1; }`} {
+		if !strings.Contains(string(styles), want) {
+			t.Fatalf("shared settings layout is missing %q", want)
+		}
+	}
+	index, err := staticFS.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(index)+string(app), "pluginFeatureSettings") {
+		t.Fatal("plugin settings still use a separate area outside the cards")
+	}
+}
+
 func TestSecureWebSocketDefersApplicationTrafficUntilHandshakeCompletes(t *testing.T) {
 	source, err := staticFS.ReadFile("static/secure-websocket.js")
 	if err != nil {
@@ -33,6 +66,37 @@ func TestSecureWebSocketDefersApplicationTrafficUntilHandshakeCompletes(t *testi
 	} {
 		if strings.Contains(script, removed) {
 			t.Fatalf("secure WebSocket retains broken behavior %q", removed)
+		}
+	}
+}
+
+func TestInteractiveSessionViewOwnsOnlyGenericSurfaceBehavior(t *testing.T) {
+	app, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(app)
+	start := strings.Index(script, "function createInteractiveSessionView(")
+	endOffset := -1
+	if start >= 0 {
+		endOffset = strings.Index(script[start:], "\nfunction pluginUI()")
+	}
+	end := -1
+	if endOffset >= 0 {
+		end = start + endOffset
+	}
+	if start < 0 || end <= start {
+		t.Fatal("public interactive session view is missing")
+	}
+	view := script[start:end]
+	for _, want := range []string{"actions,setStatus", "onResize(listener)", "fitScale(content)", "enterFullscreen", "exitFullscreen", "onFullscreenChange(listener)", "setStatus(state,label)", "setLoading(value", "setError(message", "ResizeObserver", "requestAnimationFrame", "setTimeout(reportSize,60)", "requestFullscreen", "fullscreenchange", "removeEventListener", "dispose()"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("interactive session view is missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"Guacamole", "RFB", "Xpra", "rdp.session", "vnc."} {
+		if strings.Contains(view, forbidden) {
+			t.Fatalf("interactive session view contains provider-specific behavior %q", forbidden)
 		}
 	}
 }
