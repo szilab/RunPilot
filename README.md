@@ -6,10 +6,10 @@
 
 RunPilot is a lightweight Windows/Linux host-management application written in Go. One native service manages configured workloads and operations and exposes an embedded local web UI. Windows uses Windows Service Control Manager; Linux uses a systemd user service.
 
-The normal UI provides plugin management and an Overview dashboard with host
-status, RunPilot status, a configurable launcher, and summaries from enabled
-Tasks and Docker plugins. Tasks, Docker, Terminal, RDP and VNC have first-party
-plugins; installing and enabling them is explicit. Legacy backup, storage and
+The normal UI provides plugin management and a host monitoring Overview with
+CPU, memory, GPU when available, and filesystem usage. Tasks, Docker, Terminal,
+RDP and VNC have first-party plugins; installing and enabling them is explicit.
+Legacy backup, storage and
 software backends remain available through their existing APIs and
 configuration, but their pages are hidden.
 
@@ -37,9 +37,6 @@ currently hidden:
 - Embedded authenticated web UI
 - Plugin package/runtime support with independent backend/frontend contracts
 - GitHub-backed plugin catalog with explicit install/update/enable lifecycle
-- Overview launcher shortcuts for external HTTP(S) pages and existing `/p/`
-  proxy paths; embedded pages run in a restricted frame and depend on the
-  upstream application's frame and base-path support
 
 ## Architecture direction
 
@@ -50,7 +47,7 @@ are plugin-owned in the normal UI. Storage, Software and Backup remain
 transitional core implementations. Xpra remains a temporary internal core exception
 with no user-facing navigation while its plugin capabilities are designed.
 
-Host CPU/memory/disk presentation is built into Overview, without expanding
+Host CPU/GPU/memory/disk presentation is built into Overview, without expanding
 the nonpublic System ABI fixture into a permanent feature.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the architectural source of

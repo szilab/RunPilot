@@ -5,6 +5,7 @@ package platform
 import (
 	"bufio"
 	"context"
+	"encoding/csv"
 	"fmt"
 	"os"
 	"os/exec"
@@ -38,13 +39,15 @@ type linuxPercentSampler struct {
 }
 
 var (
-	linuxCPUSampler linuxPercentSampler
-	linuxGPUSampler linuxPercentSampler
+	linuxCPUSampler    linuxPercentSampler
+	linuxGPUSampler    linuxPercentSampler
+	linuxCPUModelOnce  sync.Once
+	linuxCPUModelValue string
 )
 
 func HostStatus() model.HostStatus {
 	hostname, err := os.Hostname()
-	status := model.HostStatus{OS: runtime.GOOS, Architecture: runtime.GOARCH, Hostname: hostname, Disks: []model.DiskStatus{}}
+	status := model.HostStatus{OS: runtime.GOOS, Architecture: runtime.GOARCH, Hostname: hostname, CPUCount: runtime.NumCPU(), Disks: []model.DiskStatus{}}
 	if err != nil {
 		status.Error = fmt.Sprintf("read hostname: %v", err)
 	}
@@ -57,10 +60,14 @@ func HostStatus() model.HostStatus {
 		status.Error = appendStatusError(status.Error, err.Error())
 	} else {
 		status.CPUPercent, status.CPUAveragePercent = linuxCPUSampler.sample(times)
+		status.CPUAvailable = true
 	}
-	if percent, available := linuxGPUPercent(); available {
-		status.GPUPercent, status.GPUAveragePercent = linuxGPUSampler.sampleValue(percent)
+	status.CPUModel = linuxCPUModel()
+	status.LoadAverage = linuxLoadAverage()
+	if gpu, available := linuxGPUStatus(); available {
+		status.GPUPercent, status.GPUAveragePercent = linuxGPUSampler.sampleValue(gpu.Percent)
 		status.GPUAvailable = true
+		status.GPUName, status.GPUMemoryUsed, status.GPUMemoryTotal = gpu.Name, gpu.MemoryUsed, gpu.MemoryTotal
 	}
 	if disks, err := linuxDisks(); err != nil {
 		status.Error = appendStatusError(status.Error, err.Error())
@@ -146,15 +153,59 @@ func (s *linuxPercentSampler) average(now time.Time) float64 {
 	return total / float64(len(s.samples))
 }
 
-// linuxGPUPercent uses standard vendor interfaces when present. Absence of a
+func linuxCPUModel() string {
+	linuxCPUModelOnce.Do(func() {
+		b, err := os.ReadFile("/proc/cpuinfo")
+		if err != nil {
+			return
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			name, value, ok := strings.Cut(line, ":")
+			if ok && (strings.TrimSpace(name) == "model name" || strings.TrimSpace(name) == "Hardware") {
+				linuxCPUModelValue = strings.TrimSpace(value)
+				return
+			}
+		}
+	})
+	return linuxCPUModelValue
+}
+
+func linuxLoadAverage() []float64 {
+	b, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return nil
+	}
+	fields := strings.Fields(string(b))
+	if len(fields) < 3 {
+		return nil
+	}
+	load := make([]float64, 0, 3)
+	for _, field := range fields[:3] {
+		value, err := strconv.ParseFloat(field, 64)
+		if err != nil || value < 0 {
+			return nil
+		}
+		load = append(load, value)
+	}
+	return load
+}
+
+type gpuReading struct {
+	Percent     float64
+	Name        string
+	MemoryUsed  uint64
+	MemoryTotal uint64
+}
+
+// linuxGPUStatus uses standard vendor interfaces when present. Absence of a
 // compatible driver simply leaves GPU metrics unavailable instead of treating
 // it as a host error.
-func linuxGPUPercent() (float64, bool) {
+func linuxGPUStatus() (gpuReading, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if output, err := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits").Output(); err == nil {
-		if percent, ok := maximumPercent(strings.Fields(string(output))); ok {
-			return percent, true
+	if output, err := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits").Output(); err == nil {
+		if gpu, ok := parseNvidiaGPU(output); ok {
+			return gpu, true
 		}
 	}
 	paths, _ := filepath.Glob("/sys/class/drm/card*/device/gpu_busy_percent")
@@ -163,11 +214,43 @@ func linuxGPUPercent() (float64, bool) {
 	for _, path := range paths {
 		if value, err := os.ReadFile(path); err == nil {
 			if percent, ok := maximumPercent(strings.Fields(string(value))); ok {
-				return percent, true
+				return gpuReading{Percent: percent}, true
 			}
 		}
 	}
-	return 0, false
+	return gpuReading{}, false
+}
+
+func parseNvidiaGPU(output []byte) (gpuReading, bool) {
+	records, err := csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		return gpuReading{}, false
+	}
+	var best gpuReading
+	found := false
+	for _, record := range records {
+		if len(record) != 4 {
+			continue
+		}
+		percent, err := strconv.ParseFloat(strings.TrimSpace(record[1]), 64)
+		if err != nil || percent < 0 {
+			continue
+		}
+		if !found || percent > best.Percent {
+			best = gpuReading{Percent: percent, Name: strings.TrimSpace(record[0])}
+			if used, err := strconv.ParseUint(strings.TrimSpace(record[2]), 10, 64); err == nil {
+				best.MemoryUsed = used * 1024 * 1024
+			}
+			if total, err := strconv.ParseUint(strings.TrimSpace(record[3]), 10, 64); err == nil {
+				best.MemoryTotal = total * 1024 * 1024
+			}
+			found = true
+		}
+	}
+	if best.Percent > 100 {
+		best.Percent = 100
+	}
+	return best, found
 }
 
 func maximumPercent(fields []string) (float64, bool) {

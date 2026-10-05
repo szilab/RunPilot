@@ -99,7 +99,7 @@ type pdhFmtCounterValueItem struct {
 
 func HostStatus() model.HostStatus {
 	hostname, err := os.Hostname()
-	status := model.HostStatus{OS: runtime.GOOS, Architecture: runtime.GOARCH, Hostname: hostname, Disks: []model.DiskStatus{}}
+	status := model.HostStatus{OS: runtime.GOOS, Architecture: runtime.GOARCH, Hostname: hostname, CPUCount: runtime.NumCPU(), Disks: []model.DiskStatus{}}
 	if err != nil {
 		status.Error = fmt.Sprintf("read hostname: %v", err)
 	}
@@ -116,6 +116,7 @@ func HostStatus() model.HostStatus {
 		status.Error = appendStatusError(status.Error, err.Error())
 	} else {
 		status.CPUPercent, status.CPUAveragePercent = hostCPUSampler.sample(times)
+		status.CPUAvailable = true
 	}
 
 	if gpuPercent, gpuAverage, available := hostGPUSampler.percent(); available {

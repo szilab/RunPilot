@@ -144,10 +144,10 @@ Style selection is framework-owned. System/Light/Dark color scheme is separate f
 
 ## Overview and Settings
 
-Overview is a widget extension surface: plugins register stable IDs, titles,
-size hints and mount/refresh/dispose hooks. Core owns the card shell and widget
-lifecycle, without knowing feature semantics. See the frontend contract in
-[PLUGIN_API.md](PLUGIN_API.md).
+Overview currently shows a built-in host monitoring dashboard. The widget
+extension contract still accepts plugin registrations with stable IDs, titles,
+size hints and mount/refresh/dispose hooks, but does not mount plugin widgets
+on this dashboard. See [PLUGIN_API.md](PLUGIN_API.md).
 
 Settings is a core shell. Framework sections cover RunPilot, Appearance and plugin management; plugins register their own settings sections and own their schema/meaning/editor.
 
@@ -172,8 +172,8 @@ The frontend-only `plugins/examples/hello` example exercises local packaging and
 registry testing. Production publication is an explicit version-driven action;
 application release workflows no longer bundle plugin artifacts.
 
-Host metrics presentation will use future plugin/widget contributions. No System
-feature expansion is part of the registry implementation.
+Host metrics presentation is built into Overview. No System plugin expansion is
+part of the registry implementation.
 
 `plugins/tasks` owns the Tasks page for continuous and scheduled command tasks.
 It is publishable, but is not installed or enabled automatically. Legacy task

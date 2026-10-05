@@ -36,7 +36,6 @@ var staticFS embed.FS
 
 type Server struct {
 	ctrl                *core.Controller
-	startedAt           time.Time
 	basePath            string
 	restartHandler      func()
 	tickets             map[string]downloadTicket
@@ -77,7 +76,7 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err := ctrl.SetBrowserBasePath(basePath); err != nil {
 		return nil, err
 	}
-	return &Server{ctrl: ctrl, startedAt: time.Now(), basePath: basePath, tickets: map[string]downloadTicket{}, dockerTerminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), dockerAttachTickets: map[string]dockerAttachTicket{}, remoteTickets: map[string]remoteClientTicket{}, applicationTickets: map[string]time.Time{}, docker: ctrl.Docker()}, nil
+	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, dockerTerminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), dockerAttachTickets: map[string]dockerAttachTicket{}, remoteTickets: map[string]remoteClientTicket{}, applicationTickets: map[string]time.Time{}, docker: ctrl.Docker()}, nil
 }
 
 func (s *Server) BasePath() string { return s.basePath }

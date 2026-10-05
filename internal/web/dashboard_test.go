@@ -33,16 +33,13 @@ func TestDashboardStatusAndLauncherAPI(t *testing.T) {
 		t.Fatalf("status: %d %s", status.Code, status.Body.String())
 	}
 	var data struct {
-		Host      model.HostStatus `json:"host"`
-		Version   string           `json:"version"`
-		Installed int              `json:"installedPlugins"`
-		Enabled   int              `json:"enabledPlugins"`
-		Loaded    int              `json:"loadedPlugins"`
+		Host              model.HostStatus `json:"host"`
+		HostUptimeSeconds int64            `json:"hostUptimeSeconds"`
 	}
 	if err := json.Unmarshal(status.Body.Bytes(), &data); err != nil {
 		t.Fatal(err)
 	}
-	if data.Host.OS == "" || data.Version == "" || data.Installed < data.Enabled || data.Enabled < data.Loaded {
+	if data.Host.OS == "" || data.Host.CPUCount < 1 || data.HostUptimeSeconds < 0 {
 		t.Fatalf("bad status: %+v", data)
 	}
 	saved := request("PUT", "/api/v1/launcher", `{"entries":[{"name":"Docs","url":"https://example.com","openMode":"external"}]}`)

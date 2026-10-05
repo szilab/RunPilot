@@ -144,12 +144,13 @@ Core owns layout and visual primitives; plugins own feature pages and feature
 semantics. Plugin CSS should use public semantic design tokens rather than
 hard-code RunPilot's current colors or spacing.
 
-Overview and Settings remain core extension hosts. Overview is a responsive
-widget host with built-in System, RunPilot and Launcher cards; plugins register
-feature summaries with stable IDs and mount/refresh/dispose hooks. Host metrics
-reuse the existing platform adapters. Launcher shortcuts live in framework
-configuration. The current System package remains a technical fixture, not the
-user-facing System feature.
+Overview currently presents a built-in, host-only monitoring dashboard with
+separate identity, CPU, memory, optional GPU and filesystem cards. Its metrics
+reuse the existing platform adapters. The generic frontend widget registration
+contract remains available, but widget contributions are dormant while the
+host-only dashboard is shown. Launcher shortcuts remain in framework
+configuration for future UI work. The current System package remains a
+technical fixture, not the user-facing System feature.
 
 ## Plugin publication and installation
 
@@ -231,8 +232,9 @@ ordered/bounded event delivery. See [PLUGIN_API.md](PLUGIN_API.md).
 The async ABI-v2 process/scheduler/event path remains covered by real-WASM
 race/integration tests.
 
-Tasks and Docker now contribute compact Overview widgets from their frontends.
-Their business logic and backend RPCs remain plugin-owned.
+Tasks and Docker retain compact Overview widget registrations for future use;
+they are not mounted by the current host dashboard. Their business logic and
+backend RPCs remain plugin-owned.
 
 ## Security and guardrails
 

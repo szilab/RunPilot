@@ -56,8 +56,8 @@ architecture description elsewhere.
   and published through the plugin catalog. Publication is explicit and
   immutable per plugin version.
 - The System package is a nonpublic ABI/frontend test fixture, not the intended
-  user-facing host-monitoring feature. Host metrics UI will be designed as
-  widgets when that work starts.
+  user-facing host-monitoring feature. Overview's built-in host dashboard owns
+  the current host metrics UI.
 - Prefer the Go standard library; add dependencies when they materially reduce
   complexity or correctness risk.
 - Keep platform-specific behavior behind small adapters/build constraints and

@@ -355,7 +355,7 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 			t.Fatalf("UI still contains obsolete presentation %q", removed)
 		}
 	}
-	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "/buckets", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function initializeSidebar", "sidebarStorageKey", `class="row"`} {
+	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "hostDashboard.setActive", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "/buckets", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function initializeSidebar", "sidebarStorageKey", `class="row"`} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js does not contain %q", want)
 		}

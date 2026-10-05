@@ -402,24 +402,27 @@ instead of opening their own application WebSocket. Navigation/pages, Overview
 cards and Settings sections are registered through the corresponding extension
 hosts.
 
-Overview widgets use the compatible frontend 1.x surface:
+Overview widget registration remains part of the compatible frontend 1.x
+surface. The current host-only Overview retains registrations without mounting
+or refreshing plugin widgets. The following lifecycle applies when a widget
+surface is enabled in a future layout:
 
 ```javascript
 const unregister = runpilot.overview.register({
   id: "example.summary", title: "Example", size: "medium", order: 30,
   async mount(body) { /* create content, load initial data; may return cleanup */ },
-  async refresh(body) { /* update while Overview is visible */ },
+  async refresh(body) { /* update while the widget is visible */ },
   dispose() { /* release listeners, timers and references */ },
 });
 ```
 
 IDs are global and stable. Re-registering the same ID for the same plugin is
 idempotent; another plugin cannot claim it. `size` is `small`, `medium` or
-`wide`; `order` is numeric, with IDs breaking ties. The host creates a themed
-card, shows loading/errors per widget, and catches failures so other cards keep
-working. `mount` runs each time Overview opens and may return a cleanup
-function. `dispose` runs when it closes or the plugin unloads. `refresh` runs
-while Overview is open, at a moderate interval or from the Refresh button.
+`wide`; `order` is numeric, with IDs breaking ties. The widget host creates a
+themed card, shows loading/errors per widget, and catches failures so other cards keep
+working. `mount` runs when widgets are shown and may return a cleanup
+function. `dispose` runs when widgets close or the plugin unloads. `refresh`
+runs while widgets are visible, at a moderate interval or from the Refresh button.
 `unregister()` removes the widget immediately; plugin unload also removes all
 its widgets. Plugins should stop their own event listeners on deactivation.
 Use the shared `overview-stat-row`, `overview-stat`, `overview-fact` and

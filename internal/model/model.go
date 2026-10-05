@@ -384,11 +384,18 @@ type HostStatus struct {
 	OS                string       `json:"os"`
 	Architecture      string       `json:"architecture"`
 	Hostname          string       `json:"hostname"`
+	CPUCount          int          `json:"cpuCount,omitempty"`
+	CPUModel          string       `json:"cpuModel,omitempty"`
+	LoadAverage       []float64    `json:"loadAverage,omitempty"`
+	CPUAvailable      bool         `json:"cpuAvailable"`
 	CPUPercent        float64      `json:"cpuPercent"`
 	CPUAveragePercent float64      `json:"cpuAveragePercent"`
 	GPUPercent        float64      `json:"gpuPercent"`
 	GPUAveragePercent float64      `json:"gpuAveragePercent"`
 	GPUAvailable      bool         `json:"gpuAvailable"`
+	GPUName           string       `json:"gpuName,omitempty"`
+	GPUMemoryUsed     uint64       `json:"gpuMemoryUsedBytes,omitempty"`
+	GPUMemoryTotal    uint64       `json:"gpuMemoryTotalBytes,omitempty"`
 	MemoryTotalBytes  uint64       `json:"memoryTotalBytes"`
 	MemoryFreeBytes   uint64       `json:"memoryFreeBytes"`
 	Disks             []DiskStatus `json:"disks"`

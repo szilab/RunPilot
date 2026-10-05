@@ -11,5 +11,5 @@ import (
 
 func HostStatus() model.HostStatus {
 	hostname, _ := os.Hostname()
-	return model.HostStatus{OS: runtime.GOOS, Hostname: hostname, Disks: []model.DiskStatus{}, Error: "detailed host metrics are unavailable on this platform"}
+	return model.HostStatus{OS: runtime.GOOS, Architecture: runtime.GOARCH, Hostname: hostname, CPUCount: runtime.NumCPU(), Disks: []model.DiskStatus{}, Error: "detailed host metrics are unavailable on this platform"}
 }

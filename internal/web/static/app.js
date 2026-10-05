@@ -14,7 +14,8 @@ let pluginDiscoveryErrors = [], pluginRestartRequired = false;
 let pluginCatalog = [], pluginCatalogError = "", pluginCatalogLoaded = false, pluginCatalogLoading = false;
 let pluginExtensions = new Map();
 const pluginNavigation = new Map(), pluginSettings = new Map();
-const overviewWidgets = new RunPilotOverviewWidgets($("overviewMetrics"));
+const overviewWidgets = new RunPilotOverviewWidgets(document.createElement("div"));
+const hostDashboard = new RunPilotDashboard.HostDashboard($("hostDashboard"), api);
 const pluginThemeListeners = new Set();
 let applicationSocket = null, applicationSocketPromise = null, applicationSequence = 0;
 const applicationPending = new Map(), applicationListeners = new Map(), applicationStreams = new Map();
@@ -28,7 +29,6 @@ const sidebarStorageKey = "runpilot.sidebar-collapsed";
 
 const pageMeta = {
   overview: ["Overview", null],
-  embedded: ["Application", null],
   settings: ["Settings", null],
 };
 
@@ -596,15 +596,10 @@ async function managePlugin(id, action, version="") {
   finally { pluginBusy.delete(id); renderPluginSettings(); }
 }
 
-function renderOverview() { overviewWidgets.render(); }
-
-RunPilotDashboard.register(overviewWidgets, api, page => setPage(page), message => toast(message));
-
 function startAutoRefresh() {
   if (refreshTimer) return;
-  let overviewTicks = 0;
   refreshTimer = setInterval(() => {
-    if (!document.hidden) { refresh(); if (currentPage === "overview" && ++overviewTicks % 6 === 0) overviewWidgets.refresh(); }
+    if (!document.hidden) refresh();
   }, 5000);
 }
 
@@ -921,8 +916,7 @@ function configurePlatformAwareFields(capabilities) {
 function setPage(page) {
   const registered = pluginNavigation.get(page);
   if (!Object.hasOwn(pageMeta, page) && !registered) return;
-  overviewWidgets.setActive(page === "overview");
-  if (currentPage === "embedded" && page !== "embedded") $("embeddedFrame").src = "about:blank";
+  hostDashboard.setActive(page === "overview");
   currentPage = page;
   document.querySelectorAll(".nav").forEach(n => n.classList.toggle("active", n.dataset.page === page));
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
@@ -942,19 +936,6 @@ function setPage(page) {
 	if (registered) { registered.page.replaceChildren(); registered.render(registered.page); }
   refresh();
 }
-
-window.RunPilotOpenEmbedded = item => {
-  if (!RunPilotDashboard.validURL(item?.url, "runpilot")) { toast("Invalid /p/ shortcut"); return; }
-  const base = new URL(document.baseURI);
-  const target = new URL(item.url.slice(1), base);
-  if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname + "p/")) { toast("Invalid /p/ shortcut"); return; }
-  $("embeddedFrame").src = target.href;
-  $("embeddedFrame").title = item.name || "Embedded application";
-  $("embeddedExternal").href = target.href;
-  setPage("embedded");
-  $("pageTitle").textContent = item.name || "Application";
-};
-$("embeddedBack").addEventListener("click", () => setPage("overview"));
 
 document.querySelectorAll(".nav").forEach(n => n.addEventListener("click", () => setPage(n.dataset.page)));
 $("restartApplicationButton").addEventListener("click", requestRunPilotRestart);
@@ -1157,7 +1138,7 @@ $("loginForm").addEventListener("submit", async e => {
     await loadSystemInfo();
     await connectApplicationSocket();
     await refresh();
-    overviewWidgets.setActive(currentPage === "overview");
+    hostDashboard.setActive(currentPage === "overview");
     startAutoRefresh();
     startConnectionMonitor();
   } catch {
@@ -1179,10 +1160,10 @@ $("loginForm").addEventListener("submit", async e => {
   try { await connectApplicationSocket(); } catch (e) { toast(e.message); }
   await refresh();
   try { await loadSystemInfo(); } catch (e) { if (e.message !== "Unauthorized") toast(e.message); }
-  overviewWidgets.setActive(currentPage === "overview");
+  hostDashboard.setActive(currentPage === "overview");
   startAutoRefresh();
 })();
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) { refresh(); probeConnection(); }
+  if (!document.hidden) { refresh(); probeConnection(); void hostDashboard.refresh(); }
 });
