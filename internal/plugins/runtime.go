@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	DefaultCallTimeout   = 5 * time.Second
+	DefaultCallTimeout   = 120 * time.Second
 	exportInit           = "runpilot_init"
 	exportCall           = "runpilot_call"
 	exportShutdown       = "runpilot_shutdown"
@@ -55,6 +55,12 @@ type ProcessHost interface {
 	ProcessStart(context.Context, string, json.RawMessage) (json.RawMessage, error)
 	ProcessStatus(context.Context, string, string) (json.RawMessage, error)
 	ProcessTerminate(context.Context, string, string) (json.RawMessage, error)
+}
+type ProcessRunHost interface {
+	ProcessRun(context.Context, string, json.RawMessage) (json.RawMessage, error)
+}
+type WorkspaceHost interface {
+	Workspace(context.Context, string, string, json.RawMessage) (json.RawMessage, error)
 }
 type ProcessSessionHost interface {
 	ProcessSessionCreate(context.Context, string, json.RawMessage) (json.RawMessage, error)
@@ -468,6 +474,21 @@ func (r *Runtime) dispatchCapability(ctx context.Context, payload []byte) capabi
 			return capabilityFailure("failed", "system.status returned invalid JSON")
 		}
 		return capabilitySuccess(value)
+	case "system.identity":
+		if len(request.Params) != 0 && string(request.Params) != "{}" && string(request.Params) != "null" {
+			return capabilityFailure("invalid_argument", "system.identity does not accept parameters")
+		}
+		identity, ok := r.host.(interface {
+			SystemIdentity(context.Context) (json.RawMessage, error)
+		})
+		if !ok {
+			return capabilityFailure("unavailable", "system identity is unavailable")
+		}
+		value, err := identity.SystemIdentity(ctx)
+		if err != nil {
+			return detailedFailure("system.identity", err)
+		}
+		return capabilitySuccess(value)
 	case "storage.get":
 		var args struct {
 			Key string `json:"key"`
@@ -552,6 +573,26 @@ func (r *Runtime) dispatchCapability(ctx context.Context, payload []byte) capabi
 		value, err := process.ProcessStart(ctx, r.manifest.ID, request.Params)
 		if err != nil {
 			return detailedFailure("process.start", err)
+		}
+		return capabilitySuccess(value)
+	case "process.run":
+		host, ok := r.host.(ProcessRunHost)
+		if !ok {
+			return capabilityFailure("unavailable", "bounded process execution is unavailable")
+		}
+		value, err := host.ProcessRun(ctx, r.manifest.ID, request.Params)
+		if err != nil {
+			return detailedFailure("process.run", err)
+		}
+		return capabilitySuccess(value)
+	case "workspace.list", "workspace.stat", "workspace.read", "workspace.write", "workspace.mkdir", "workspace.remove":
+		host, ok := r.host.(WorkspaceHost)
+		if !ok {
+			return capabilityFailure("unavailable", "plugin workspace is unavailable")
+		}
+		value, err := host.Workspace(ctx, r.manifest.ID, strings.TrimPrefix(request.Capability, "workspace."), request.Params)
+		if err != nil {
+			return detailedFailure(request.Capability, err)
 		}
 		return capabilitySuccess(value)
 	case "process.session.create", "process.session.write", "process.session.resize", "process.session.status", "process.session.terminate":

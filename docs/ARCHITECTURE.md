@@ -10,7 +10,7 @@ being refactored into a small **plugin host and management framework**.
 The target core owns infrastructure that multiple features need: plugin
 installation/runtime, versioned host capabilities, one authenticated application
 WebSocket, the web shell, shared UI/theme primitives, and framework settings.
-Tasks, Terminal, RDP and VNC are plugin-owned in the normal UI. Storage, Docker,
+Tasks, Docker, Terminal, RDP and VNC are plugin-owned in the normal UI. Storage,
 Software and Backup remain transitional core implementations without normal
 navigation. Xpra is the temporary Remote exception described below.
 
@@ -94,6 +94,7 @@ capabilities such as:
 
 ```text
 host.process.*
+host.workspace.*
 host.scheduler.*
 host.storage.*
 host.history.*
@@ -177,9 +178,24 @@ The next work is feature migration, not further expansion of the core plugin
 framework. Migrate one feature at a time and remove its legacy core/API code only
 after plugin parity and automated regression coverage.
 
-Tasks, Terminal, RDP and VNC have migrated in the normal UI. Docker is the next
-active feature migration. Storage, Software, Backup and Xpra follow as separate
+Tasks, Docker, Terminal, RDP and VNC have migrated in the normal UI. Storage is the
+next active feature migration. Software, Backup and Xpra follow as separate
 plugin work; see the [backlog](../BACKLOG.md).
+
+### Docker status
+
+Docker has a Linux-only first-party plugin (`plugins/docker`, version `0.1.0`,
+ABI v2) for Compose projects, containers, volumes, networks and interactive
+container terminals. It owns the normal `docker` page and uses generic bounded
+`process.run`, owner-scoped `workspace.*`, and `process.session.*` capabilities.
+Existing `<dataDir>/compose` projects are copied into the Docker plugin workspace
+on startup without overwriting plugin-owned projects or deleting the source. The
+copy records its legacy origin so existing containers can be verified against
+their original Compose directory; external name collisions remain read only.
+External containers allow bounded log viewing but no lifecycle mutations or
+interactive terminal.
+The legacy Docker manager and HTTP handlers remain transitional because hidden
+Storage still uses Docker-volume integration. They are not used by the plugin UI.
 
 ### Remote status
 

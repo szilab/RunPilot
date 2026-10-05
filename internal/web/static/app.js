@@ -9,7 +9,6 @@ let softwareProviders = [], softwareProviderID = "", softwarePackages = [], soft
 let storageClipboard = null, editingTextPath = null, storageShowHidden = false, storagePathCapabilities = null;
 let overview = null;
 let systemInfo = null;
-let dockerRuntime = null, dockerProjects = [], dockerVolumes = [], dockerNetworks = [], dockerBusy = new Set(), dockerPendingContainerStates = new Map(), dockerProjectErrors = new Map(), dockerEditing = null, dockerAttachTerminal = null;
 let pluginStatuses = [], pluginBusy = new Set();
 let pluginDiscoveryErrors = [], pluginRestartRequired = false;
 let pluginCatalog = [], pluginCatalogError = "", pluginCatalogLoaded = false, pluginCatalogLoading = false;
@@ -46,7 +45,7 @@ async function connectApplicationSocket() {
   try{return await applicationSocketPromise;}catch(error){applicationSocketPromise=null;throw error;}
 }
 const pluginWS=Object.freeze({
-  call: async (plugin,method,params={})=>{ const socket=await connectApplicationSocket(); const id=String(++applicationSequence); return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{applicationPending.delete(id);reject(new Error("plugin request timed out"));},10000); applicationPending.set(id,{resolve,reject,timer}); socket.send(JSON.stringify({id,plugin,method,params}));}); },
+  call: async (plugin,method,params={})=>{ const socket=await connectApplicationSocket(); const id=String(++applicationSequence); return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{applicationPending.delete(id);reject(new Error("plugin request timed out"));},130000); applicationPending.set(id,{resolve,reject,timer}); socket.send(JSON.stringify({id,plugin,method,params}));}); },
   on: (plugin,event,listener)=>{ const key=`${plugin}:${event}`, listeners=applicationListeners.get(key)||new Set(); listeners.add(listener); applicationListeners.set(key,listeners); return ()=>{listeners.delete(listener);if(!listeners.size)applicationListeners.delete(key);}; },
   openStream: async (plugin,streamId)=>{ if(typeof plugin!=="string"||!plugin||typeof streamId!=="string"||!streamId||new TextEncoder().encode(streamId).length>255)throw new TypeError("plugin and stream ID are required");if(applicationStreams.has(streamId))throw new Error("stream is already attached");if(applicationStreams.size>=64)throw new Error("application stream limit reached");const socket=await connectApplicationSocket();return new Promise((resolve,reject)=>{const stream={plugin,opened:false,ondata:null,onclose:null,resolve,reject,timer:null,handle:null};const handle={get ondata(){return stream.ondata;},set ondata(value){stream.ondata=value;},get onclose(){return stream.onclose;},set onclose(value){stream.onclose=value;},send(value){if(!stream.opened||socket.readyState!==WebSocket.OPEN)throw new Error("stream is not open");const bytes=value instanceof Uint8Array?value:value instanceof ArrayBuffer?new Uint8Array(value):ArrayBuffer.isView(value)?new Uint8Array(value.buffer,value.byteOffset,value.byteLength):null;if(!bytes)throw new TypeError("stream data must be binary");if(bytes.length>32768)throw new RangeError("stream frames are limited to 32768 bytes");const idBytes=new TextEncoder().encode(streamId),frame=new Uint8Array(6+idBytes.length+bytes.length);frame.set([82,80,83,49,1,idBytes.length]);frame.set(idBytes,6);frame.set(bytes,6+idBytes.length);socket.send(frame);},close(){if(!applicationStreams.has(streamId))return;applicationStreams.delete(streamId);clearTimeout(stream.timer);if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:"stream.close",streamId}));stream.onclose?.({code:1000,reason:"closed"});}};stream.handle=handle;stream.timer=setTimeout(()=>{if(applicationStreams.delete(streamId))reject(new Error("stream attachment timed out"));},10000);applicationStreams.set(streamId,stream);socket.send(JSON.stringify({type:"stream.attach",plugin,streamId}));}); },
 });
@@ -540,7 +539,7 @@ function renderPluginSettings() {
     const buttons = status
       ? `<button class="button secondary small" type="button" ${busy || (!enabled && status.state === "incompatible") ? "disabled" : ""} onclick="togglePlugin('${escapeHtml(id)}',${!enabled})">${enabled ? "Disable" : "Enable"}</button>${update ? `<button class="button primary small" type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible)}')">Update to ${escapeHtml(compatible)}</button>` : ""}<button class="button danger small" type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','uninstall')">Uninstall</button>`
       : `<button class="button primary small" type="button" ${busy || !compatible ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible || "")}')">Install${compatible ? " " + escapeHtml(compatible) : ""}</button>`;
-    return `<article class="docker-card plugin-setting-card" data-plugin-id="${escapeHtml(id)}"><div class="plugin-setting-info"><strong>${escapeHtml(manifest.name || id)}</strong><div class="meta">${escapeHtml(manifest.description || "")}</div></div><div class="plugin-setting-actions">${buttons}</div><span class="status plugin-setting-state ${stateClass}"${entry?.incompatibility ? ` title="${escapeHtml(entry.incompatibility)}"` : ""}>${escapeHtml(busy ? "Updating…" : state)}${update ? " · Update available" : ""}${status?.restartRequired ? " · Restart required" : ""}</span></article>`;
+    return `<article class="plugin-setting-card" data-plugin-id="${escapeHtml(id)}"><div class="plugin-setting-info"><strong>${escapeHtml(manifest.name || id)}</strong><div class="meta">${escapeHtml(manifest.description || "")}</div></div><div class="plugin-setting-actions">${buttons}</div><span class="status plugin-setting-state ${stateClass}"${entry?.incompatibility ? ` title="${escapeHtml(entry.incompatibility)}"` : ""}>${escapeHtml(busy ? "Updating…" : state)}${update ? " · Update available" : ""}${status?.restartRequired ? " · Restart required" : ""}</span></article>`;
   }).join("");
   const cards = new Map([...root.querySelectorAll(".plugin-setting-card")].map(card => [card.dataset.pluginId, card]));
   for (const entry of pluginSettings.values()) {
@@ -774,7 +773,6 @@ function highlightText(content, name) {
   }).join("\n")+"\n";
 }
 function updateTextHighlight() { const code=$("textHighlight").querySelector("code"); code.innerHTML=highlightText($("textEditorContent").value,editingTextPath?.path||""); }
-function updateDockerFileHighlight() { const code=$("dockerFileHighlight").querySelector("code"); code.innerHTML=highlightText($("dockerFileContent").value,dockerEditing?.kind==="env"?".env":"compose.yaml"); }
 async function openTextEditor(id,path,name) { try { const data=await api(`api/v1/storage/${id}/text?`+new URLSearchParams({path})); editingTextPath={id,path};const canEdit=!!(storagePathCapabilities||storage.find(x=>x.id===id)?.capabilities||{}).textEdit;$("textEditorTitle").textContent=`${canEdit ? "Edit" : "View"}: ${name}`;$("textEditorPath").textContent=path;$("textEditorContent").value=data.content;$("textEditorContent").readOnly=!canEdit;$("saveTextEditor").disabled=!canEdit;updateTextHighlight();$("textEditorDialog").showModal(); }catch(e){toast(e.message)} }
 function openNewTextFile() { if (!storageLocation || !(storagePathCapabilities||{}).textEdit) return; const name=prompt("File name:"); if (!name) return; if (name === "." || name === ".." || /[\\/]/.test(name)) { toast("File name must be a single name."); return; } const path=storagePath ? `${storagePath}/${name}` : name; editingTextPath={id:storageLocation,path};$("textEditorTitle").textContent=`New file: ${name}`;$("textEditorPath").textContent=path;$("textEditorContent").value="";$("textEditorContent").readOnly=false;$("saveTextEditor").disabled=false;updateTextHighlight();$("textEditorDialog").showModal(); }
 async function saveTextEditor() { if(!editingTextPath)return;try{await api(`api/v1/storage/${editingTextPath.id}/text`,{method:"PUT",body:JSON.stringify({path:editingTextPath.path,content:$("textEditorContent").value})});$("textEditorDialog").close();toast("Fájl mentve");browseStorage(storageLocation,storagePath)}catch(e){toast(e.message)} }
@@ -885,142 +883,6 @@ async function loadSoftwareView(force = false) {
 }
 function softwareSearch() { loadSoftwareView(true); }
 
-function renderDocker() {
-  const notice = $("dockerNotice"), ready = dockerRuntime?.available;
-  notice.classList.toggle("hidden", !!ready);
-  notice.innerHTML = ready ? "" : `<strong>Docker unavailable</strong><span>${escapeHtml(dockerRuntime?.message || "Docker status has not been checked.")}${dockerRuntime?.identity ? ` Running as ${escapeHtml(dockerRuntime.identity)}.` : ""}</span>`;
-  const projectColumns = [[], []];
-  dockerProjects.forEach((project, index) => projectColumns[index % 2].push(dockerProjectCard(project, ready)));
-  $("dockerProjectGrid").innerHTML = projectColumns.filter(column => column.length).map(column => `<div class="docker-project-column">${column.join("")}</div>`).join("");
-  $("dockerVolumeList").innerHTML = dockerVolumes.map(volume => dockerVolumeRow(volume, ready)).join("");
-  $("dockerNetworkList").innerHTML = dockerNetworks.map(network => dockerNetworkRow(network, ready)).join("");
-  $("dockerProjectEmpty").classList.toggle("hidden", dockerProjects.length > 0 || !ready);
-  $("dockerVolumeEmpty").classList.toggle("hidden", dockerVolumes.length > 0 || !ready);
-  $("dockerNetworkEmpty").classList.toggle("hidden", dockerNetworks.length > 0 || !ready);
-}
-function applyDockerSnapshot(snapshot) {
-  dockerRuntime = snapshot[0].runtime; dockerProjects = snapshot[0].projects || []; dockerVolumes = snapshot[1].volumes || []; dockerNetworks = snapshot[2].networks || [];
-  for (const [key, pending] of dockerPendingContainerStates) {
-    const container = dockerProjects.flatMap(project => project.containers || []).find(item => item.id === pending.id);
-    const reachedExpectedState = pending.running == null ? !container : !!container && (container.state === "running") === pending.running;
-    if (reachedExpectedState) { dockerPendingContainerStates.delete(key); dockerBusy.delete(key); }
-  }
-  renderDocker();
-}
-async function refreshDockerSnapshot() {
-  try {
-    const snapshot = await Promise.all([api("api/v1/docker/projects"), api("api/v1/docker/volumes"), api("api/v1/docker/networks")]);
-    applyDockerSnapshot(snapshot);
-    setConnected(true);
-    return true;
-  } catch (error) {
-    setConnected(!!error.serverReachable);
-    toast(error.message);
-    return false;
-  }
-}
-function dockerNetworkRow(network, ready) {
-  const busy=dockerBusy.has(`network:${network.name}`), usage=!network.inUse ? "Unused" : network.runningUse ? "In use by running container" : "Used by stopped container";
-  const protectedNetwork=["bridge","host","none"].includes(network.name);
-  const composeManaged=!!network.composeProject;
-  const detail=network.composeProject ? `Compose: ${network.composeProject}${network.composeNetwork ? ` / ${network.composeNetwork}` : ""}` : `${network.driver || "unknown driver"} · ${network.scope || "local"}`;
-  const actions=protectedNetwork || composeManaged ? "" : `<button class="button danger small" onclick="deleteDockerNetwork('${escapeHtml(network.name)}')" ${!ready || network.inUse || busy ? "disabled" : ""}>Delete</button>`;
-  return `<div class="docker-container docker-resource-row" title="${escapeHtml(detail)}"><span class="docker-dot ${network.inUse ? (network.runningUse ? "green" : "yellow") : "gray"}"></span><strong class="docker-container-name" title="${escapeHtml(network.name)}">${escapeHtml(network.name)}</strong><div class="docker-container-actions docker-resource-actions"><span class="docker-resource-action-slot" aria-hidden="true"></span>${actions}</div><span class="docker-resource-status" title="${escapeHtml(usage)}${(network.usedBy||[]).length ? ` · ${escapeHtml(network.usedBy.join(", "))}` : ""}">${escapeHtml(usage)}</span></div>`;
-}
-function dockerVolumeRow(volume, ready) {
-  const busy = dockerBusy.has(`volume:${volume.name}`), usage = !volume.inUse ? "Unused" : volume.runningUse ? "In use by running container" : "Used by stopped container";
-  const canDelete = ready && !volume.inUse && !busy;
-  const deleteTitle = volume.inUse ? "Delete is unavailable while a container references this volume." : !ready ? "Docker is unavailable." : busy ? "Volume operation in progress." : "Delete volume";
-  const detail = volume.composeProject ? `Compose: ${volume.composeProject}${volume.composeVolume ? ` / ${volume.composeVolume}` : ""}` : `${volume.driver || "unknown driver"} · ${volume.scope || "local"}`;
-  const deleteAction = volume.inUse ? "" : `<button class="button danger small" title="${escapeHtml(deleteTitle)}" onclick="deleteDockerVolume('${escapeHtml(volume.name)}')" ${canDelete ? "" : "disabled"}>Delete</button>`;
-  return `<div class="docker-container docker-resource-row" title="${escapeHtml(detail)}"><span class="docker-dot ${volume.inUse ? (volume.runningUse ? "green" : "yellow") : "gray"}"></span><strong class="docker-container-name" title="${escapeHtml(volume.name)}">${escapeHtml(volume.name)}</strong><div class="docker-container-actions docker-resource-actions"><button class="button secondary small docker-volume-storage" title="Open this volume in Storage" onclick="openDockerVolumeStorage('${escapeHtml(volume.name)}')">Storage</button>${deleteAction}</div><span class="docker-resource-status" title="${escapeHtml(usage)}${(volume.usedBy || []).length ? ` · ${escapeHtml(volume.usedBy.join(", "))}` : ""}">${escapeHtml(usage)}</span></div>`;
-}
-function openDockerVolumeStorage(name) { setPage("storage"); browseStorage("docker-volumes", name); }
-function dockerProjectCard(project, ready) {
-  const busy = dockerBusy.has(project.name), managed = !!project.managed, hasCompose = !!project.composeFileExists;
-  const error = dockerProjectErrors.get(project.name);
-  const active = ["running","partial","degraded"].includes(project.state);
-  // `docker compose up -d` is idempotent and also applies configuration changes
-  // to an already-running project, so it is valid in every project state.
-  const canUp = ready && hasCompose && !busy;
-  const canStart = ready && hasCompose && !busy && project.state === "stopped";
-  const canStop = ready && !busy && active;
-  const canDown = ready && hasCompose && !busy && project.state !== "down";
-  const actions = managed ? `<div class="docker-actions">
-    <div class="docker-action-group docker-action-lifecycle"><button class="button small" onclick="dockerAction('${project.name}','up')" ${canUp ? "" : "disabled"}>Up</button><button class="button small" onclick="dockerAction('${project.name}','start')" ${canStart ? "" : "disabled"}>Start</button><button class="button small" onclick="dockerAction('${project.name}','stop')" ${canStop ? "" : "disabled"}>Stop</button><button class="button small" onclick="dockerAction('${project.name}','down')" ${canDown ? "" : "disabled"}>Down</button></div>
-    <div class="docker-action-group docker-action-files"><button class="button secondary small" onclick="openDockerFile('${project.name}','compose')" ${busy ? "disabled" : ""}>compose.yaml</button><button class="button secondary small" onclick="openDockerFile('${project.name}','env')" ${busy ? "disabled" : ""}>.env</button></div><div class="docker-action-group docker-action-destructive"><button class="button danger small" onclick="deleteDockerProject('${project.name}')" ${!ready || project.state !== "down" || busy ? "disabled" : ""}>Delete</button></div>
-  </div>${busy ? `<div class="docker-busy" role="status"><span class="spinner" aria-hidden="true"></span>Running Compose command…</div>` : ""}` : "";
-  const containers = (project.containers || []).map(c => dockerContainerRow(c, ready && managed)).join("");
-  return `<article class="docker-card"><div class="docker-card-head"><h2>${escapeHtml(project.name)}</h2><span class="status ${escapeHtml(project.state === "running" ? "running" : project.state === "degraded" ? "failure" : project.state || "idle")}">${escapeHtml(project.state || "unknown")}</span></div>${error ? `<div class="docker-project-error" role="alert"><strong>Compose operation failed</strong><span>${escapeHtml(error)}</span></div>` : ""}${actions}${containers}${project.configPath && !managed ? `<div class="docker-path">${escapeHtml(project.configPath)}</div>` : ""}</article>`;
-}
-function dockerContainerRow(container, ready) {
-  const busy=dockerBusy.has(`container:${container.id}`), running=container.state === "running";
-  const canAttach=ready && running && !busy && !!systemInfo?.capabilities?.terminal;
-  const controls=`<div class="docker-container-actions"><div class="docker-action-group docker-action-lifecycle"><button class="row-icon docker-container-icon" title="Start" aria-label="Start container" onclick="dockerContainerAction('${container.id}','start')" ${ready && !running && !busy ? "" : "disabled"}>▶</button><button class="row-icon docker-container-icon" title="Stop" aria-label="Stop container" onclick="dockerContainerAction('${container.id}','stop')" ${ready && running && !busy ? "" : "disabled"}>■</button></div><div class="docker-action-group docker-action-destructive"><button class="row-icon docker-container-icon" title="Delete stopped container" aria-label="Delete stopped container" onclick="dockerContainerAction('${container.id}','delete')" ${ready && !running && !busy ? "" : "disabled"}>🗑</button></div><div class="docker-action-group docker-action-support"><button class="row-icon docker-container-icon" title="Open terminal" aria-label="Open container terminal" onclick="dockerAttachContainer('${container.id}')" ${canAttach ? "" : "disabled"}>↪</button><button class="row-icon docker-container-icon" title="View logs" aria-label="View logs" onclick="openDockerContainerLog('${container.id}')" ${ready && !busy ? "" : "disabled"}>▤</button></div></div>`;
-  return `<div class="docker-container"><span class="docker-dot ${escapeHtml(container.tone || "gray")}"></span><strong class="docker-container-name">${escapeHtml(container.service || container.name)}</strong>${controls}<span class="docker-resource-status">${escapeHtml(container.state || "unknown")}${container.health ? ` · ${escapeHtml(container.health)}` : ""}</span></div>`;
-}
-async function dockerAction(name, action) {
-  dockerBusy.add(name); dockerProjectErrors.delete(name); renderDocker();
-  try {
-    await api(`api/v1/docker/projects/${encodeURIComponent(name)}/actions/${action}`, {method:"POST"});
-    toast(`${name}: ${action} completed`);
-  } catch(e) {
-    dockerProjectErrors.set(name, e.message); renderDocker(); toast(e.message);
-  } finally { dockerBusy.delete(name); await refresh(); }
-}
-async function dockerContainerAction(id, action) {
-  const key=`container:${id}`;
-  if(action==="delete"&&!confirm("Delete this stopped container?"))return;
-  dockerBusy.add(key); renderDocker();
-  try {
-    await api(`api/v1/docker/containers/${encodeURIComponent(id)}/actions/${action}`,{method:"POST"});
-    dockerPendingContainerStates.set(key,{id,running:action === "start" ? true : action === "stop" ? false : null});
-    toast(`Container ${action} completed`);
-    await new Promise(resolve => setTimeout(resolve, 400));
-    await refreshDockerSnapshot();
-  } catch(e) {
-    dockerBusy.delete(key); dockerPendingContainerStates.delete(key); renderDocker(); toast(e.message);
-  }
-}
-function openDockerContainerLog(id) { openLog("Container logs",()=>api(`api/v1/docker/containers/${encodeURIComponent(id)}/logs`)); }
-async function dockerAttachContainer(id) {
-  if (!systemInfo?.capabilities?.terminal) { toast("Interactive terminals are unavailable"); return; }
-  disposeDockerAttachTerminal();
-  const dialog = $("dockerAttachDialog"), pane = $("dockerAttachPane");
-  dialog.showModal();
-  pane.replaceChildren();
-  const term = new Terminal({cursorBlink:true, scrollback:5000, fontFamily:'"Cascadia Code", Consolas, monospace', fontSize:14, theme:{background:'#0b1220'}});
-  const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(pane); fit.fit();
-  const session = {term, fit, socket:null, observer:null}; dockerAttachTerminal = session;
-  term.onData(data => { if (session.socket?.readyState === WebSocket.OPEN) session.socket.send(new TextEncoder().encode(data)); });
-  session.observer = new ResizeObserver(() => { fit.fit(); if (session.socket?.readyState === WebSocket.OPEN) session.socket.send(JSON.stringify({type:"resize",cols:term.cols,rows:term.rows})); });
-  session.observer.observe(pane);
-  try {
-    const ticket = await api(`api/v1/docker/containers/${encodeURIComponent(id)}/attach-ticket`, {method:"POST", body:JSON.stringify({cols:term.cols, rows:term.rows})});
-    if (dockerAttachTerminal !== session) return;
-    const socket = new RunPilotSecureWebSocket(dockerAttachWebSocketURL(ticket.ticket), systemInfo?.websocketPayloadMode || "disabled"); session.socket = socket; socket.binaryType = "arraybuffer";
-    socket.onmessage = event => { if (dockerAttachTerminal === session && event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data)); };
-    socket.onerror = () => { if (dockerAttachTerminal === session) term.writeln("\r\nTerminal connection failed."); };
-    socket.onclose = event => { if (dockerAttachTerminal === session && !event.wasClean) term.writeln(`\r\n${event.reason || "Terminal connection closed."}`); };
-    socket.onopen = () => { socket.send(JSON.stringify({type:"resize",cols:term.cols,rows:term.rows})); term.focus(); };
-  } catch (error) { term.writeln(`\r\n${error.message}`); toast(error.message); }
-}
-function disposeDockerAttachTerminal() { const session = dockerAttachTerminal; dockerAttachTerminal = null; session?.observer?.disconnect(); session?.socket?.close(); session?.term?.dispose(); }
-async function deleteDockerProject(name) { if (!confirm(`Delete the RunPilot project directory for ${name}? This removes compose files and .env only; it never removes Docker images or volumes.`)) return; dockerBusy.add(name); dockerProjectErrors.delete(name); renderDocker(); try { await api(`api/v1/docker/projects/${encodeURIComponent(name)}`, {method:"DELETE"}); dockerProjectErrors.delete(name); toast("Compose project deleted"); } catch(e) { dockerProjectErrors.set(name, e.message); renderDocker(); toast(e.message); } finally { dockerBusy.delete(name); await refresh(); } }
-async function deleteDockerVolume(name) { if (!confirm(`Permanently delete Docker volume ${name} and all of its data? This cannot be undone.`)) return; const key=`volume:${name}`; dockerBusy.add(key);renderDocker();try{await api(`api/v1/docker/volumes/${encodeURIComponent(name)}`,{method:"DELETE"});toast("Docker volume deleted");}catch(e){toast(e.message)}finally{dockerBusy.delete(key);await refresh();} }
-async function deleteDockerNetwork(name) { if (!confirm(`Delete Docker network ${name}? This cannot be undone.`)) return; const key=`network:${name}`;dockerBusy.add(key);renderDocker();try{await api(`api/v1/docker/networks/${encodeURIComponent(name)}`,{method:"DELETE"});toast("Docker network deleted");}catch(e){toast(e.message)}finally{dockerBusy.delete(key);await refresh();} }
-async function openDockerFile(name, kind) { try { const out = await api(`api/v1/docker/projects/${encodeURIComponent(name)}/files/${kind}`); dockerEditing = {name,kind}; $("dockerFileTitle").textContent = `${out.content ? "Edit" : "Create"} ${kind === "compose" ? "compose.yaml" : ".env"}`; $("dockerFilePath").textContent = `${name}/${kind === "compose" ? "compose.yaml" : ".env"}`; $("dockerFileContent").value = out.content || (kind === "compose" ? "services: {}\n" : ""); updateDockerFileHighlight(); $("dockerFileDialog").showModal(); } catch(e) { toast(e.message); } }
-async function saveDockerFile() { if (!dockerEditing) return; try { await api(`api/v1/docker/projects/${encodeURIComponent(dockerEditing.name)}/files/${dockerEditing.kind}`, {method:"PUT", body:JSON.stringify({content:$("dockerFileContent").value})}); $("dockerFileDialog").close(); toast("File saved"); await refresh(); } catch(e) { toast(e.message); } }
-function openDockerCreate() { $("dockerProjectName").value=""; $("dockerCreateError").classList.add("hidden"); $("dockerCreateDialog").showModal(); }
-$("dockerCreateForm").addEventListener("submit", async e => { e.preventDefault(); const name=$("dockerProjectName").value.trim(); try { await api("api/v1/docker/projects", {method:"POST",body:JSON.stringify({name})}); $("dockerCreateDialog").close(); await refresh(); } catch(err) { $("dockerCreateError").textContent=err.message; $("dockerCreateError").classList.remove("hidden"); } });
-function openDockerVolumeCreate() { $("dockerVolumeName").value="";$("dockerVolumeError").classList.add("hidden");$("dockerVolumeDialog").showModal(); }
-$("dockerVolumeForm").addEventListener("submit",async e=>{e.preventDefault();try{await api("api/v1/docker/volumes",{method:"POST",body:JSON.stringify({name:$("dockerVolumeName").value.trim()})});$("dockerVolumeDialog").close();await refresh();}catch(err){$("dockerVolumeError").textContent=err.message;$("dockerVolumeError").classList.remove("hidden");}});
-function openDockerNetworkCreate() { $("dockerNetworkName").value="";$("dockerNetworkError").classList.add("hidden");$("dockerNetworkDialog").showModal(); }
-$("dockerNetworkForm").addEventListener("submit",async e=>{e.preventDefault();try{await api("api/v1/docker/networks",{method:"POST",body:JSON.stringify({name:$("dockerNetworkName").value.trim()})});$("dockerNetworkDialog").close();await refresh();}catch(err){$("dockerNetworkError").textContent=err.message;$("dockerNetworkError").classList.remove("hidden");}});
-$("saveDockerFile").addEventListener("click", saveDockerFile); $("closeDockerFile").addEventListener("click",()=>$("dockerFileDialog").close()); $("cancelDockerFile").addEventListener("click",()=>$("dockerFileDialog").close());
-$("closeDockerAttach").addEventListener("click",()=>$("dockerAttachDialog").close());
-$("dockerAttachDialog").addEventListener("close",disposeDockerAttachTerminal);
-
 async function loadSystemInfo() {
   systemInfo = await api("api/v1/system");
   $("systemVersion").textContent = systemInfo?.version ? `v${systemInfo.version}` : "";
@@ -1046,13 +908,6 @@ function configurePlatformAwareFields(capabilities) {
   if (robocopy) { robocopy.disabled = !capabilities.robocopy; robocopy.hidden = !capabilities.robocopy; }
   const vss = $("resticVss").closest("label");
   if (vss) vss.classList.toggle("hidden", !capabilities.windows);
-}
-
-function dockerAttachWebSocketURL(ticket) {
-  const wsURL = new URL("api/v1/docker/attach", document.baseURI);
-  wsURL.protocol = wsURL.protocol === "https:" ? "wss:" : "ws:";
-  wsURL.searchParams.set("ticket", ticket);
-  return wsURL;
 }
 
 function setPage(page) {
@@ -1087,8 +942,6 @@ $("softwareAddBucket").addEventListener("click", softwareAddBucket);
 $("softwareProviderSelect").addEventListener("change", event => changeSoftwareProvider(event.target.value));
 $("softwareSearchInput").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareSearch(); } });
 $("softwareBucketSource").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareAddBucket(); } });
-$("dockerVolumeAction").addEventListener("click", openDockerVolumeCreate);
-$("dockerNetworkAction").addEventListener("click", openDockerNetworkCreate);
 document.querySelectorAll("[data-dismiss]").forEach(button => button.addEventListener("click", () => $(button.dataset.dismiss)?.close()));
 document.querySelectorAll("[data-task-filter]").forEach(button => button.addEventListener("click", () => { taskFilter = button.dataset.taskFilter; document.querySelectorAll("[data-task-filter]").forEach(item => item.classList.toggle("active", item === button)); renderTasks(); }));
 document.querySelectorAll("[data-task-kind]").forEach(button => button.addEventListener("click", () => { $("taskDialog").close(); if (button.dataset.taskKind === "continuous") openProcess(); else if (button.dataset.taskKind === "scheduled") openJob(); else openBackup(); }));
@@ -1100,8 +953,6 @@ $("storageShowHidden").addEventListener("change",e=>{storageShowHidden=e.target.
 $("saveTextEditor").addEventListener("click",saveTextEditor);$("closeTextEditor").addEventListener("click",()=>$("textEditorDialog").close());$("cancelTextEditor").addEventListener("click",()=>$("textEditorDialog").close());
 $("textEditorContent").addEventListener("input",updateTextHighlight);
 $("textEditorContent").addEventListener("scroll",e=>{ $("textHighlight").scrollTop=e.target.scrollTop; $("textHighlight").scrollLeft=e.target.scrollLeft; });
-$("dockerFileContent").addEventListener("input",updateDockerFileHighlight);
-$("dockerFileContent").addEventListener("scroll",e=>{ $("dockerFileHighlight").scrollTop=e.target.scrollTop; $("dockerFileHighlight").scrollLeft=e.target.scrollLeft; });
 
 function openProcess(existing = null) {
   $("processForm").reset();

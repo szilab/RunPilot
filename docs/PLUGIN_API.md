@@ -161,9 +161,9 @@ or:
 
 The capability protocol version is separate from the raw WASM ABI.
 
-Implemented generic capability work includes logging, host status,
-plugin-namespaced JSON storage, plugin-owned scheduler registrations, asynchronous
-process execution/status/termination, owner-scoped execution history, browser
+Implemented generic capability work includes logging, host status and identity,
+plugin-namespaced JSON storage and workspace files, plugin-owned scheduler registrations,
+asynchronous and bounded synchronous process execution, owner-scoped execution history, browser
 event publication, and owner-scoped TCP/TLS network streams. Config
 hooks exist in the host interface but are not yet a general plugin configuration
 service. Add new capability methods only for real reusable plugin needs.
@@ -211,6 +211,48 @@ for five minutes. The exit event carries `id`, `exitCode`, `success`,
 Without `historyId`, stdout/stderr are delivered through `runpilot_event`. Output
 uses bounded queues; overflow is intentionally lossy rather than blocking a
 child process or growing memory without bound.
+
+`process.run` executes a direct executable with an explicit argument array. It
+has no interpreter or shell-string mode and does not change `process.start`.
+
+```text
+process.run {command, args?, workingDirectory?, workspaceDirectory?,
+             environment?, timeoutSeconds?, maxOutputBytes?, tailOutput?}
+  -> {exitCode, success, timedOut, stdout, stderr,
+      stdoutTruncated, stderrTruncated}
+```
+
+`workingDirectory` is an ordinary host path. `workspaceDirectory` is a relative
+directory inside the calling plugin's workspace; the two fields are mutually
+exclusive. Workspace directory components cannot be symlinks. The default
+timeout is 30 seconds and the maximum is 110 seconds. Each output stream has a
+default 256 KiB limit and a maximum 2 MiB limit. `tailOutput: true` keeps the
+newest bytes rather than the first bytes, useful for bounded diagnostics.
+Timeout kills the process tree on Linux and Windows. A missing executable
+returns `not_found`; a nonzero exit returns a successful capability response
+with `success: false` and the exit code; a timeout sets `timedOut: true`.
+
+### Plugin workspace
+
+`workspace.*` exposes real files under
+`<dataDir>/plugins/<owner>/data/workspace/`. The host supplies `owner`. All
+paths use relative `/` separated components; absolute paths, `..`, empty
+components and backslashes are rejected. Operations cannot follow symlinks
+outside the workspace. Reads and writes are capped at 1 MiB and file writes
+replace atomically. Directories list at most 4096 entries per call.
+
+```text
+workspace.list   {path?}                 -> {entries:[{name,directory,symlink}]}
+workspace.stat   {path?}                 -> {path,directory,size,symlink}
+workspace.read   {path}                  -> {data}  # base64
+workspace.write  {path,data}             -> {}      # base64
+workspace.mkdir  {path}                  -> {}      # creates parents
+workspace.remove {path,recursive?}       -> {}
+```
+
+`workspace.remove` never removes the workspace root. Recursive removal treats
+symlinks as links and cannot descend outside the owner root. `system.identity`
+returns `{username,uid}` for diagnostic display; it accepts no parameters.
 
 ### History
 

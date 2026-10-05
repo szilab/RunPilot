@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -111,6 +112,9 @@ func Open(dataDir string) (*Controller, error) {
 		if raw, err := json.Marshal(data); err == nil {
 			c.publishPluginEvent(owner, event, raw)
 		}
+	}
+	if err := migrateLegacyDockerProjects(dataDir); err != nil {
+		log.Printf("legacy Docker project migration: %v", err)
 	}
 	c.plugins = plugins.New(dataDir, func(id string) (bool, bool) {
 		setting, ok := c.config.Snapshot().Plugins[id]
@@ -446,6 +450,13 @@ func (h controllerPluginHost) ConfigSet(context.Context, string, json.RawMessage
 }
 func (h controllerPluginHost) SystemStatus(context.Context) (json.RawMessage, error) {
 	return json.Marshal(platform.HostStatus())
+}
+func (h controllerPluginHost) SystemIdentity(context.Context) (json.RawMessage, error) {
+	current, err := user.Current()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]string{"username": current.Username, "uid": current.Uid})
 }
 func (h controllerPluginHost) StorageGet(_ context.Context, pluginID, key string) (json.RawMessage, error) {
 	return h.controller.pluginStorageGet(pluginID, key)

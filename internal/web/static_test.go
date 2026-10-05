@@ -24,10 +24,13 @@ func TestCoreShellLeavesFeatureNavigationToPlugins(t *testing.T) {
 			t.Errorf("core %s navigation is missing", id)
 		}
 	}
-	for _, id := range []string{"tasks", "storage", "software", "docker"} {
+	for _, id := range []string{"tasks", "storage", "software"} {
 		if strings.Contains(page, `id="`+id+`Page"`) || !strings.Contains(page, `id="legacy`+strings.ToUpper(id[:1])+id[1:]+`Page"`) {
 			t.Errorf("legacy %s markup reserves the plugin page ID", id)
 		}
+	}
+	if strings.Contains(page, `id="legacyDockerPage"`) || strings.Contains(page, `id="dockerPage"`) {
+		t.Error("core still reserves the Docker plugin page")
 	}
 	app, err := staticFS.ReadFile("static/app.js")
 	if err != nil {
@@ -80,13 +83,13 @@ func TestCoreShellLeavesFeatureNavigationToPlugins(t *testing.T) {
 }
 
 func TestFirstPartyPluginNavigationImages(t *testing.T) {
-	for _, name := range []string{"remote-vnc", "remote-rdp", "tasks", "terminal", "web-apps"} {
+	for _, name := range []string{"remote-vnc", "remote-rdp", "tasks", "terminal", "web-apps", "docker"} {
 		pluginDir := filepath.Join("..", "..", "plugins", name, "web")
 		source, err := os.ReadFile(filepath.Join(pluginDir, "plugin.js"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(source), `icon: { src: new URL("./icon.svg", import.meta.url).href }`) {
+		if !strings.Contains(string(source), `icon: { src: new URL("./icon.svg", import.meta.url).href }`) && !strings.Contains(string(source), `icon:{src:new URL("./icon.svg",import.meta.url).href}`) {
 			t.Errorf("%s navigation does not reference its packaged icon", name)
 		}
 		asset, err := os.ReadFile(filepath.Join(pluginDir, "icon.svg"))
@@ -122,7 +125,7 @@ func TestPluginSettingsUseSharedSectionsAndNamedNavigationIcons(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr))`, `.plugin-settings-section > form`, `.plugin-settings-section { grid-column:1 / -1;`, `.plugin-settings-section .form-grid { grid-template-columns:minmax(0,1fr); }`, `.plugin-settings-grid .plugin-setting-state { white-space:normal`, `.plugin-settings-grid .plugin-setting-actions { grid-column:2; grid-row:1;`, `.plugin-settings-section .plugin-settings-actions { display:flex; align-items:center; justify-content:flex-end;`, `.plugin-settings-section .plugin-settings-actions button[type="submit"] { order:1; }`, `.plugin-settings-footer > .plugin-settings-actions { grid-column:2; grid-row:1; }`} {
+	for _, want := range []string{`.rp-masonry { columns:var(--rp-masonry-columns,2);`, `.plugin-settings-grid { --rp-masonry-columns:3;`, `.plugin-settings-section > form`, `.plugin-settings-section { grid-column:1 / -1;`, `.plugin-settings-section .form-grid { grid-template-columns:minmax(0,1fr); }`, `.plugin-settings-grid .plugin-setting-state { white-space:normal`, `.plugin-settings-grid .plugin-setting-actions { grid-column:2; grid-row:1;`, `.plugin-settings-section .plugin-settings-actions { display:flex; align-items:center; justify-content:flex-end;`, `.plugin-settings-section .plugin-settings-actions button[type="submit"] { order:1; }`, `.plugin-settings-footer > .plugin-settings-actions { grid-column:2; grid-row:1; }`} {
 		if !strings.Contains(string(styles), want) {
 			t.Fatalf("shared settings layout is missing %q", want)
 		}
@@ -293,8 +296,6 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		`id="overviewPage"`,
 		`runpilot-logo.png`,
 		`id="themeToggle"`,
-		`vendor/xterm/xterm.js`,
-		`vendor/xterm/addon-fit.js`,
 		`id="legacySoftwarePage"`,
 		`id="softwareProviderSelect"`,
 		`id="softwareProviderCard"`,
@@ -319,7 +320,6 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		`id="legacyTasksPage"`,
 		`data-task-kind="continuous"`,
 		`class="row task-choice"`,
-		`class="docker-resources-grid"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("index.html does not contain %q", want)
@@ -355,7 +355,7 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 			t.Fatalf("UI still contains obsolete presentation %q", removed)
 		}
 	}
-	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "/buckets", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "dockerProjectErrors", "Compose operation failed", "const projectColumns = [[], []];", "docker-project-column", "const canUp = ready && hasCompose && !busy;", "const canDelete = ready && !volume.inUse && !busy", "const deleteAction = volume.inUse ? \"\"", "const composeManaged=!!network.composeProject", "docker-resource-action-slot", "docker-resource-row", "function openDockerVolumeStorage", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function initializeSidebar", "sidebarStorageKey", `class="row"`} {
+	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "/buckets", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function initializeSidebar", "sidebarStorageKey", `class="row"`} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js does not contain %q", want)
 		}
@@ -368,20 +368,22 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	if !strings.Contains(script, "function applyTheme") {
 		t.Fatal("app.js does not support theme selection")
 	}
-	for _, want := range []string{"function loadSystemInfo", "function dockerAttachWebSocketURL", "api/v1/docker/containers/", "new RunPilotSecureWebSocket", "FitAddon.FitAddon", `new URL("api/v1/docker/attach", document.baseURI)`, `wsURL.searchParams.set("ticket", ticket)`, "theme: Object.freeze({", "subscribe: listener =>"} {
+	for _, want := range []string{"function loadSystemInfo", "new RunPilotSecureWebSocket", "theme: Object.freeze({", "subscribe: listener =>"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js does not contain shared UI or Docker attach integration %q", want)
 		}
 	}
-	if strings.Contains(script, "ticket.url") {
-		t.Fatal("Docker attach WebSocket must be derived from document.baseURI, not a server-provided URL")
+	for _, legacy := range []string{"legacyDockerPage", "function renderDocker", "api/v1/docker/attach", "function dockerAttachWebSocketURL"} {
+		if strings.Contains(page+script, legacy) {
+			t.Fatalf("legacy Docker UI remains: %s", legacy)
+		}
 	}
 	if strings.Contains(page+script, "cdn.jsdelivr") || strings.Contains(page+script, "unpkg.com") {
 		t.Fatal("terminal assets must not load from a CDN")
 	}
 	styles, err := staticFS.ReadFile("static/styles.css")
-	if err != nil || !strings.Contains(string(styles), ".docker-card { display: grid; align-content: start;") {
-		t.Fatal("Docker project cards do not keep empty-project controls top aligned")
+	if err != nil {
+		t.Fatal(err)
 	}
 	if !strings.Contains(string(styles), `:root[data-theme="dark"] .task-choice { background: #1d2a3e; color: #f8fafc; }`) {
 		t.Fatal("task selector does not have a dark-theme color treatment")
@@ -389,7 +391,7 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	if !strings.Contains(string(styles), ".shell.sidebar-collapsed") || !strings.Contains(string(styles), "main { padding: 17px 21px 24px;") {
 		t.Fatal("sidebar collapse or reduced main padding styles are missing")
 	}
-	for _, want := range []string{".docker-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start;", ".docker-project-column { display:grid; align-content:start; gap:12px;", ".docker-resources-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr));", ".docker-container { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto minmax(150px, .7fr);", ".docker-resource-row { min-height:42px;", ".nav-label { overflow:hidden; text-overflow:ellipsis; }", ".sidebar-toggle { display:flex; align-items:center; gap:12px; width:100%; height:42px; min-height:42px; overflow:hidden;", ".docker-resource-actions { display:grid; grid-template-columns:108px 78px;"} {
+	for _, want := range []string{".nav-label { overflow:hidden; text-overflow:ellipsis; }", ".sidebar-toggle { display:flex; align-items:center; gap:12px; width:100%; height:42px; min-height:42px; overflow:hidden;"} {
 		if !strings.Contains(string(styles), want) {
 			t.Fatalf("compact responsive UI treatment is missing %q", want)
 		}

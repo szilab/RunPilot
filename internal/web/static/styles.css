@@ -129,7 +129,7 @@ h1 { margin: 0; font-size: 28px; color: var(--rp-text-strong); }
 .task-choice:hover { background: #f8fafc; }
 .row:last-child { border-bottom: 0; }
 .row-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; min-width: 0; }
-.row-head > :first-child, .docker-card-head > :first-child { min-width: 0; }
+.row-head > :first-child { min-width: 0; }
 .row h3 { margin: 0 0 4px; font-size: 16px; color: #111827; }
 .meta { color: #64748b; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 270px; }
 .status { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; overflow: hidden; padding: 3px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; text-overflow: ellipsis; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
@@ -224,34 +224,6 @@ h1 { margin: 0; font-size: 28px; color: var(--rp-text-strong); }
   .rp-interactive-title strong { max-width: 36vw; }
   .rp-interactive-toolbar .button { padding: 6px 7px; }
 }
-.docker-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:12px; }
-.docker-project-column { display:grid; align-content:start; gap:12px; min-width:0; }
-.docker-resources-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:18px; }
-.docker-resources-grid .docker-section { margin-top:0; min-width:0; }
-.docker-volume-list { display:grid; gap:0; overflow:hidden; border:1px solid #e3e7ee; border-radius:10px; background:white; }
-.docker-section { margin-top: 18px; }.docker-section:first-of-type { margin-top: 0; }
-.docker-card { display: grid; align-content: start; gap: 10px; padding: 14px; background: white; border: 1px solid #e3e7ee; border-radius: 10px; }
-.docker-card-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
-.docker-card h2 { margin: 0 0 4px; font-size: 17px; color: #111827; overflow-wrap: anywhere; }
-.docker-container { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto minmax(150px, .7fr); gap: 8px; align-items: center; font-size: 13px; }
-.docker-container-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.docker-resource-status { min-width:0; overflow:hidden; color:#64748b; text-align:right; text-overflow:ellipsis; white-space:nowrap; }
-.docker-dot { width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; }.docker-dot.green { background:#22c55e; }.docker-dot.yellow { background:#f59e0b; }.docker-dot.red { background:#ef4444; }
-.docker-path { color: #64748b; font: 11px/1.4 "Cascadia Code", Consolas, monospace; overflow-wrap: anywhere; }
-.docker-readonly { color: #64748b; font-size: 12px; }.docker-actions { display:flex; align-items:flex-start; gap:5px; flex-wrap:nowrap; min-width:0; }.docker-actions .button { padding:5px 7px; }
-.docker-container-actions { display:flex; flex:0 0 auto; gap:3px; }.docker-container-actions .docker-action-group { min-width:0; }.docker-container-actions .docker-container-icon { width:24px; height:24px; padding:2px; font-size:13px; }
-.docker-action-group { display:flex; min-width:max-content; }.docker-action-group .button { border-radius:0; }.docker-action-group .button + .button { margin-left:-1px; }.docker-action-group .button:first-child { border-radius:7px 0 0 7px; }.docker-action-group .button:last-child { border-radius:0 7px 7px 0; }
-.docker-action-group .button:only-child { border-radius:7px; }
-.docker-action-lifecycle .button { background:#1f437f; border-color:#1f437f; color:#fff; }.docker-action-lifecycle .button + .button { border-left-color:#416399; }.docker-action-files .button, .docker-action-support .button { background:#fff; border-color:#d7dee8; color:#334155; }
-.docker-actions .button:disabled, .docker-container-actions .button:disabled { background:#eef2f7; border-color:#d7dee8; color:#94a3b8; cursor:default; opacity:1; }
-.docker-container-actions .docker-action-lifecycle .row-icon { background:transparent; border-color:transparent; color:#1f437f; }.docker-container-actions .docker-action-destructive .row-icon { background:transparent; border-color:transparent; color:#b91c1c; }.docker-container-actions .docker-action-support .row-icon { background:transparent; border-color:transparent; color:#475569; }.docker-container-actions .docker-container-icon:hover:not(:disabled) { background:#e9eff8; border-radius:6px; }.docker-container-actions .docker-container-icon:disabled { background:transparent; border-color:transparent; color:#94a3b8; opacity:.45; }
-.docker-busy { display:flex; align-items:center; gap:8px; color:#64748b; font-size:12px; font-weight:600; }.docker-busy .spinner { width:14px; height:14px; border-width:2px; }
-.docker-project-error { display:grid; gap:4px; padding:10px 12px; border:1px solid #fecaca; border-radius:8px; background:#fef2f2; color:#991b1b; font-size:12px; overflow-wrap:anywhere; }
-.docker-resource-row { min-height:42px; padding:7px 12px; border-bottom:1px solid #eef1f5; }
-.docker-resource-row:last-child { border-bottom:0; }
-.docker-resource-row .docker-container-name { max-width:38ch; }
-.docker-resource-actions { display:grid; grid-template-columns:108px 78px; gap:6px; justify-self:end; }.docker-resource-actions .button { width:100%; white-space:nowrap; }.docker-volume-storage { color:#64748b; font-size:11px; font-weight:600; }
-.docker-file-editor { width: 100%; min-height: 430px; resize: vertical; border: 1px solid #28374a; border-radius: 8px; padding: 12px; color: #d6e2f0; background: #0b1220; font: 13px/1.5 "Cascadia Code", Consolas, monospace; }
 .software-controller { display: flex; align-items: center; gap: 10px; min-height: 42px; margin-bottom: 12px; }
 .software-controller label { display: inline; color: #64748b; font-size: 12px; }
 .software-controller select { width: min(360px, 100%); padding: 7px 9px; font-size: 13px; }
@@ -280,9 +252,13 @@ h1 { margin: 0; font-size: 28px; color: var(--rp-text-strong); }
 .software-protected { color: #64748b; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .software-protected-action:disabled { background: #eef2f7; border-color: #d7dee8; color: #64748b; cursor: default; opacity: 1; }
 .software-package-row { display: grid; grid-template-columns: minmax(220px, 1.15fr) auto minmax(310px, 1.25fr) auto; gap: 20px; align-items: center; padding: 15px 18px; border-bottom: 1px solid #eef1f5; }
-.plugin-settings-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr)); align-items:start; gap:12px; min-width:0; }
-.plugin-settings-grid > p { grid-column:1 / -1; max-width:none; margin:0; white-space:normal; overflow-wrap:anywhere; }
-.plugin-setting-card { min-width:0; }
+.rp-masonry { columns:var(--rp-masonry-columns,2); column-gap:12px; }
+.rp-masonry > * { break-inside:avoid; margin-bottom:12px; }
+.plugin-settings-grid { --rp-masonry-columns:3; min-width:0; }
+.plugin-settings-grid > p { column-span:all; max-width:none; margin:0 0 12px; white-space:normal; overflow-wrap:anywhere; }
+.plugin-setting-card { display:grid; min-width:0; border:1px solid var(--rp-border); }
+@media (max-width:1200px) { .plugin-settings-grid { --rp-masonry-columns:2; } }
+@media (max-width:760px) { .plugin-settings-grid { --rp-masonry-columns:1; } }
 #settingsPage > .overview-section { margin-top:0; padding-bottom:24px; }
 #settingsPage .section-head { align-items:center; flex-wrap:wrap; }
 #settingsPage .section-head h2 { color:var(--rp-text-strong); font-size:18px; }
@@ -327,9 +303,6 @@ h1 { margin: 0; font-size: 28px; color: var(--rp-text-strong); }
 .software-loading strong { color: #334155; font-size: 15px; }
 .software-loading > span:last-child { font-size: 13px; }
 .terminal-dialog { width:min(1000px,calc(100vw - 32px)); }
-.docker-attach-pane { height:min(65vh,600px); min-height:360px; overflow:hidden; border:1px solid #28374a; border-radius:10px; padding:8px; background:#0b1220; }
-.docker-attach-pane .xterm { height:100%; }
-.docker-attach-pane .xterm-viewport { overflow-y:auto !important; }
 .button.danger { color: #b91c1c; background: #fff; border-color: #fecaca; }
 .button.danger:hover:not(:disabled) { background: #fef2f2; border-color: #fca5a5; }
 .spinner { width: 28px; height: 28px; border: 3px solid #cbd5e1; border-top-color: #2563eb; border-radius: 50%; animation: software-spin .8s linear infinite; }
@@ -482,25 +455,15 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 :root[data-theme="dark"] .software-protected-action:disabled { background: #29374c; border-color: #3a4b64; color: #aebdd0; }
 :root[data-theme="dark"] .software-loading { border-color: #3a4b64; color: #aebdd0; }
 :root[data-theme="dark"] .software-loading strong { color: #f8fafc; }
-:root[data-theme="dark"] .docker-card, :root[data-theme="dark"] .docker-volume-list { background:#172235; border-color:#29374c; }
 @media (max-width: 760px) {
   .run-history-layout { grid-template-columns: 1fr; }
   .run-history-log pre { min-height: 240px; }
 }
-:root[data-theme="dark"] .docker-card h2, :root[data-theme="dark"] .docker-container-name { color:#f8fafc; }
 :root[data-theme="dark"] .plugin-setting-info > strong { color:#f8fafc; }
 :root[data-theme="dark"] .plugin-setting-state { background:#29374c; color:#cbd5e1; }
 :root[data-theme="dark"] .plugin-setting-state.is-enabled { background:#14532d; color:#bbf7d0; }
 :root[data-theme="dark"] .plugin-setting-state.is-available { background:#1e3a8a; color:#bfdbfe; }
 :root[data-theme="dark"] .plugin-setting-state.is-incompatible, :root[data-theme="dark"] .plugin-setting-state.is-failed { background:#7f1d1d; color:#fecaca; }
-:root[data-theme="dark"] .docker-resource-status, :root[data-theme="dark"] .docker-path, :root[data-theme="dark"] .docker-readonly, :root[data-theme="dark"] .docker-volume-storage { color:#aebdd0; }
-:root[data-theme="dark"] .docker-busy { color:#aebdd0; }
-:root[data-theme="dark"] .docker-project-error { border-color:#7f1d1d; background:#3f171b; color:#fecaca; }
-:root[data-theme="dark"] .docker-action-lifecycle .button { background:#28538e; border-color:#3b6eae; color:#fff; }
-:root[data-theme="dark"] .docker-action-lifecycle .button + .button { border-left-color:#527ab4; }
-:root[data-theme="dark"] .docker-action-files .button, :root[data-theme="dark"] .docker-action-support .button { background:#172235; border-color:#3a4b64; color:#e5e7eb; }
-:root[data-theme="dark"] .docker-actions .button:disabled, :root[data-theme="dark"] .docker-container-actions .button:disabled { background:#29374c; border-color:#3a4b64; color:#7f91a9; }
-:root[data-theme="dark"] .docker-container-actions .docker-action-lifecycle .row-icon { background:transparent; border-color:transparent; color:#9ec5ff; }:root[data-theme="dark"] .docker-container-actions .docker-action-destructive .row-icon { background:transparent; border-color:transparent; color:#fca5a5; }:root[data-theme="dark"] .docker-container-actions .docker-action-support .row-icon { background:transparent; border-color:transparent; color:#cbd5e1; }:root[data-theme="dark"] .docker-container-actions .docker-container-icon:hover:not(:disabled) { background:#29374c; }:root[data-theme="dark"] .docker-container-actions .docker-container-icon:disabled { background:transparent; border-color:transparent; color:#7f91a9; }
 :root[data-theme="dark"] .spinner { border-color: #3a4b64; border-top-color: #60a5fa; }
 :root[data-theme="dark"] .warning { background: #342711; border-color: #8c6716; color: #fcd34d; }
 :root[data-theme="dark"] .form-error { background: #351d25; border-color: #7f3345; color: #fecaca; }
@@ -541,9 +504,6 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
   .software-package-row { grid-template-columns: 1fr auto; row-gap: 13px; }
   .software-package-meta { grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .software-package-row .row-actions { grid-column: 1 / -1; }
-  .docker-grid { grid-template-columns:1fr; }
-  .docker-container { grid-template-columns:10px minmax(0,1fr) auto; }
-  .docker-container .docker-resource-status { grid-column:2 / -1; text-align:left; }
   .storage-list-head { display: none; }
   .storage-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 7px; }
   .storage-row .storage-name { grid-column: 1 / -1; }

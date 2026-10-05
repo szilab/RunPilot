@@ -1,9 +1,11 @@
 # Backlog
 
-- **Migrate Docker next.** Build a dedicated Docker plugin with parity and
-  regression coverage, then remove the hidden legacy Docker core/UI code.
-- **Migrate Storage.** Move browsing and file operations to a plugin, then
+- **Migrate Storage next.** Move browsing and file operations to a plugin, then
   retire the hidden legacy Storage UI and backend after parity.
+- **Remove transitional Docker code after Storage migration.** Delete the legacy
+  Docker manager, HTTP handlers and attach endpoint once Storage and remaining
+  state migration dependencies are gone. Restore Docker-volume browsing from
+  the Docker plugin to the Storage plugin when both sides have stable contracts.
 - **Migrate Software.** Move provider management to a plugin before removing
   the hidden legacy Software UI and backend.
 - **Migrate Backup separately.** Preserve typed backup jobs and history until
