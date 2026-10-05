@@ -75,10 +75,22 @@ func TestProxyCompatibilityHeadersAtRootAndNestedBasePath(t *testing.T) {
 		{"/p/app", "X-Script-Name", "", "/p/app"},
 	} {
 		t.Run(test.prefix+"/"+test.header, func(t *testing.T) {
-			config := Config{UpstreamURL: server.URL, UpstreamBasePath: "/", PublicPrefix: test.prefix, BasePathHeader: test.header, ForwardPublicHost: true, ForwardPublicScheme: true, PublicHost: "public.example:8443", PublicScheme: "https"}
+			value := ""
+			if test.prefix == "/p/app" {
+				value = "/custom/base"
+			}
+			config := Config{UpstreamURL: server.URL, UpstreamBasePath: "/", PublicPrefix: test.prefix, BasePathHeader: test.header, BasePathHeaderValue: value, ForwardPublicHost: true, ForwardPublicScheme: true, PublicHost: "public.example:8443", PublicScheme: "https"}
 			response, body := openTunnelConfig(t, config).request("GET", test.prefix+"/headers", nil, nil)
 			var got map[string]string
-			if response.Status != 200 || json.Unmarshal(body, &got) != nil || got["host"] != "public.example:8443" || got["scheme"] != "https" || got["prefix"] != test.wantPrefix || got["script"] != test.wantScript {
+			wantPrefix, wantScript := test.wantPrefix, test.wantScript
+			if value != "" {
+				if test.header == "X-Forwarded-Prefix" {
+					wantPrefix = value
+				} else {
+					wantScript = value
+				}
+			}
+			if response.Status != 200 || json.Unmarshal(body, &got) != nil || got["host"] != "public.example:8443" || got["scheme"] != "https" || got["prefix"] != wantPrefix || got["script"] != wantScript {
 				t.Fatalf("headers = %s (%+v)", body, response)
 			}
 		})
@@ -369,7 +381,7 @@ func TestWebSocketTunnelAndProxyHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 	browser, host := net.Pipe()
-	config := Config{UpstreamURL: server.URL, UpstreamBasePath: "/app", PublicPrefix: "/p/app", BasePathHeader: "X-Forwarded-Prefix", ForwardPublicHost: true, ForwardPublicScheme: true, PublicHost: "public.example", PublicScheme: "https", CustomHeaders: http.Header{"X-Feature-Mode": {"safe"}}}
+	config := Config{UpstreamURL: server.URL, UpstreamBasePath: "/app", PublicPrefix: "/p/app", BasePathHeader: "X-Forwarded-Prefix", BasePathHeaderValue: "/custom/socket-base", ForwardPublicHost: true, ForwardPublicScheme: true, PublicHost: "public.example", PublicScheme: "https", CustomHeaders: http.Header{"X-Feature-Mode": {"safe"}}}
 	g, err := New(config, host)
 	if err != nil {
 		t.Fatal(err)
@@ -418,7 +430,7 @@ func TestWebSocketTunnelAndProxyHeaders(t *testing.T) {
 	}
 	select {
 	case got := <-seen:
-		if got.host != "public.example" || got.proto != "https" || got.prefix != "/p/app" || got.script != "" || got.custom != "safe" || got.origin != server.URL || got.path != "/app/socket?x=%2F" || got.protocol != "echo" || got.cookie != "webapp-session=secret-cookie" {
+		if got.host != "public.example" || got.proto != "https" || got.prefix != "/custom/socket-base" || got.script != "" || got.custom != "safe" || got.origin != server.URL || got.path != "/app/socket?x=%2F" || got.protocol != "echo" || got.cookie != "webapp-session=secret-cookie" {
 			t.Fatalf("upstream handshake = %+v", got)
 		}
 	case <-time.After(3 * time.Second):

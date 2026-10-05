@@ -73,7 +73,7 @@ func TestTargetCRUDAndSessionSnapshot(t *testing.T) {
 	h := &fakeHost{}
 	installHost(t, h)
 	p := newPlugin()
-	result, f := p.handle("apps.targets.save", json.RawMessage(`{"target":{"name":" Jellyfin ","mountPath":"/app/","upstreamURL":"http://localhost:8096/","upstreamBasePath":"/p/app/","basePathHeader":"X-Script-Name","forwardPublicHost":true,"forwardPublicScheme":true,"customHeaders":{"X-Compat":"yes"}}}`))
+	result, f := p.handle("apps.targets.save", json.RawMessage(`{"target":{"name":" Jellyfin ","mountPath":"/app/","upstreamURL":"http://localhost:8096/","upstreamBasePath":"/p/app/","basePathHeader":"X-Script-Name","basePathHeaderValue":" /custom/base ","forwardPublicHost":true,"forwardPublicScheme":true,"customHeaders":{"X-Compat":"yes"}}}`))
 	if f != nil {
 		t.Fatal(f)
 	}
@@ -97,7 +97,7 @@ func TestTargetCRUDAndSessionSnapshot(t *testing.T) {
 	if h.opened["upstreamURL"] != "http://localhost:8096" || h.opened["upstreamBasePath"] != "/p/app" || session.PublicPrefix != "/p/app" {
 		t.Fatal(h.opened, session)
 	}
-	if h.opened["basePathHeader"] != "X-Script-Name" || h.opened["forwardPublicHost"] != true || h.opened["forwardPublicScheme"] != true || h.opened["publicHost"] != "runpilot.example" || h.opened["publicScheme"] != "https" || h.opened["customHeaders"].(map[string]string)["X-Compat"] != "yes" {
+	if h.opened["basePathHeader"] != "X-Script-Name" || h.opened["basePathHeaderValue"] != "/custom/base" || h.opened["forwardPublicHost"] != true || h.opened["forwardPublicScheme"] != true || h.opened["publicHost"] != "runpilot.example" || h.opened["publicScheme"] != "https" || h.opened["customHeaders"].(map[string]string)["X-Compat"] != "yes" {
 		t.Fatal("proxy compatibility settings were not snapshotted into the gateway", h.opened)
 	}
 	for _, method := range []string{"apps.targets.delete", "apps.targets.save"} {
@@ -127,6 +127,18 @@ func TestTargetCRUDAndSessionSnapshot(t *testing.T) {
 	second.shutdown()
 	if len(h.publications) != 0 {
 		t.Fatal("shutdown registration leaked")
+	}
+}
+
+func TestBasePathHeaderValueValidation(t *testing.T) {
+	for _, test := range []struct {
+		name, header, value string
+		valid               bool
+	}{{"optional override", "X-Script-Name", "/custom", true}, {"without header", "", "/ignored", true}, {"line break", "X-Script-Name", "/app\r\nX-Evil: yes", false}, {"too long", "X-Script-Name", strings.Repeat("x", 1025), false}} {
+		_, failure := normalizeTarget(target{Name: "header", MountPath: "/header", UpstreamURL: "http://localhost", UpstreamBasePath: "/", BasePathHeader: test.header, BasePathHeaderValue: test.value})
+		if (failure == nil) != test.valid {
+			t.Fatalf("%s: failure = %v", test.name, failure)
+		}
 	}
 }
 func TestTargetValidationAndCollisions(t *testing.T) {

@@ -79,7 +79,7 @@ func (g *Gateway) acceptWebSocket(f Frame) error {
 			headers.Set("X-Forwarded-Proto", g.config.PublicScheme)
 		}
 		if g.config.BasePathHeader != "" {
-			headers.Set(g.config.BasePathHeader, g.config.PublicPrefix)
+			headers.Set(g.config.BasePathHeader, g.basePathHeaderValue())
 		}
 		cookieURL := *u
 		cookieURL.Scheme = g.upstream.Scheme

@@ -520,7 +520,9 @@ schemes, userinfo and same-upstream redirects outside the configured base fail.
 Hop-by-hop, proxy, browser cookie and forwarding headers are stripped. Optional
 compatibility settings regenerate `X-Forwarded-Host`, `X-Forwarded-Proto`, and
 one selected base-path header (`X-Forwarded-Prefix` or `X-Script-Name`) from the
-publication origin and prefix. Optional static custom headers are limited to 16
+publication origin and prefix. A plugin may supply an optional base-path header
+value override for upstreams that require a different value; an empty override
+uses the public mount path. Optional static custom headers are limited to 16
 names, 128 bytes per name, 1 KiB per value and 8 KiB combined. Invalid token
 names, CR/LF, hop-by-hop/routing/authentication/cookie/Proxy- headers, generated
 forwarding headers, and transport-managed `Accept-Encoding`, `Range` and

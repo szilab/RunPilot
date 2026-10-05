@@ -12,6 +12,15 @@
 .webapps-dialog h2 { margin: 0; color: var(--rp-text-strong); font-size: 19px; }
 .webapps-dialog label { display: grid; gap: 5px; color: var(--rp-text); font-size: 12px; }
 .webapps-dialog input { width: 100%; min-width: 0; }
+.webapps-dialog .webapps-advanced { min-width: 0; border: 1px solid var(--rp-border); border-radius: 10px; color: var(--rp-text); }
+.webapps-dialog .webapps-advanced > summary { padding: 10px 12px; color: var(--rp-text-strong); font-size: 12px; font-weight: 700; cursor: pointer; }
+.webapps-dialog .webapps-advanced[open] > summary { border-bottom: 1px solid var(--rp-border); }
+.webapps-dialog .webapps-advanced-content { display: grid; gap: 10px; padding: 12px; }
+.webapps-dialog .webapps-toggle { display: flex; align-items: center; gap: 9px; min-height: 26px; }
+.webapps-dialog .webapps-toggle input { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: var(--rp-accent); }
+.webapps-dialog label small { color: var(--rp-text-muted); font-size: 11px; font-weight: 400; }
+.webapps-dialog details summary { color: var(--rp-text-strong); cursor: pointer; }
+.webapps-dialog textarea { width: 100%; min-width: 0; color: var(--rp-text-strong); background: var(--rp-surface); border-color: var(--rp-border); }
 .webapps-dialog p { margin: 0; color: var(--rp-text-muted); font-size: 13px; }
 .webapps-dialog [data-error] { color: var(--rp-danger); }
 .webapps-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }

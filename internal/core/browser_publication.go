@@ -177,6 +177,7 @@ func (m *browserPublications) call(owner, base, method string, raw json.RawMessa
 			UpstreamURL         string            `json:"upstreamURL"`
 			UpstreamBasePath    string            `json:"upstreamBasePath"`
 			BasePathHeader      string            `json:"basePathHeader"`
+			BasePathHeaderValue string            `json:"basePathHeaderValue"`
 			ForwardPublicHost   bool              `json:"forwardPublicHost"`
 			ForwardPublicScheme bool              `json:"forwardPublicScheme"`
 			PublicHost          string            `json:"publicHost"`
@@ -204,7 +205,7 @@ func (m *browserPublications) call(owner, base, method string, raw json.RawMessa
 		for key, value := range in.CustomHeaders {
 			customHeaders.Set(key, value)
 		}
-		gateway, err := httpgateway.New(httpgateway.Config{UpstreamURL: in.UpstreamURL, UpstreamBasePath: in.UpstreamBasePath, PublicPrefix: browserpath.Join(base, p.MountPath), BasePathHeader: in.BasePathHeader, ForwardPublicHost: in.ForwardPublicHost, ForwardPublicScheme: in.ForwardPublicScheme, PublicHost: in.PublicHost, PublicScheme: in.PublicScheme, CustomHeaders: customHeaders}, host)
+		gateway, err := httpgateway.New(httpgateway.Config{UpstreamURL: in.UpstreamURL, UpstreamBasePath: in.UpstreamBasePath, PublicPrefix: browserpath.Join(base, p.MountPath), BasePathHeader: in.BasePathHeader, BasePathHeaderValue: in.BasePathHeaderValue, ForwardPublicHost: in.ForwardPublicHost, ForwardPublicScheme: in.ForwardPublicScheme, PublicHost: in.PublicHost, PublicScheme: in.PublicScheme, CustomHeaders: customHeaders}, host)
 		if err != nil {
 			_ = browser.Close()
 			_ = host.Close()

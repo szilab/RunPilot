@@ -32,15 +32,16 @@ func hostError(err error) *rpcError {
 }
 
 type target struct {
-	ID               string            `json:"id"`
-	Name             string            `json:"name"`
-	MountPath        string            `json:"mountPath"`
-	UpstreamURL      string            `json:"upstreamURL"`
-	UpstreamBasePath string            `json:"upstreamBasePath"`
-	BasePathHeader   string            `json:"basePathHeader,omitempty"`
-	ForwardHost      bool              `json:"forwardPublicHost,omitempty"`
-	ForwardScheme    bool              `json:"forwardPublicScheme,omitempty"`
-	CustomHeaders    map[string]string `json:"customHeaders,omitempty"`
+	ID                  string            `json:"id"`
+	Name                string            `json:"name"`
+	MountPath           string            `json:"mountPath"`
+	UpstreamURL         string            `json:"upstreamURL"`
+	UpstreamBasePath    string            `json:"upstreamBasePath"`
+	BasePathHeader      string            `json:"basePathHeader,omitempty"`
+	BasePathHeaderValue string            `json:"basePathHeaderValue,omitempty"`
+	ForwardHost         bool              `json:"forwardPublicHost,omitempty"`
+	ForwardScheme       bool              `json:"forwardPublicScheme,omitempty"`
+	CustomHeaders       map[string]string `json:"customHeaders,omitempty"`
 }
 type targetStore struct {
 	Version int      `json:"version"`
@@ -109,6 +110,12 @@ func normalizeTarget(t target) (target, *rpcError) {
 	}
 	if t.BasePathHeader != "" && t.BasePathHeader != "X-Forwarded-Prefix" && t.BasePathHeader != "X-Script-Name" {
 		return target{}, fail("invalid_argument", "unsupported base path header")
+	}
+	t.BasePathHeaderValue = strings.TrimSpace(t.BasePathHeaderValue)
+	if t.BasePathHeader == "" {
+		t.BasePathHeaderValue = ""
+	} else if len(t.BasePathHeaderValue) > 1024 || strings.ContainsAny(t.BasePathHeaderValue, "\r\n\x00") {
+		return target{}, fail("invalid_argument", "base path header value is invalid")
 	}
 	if len(t.CustomHeaders) > 16 {
 		return target{}, fail("invalid_argument", "at most 16 custom headers are allowed")
@@ -426,7 +433,7 @@ func (p *plugin) handle(method string, raw json.RawMessage) (any, *rpcError) {
 					return nil, f
 				}
 				var s session
-				if err := callHost("http.gateway.open", map[string]any{"publicationId": p.publications[t.ID], "upstreamURL": t.UpstreamURL, "upstreamBasePath": t.UpstreamBasePath, "basePathHeader": t.BasePathHeader, "forwardPublicHost": t.ForwardHost, "forwardPublicScheme": t.ForwardScheme, "customHeaders": t.CustomHeaders, "publicHost": q.PublicHost, "publicScheme": q.PublicScheme}, &s); err != nil {
+				if err := callHost("http.gateway.open", map[string]any{"publicationId": p.publications[t.ID], "upstreamURL": t.UpstreamURL, "upstreamBasePath": t.UpstreamBasePath, "basePathHeader": t.BasePathHeader, "basePathHeaderValue": t.BasePathHeaderValue, "forwardPublicHost": t.ForwardHost, "forwardPublicScheme": t.ForwardScheme, "customHeaders": t.CustomHeaders, "publicHost": q.PublicHost, "publicScheme": q.PublicScheme}, &s); err != nil {
 					return nil, hostError(err)
 				}
 				if s.ID == "" {

@@ -22,6 +22,7 @@ type Config struct {
 	UpstreamBasePath    string      `json:"upstreamBasePath"`
 	PublicPrefix        string      `json:"publicPrefix"`
 	BasePathHeader      string      `json:"basePathHeader,omitempty"`
+	BasePathHeaderValue string      `json:"basePathHeaderValue,omitempty"`
 	ForwardPublicHost   bool        `json:"forwardPublicHost,omitempty"`
 	ForwardPublicScheme bool        `json:"forwardPublicScheme,omitempty"`
 	PublicHost          string      `json:"publicHost,omitempty"`
@@ -92,6 +93,9 @@ func New(config Config, conn net.Conn) (*Gateway, error) {
 	}
 	if config.BasePathHeader != "" && config.BasePathHeader != "X-Forwarded-Prefix" && config.BasePathHeader != "X-Script-Name" {
 		return nil, errors.New("unsupported base path header")
+	}
+	if len(config.BasePathHeaderValue) > 1024 || strings.ContainsAny(config.BasePathHeaderValue, "\r\n\x00") {
+		return nil, errors.New("invalid base path header value")
 	}
 	if config.PublicHost != "" {
 		publicHost, err := url.Parse("//" + config.PublicHost)
@@ -169,6 +173,13 @@ func (g *Gateway) Close() {
 	}
 	g.mu.Unlock()
 	g.transport.CloseIdleConnections()
+}
+
+func (g *Gateway) basePathHeaderValue() string {
+	if g.config.BasePathHeaderValue != "" {
+		return g.config.BasePathHeaderValue
+	}
+	return g.config.PublicPrefix
 }
 func (g *Gateway) send(kind byte, id uint32, data []byte) error {
 	g.writeMu.Lock()
@@ -360,7 +371,7 @@ func (g *Gateway) accept(f Frame) error {
 			req.Header.Set("X-Forwarded-Proto", g.config.PublicScheme)
 		}
 		if g.config.BasePathHeader != "" {
-			req.Header.Set(g.config.BasePathHeader, g.config.PublicPrefix)
+			req.Header.Set(g.config.BasePathHeader, g.basePathHeaderValue())
 		}
 		g.wg.Add(2)
 		go func() {
