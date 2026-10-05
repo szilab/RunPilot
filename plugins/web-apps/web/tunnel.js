@@ -1,16 +1,16 @@
 (() => {
   const encoder = new TextEncoder(), decoder = new TextDecoder();
-  const CHUNK = 16384, WINDOW = 65536, MAX = 16;
+  const CHUNK = 16384, WINDOW = 65536, MAX = 16, MAX_WS = 16;
   function frame(type, id, data = new Uint8Array()) {
     const bytes = typeof data === "object" && !(data instanceof Uint8Array) ? encoder.encode(JSON.stringify(data)) : data;
     if (!id || bytes.length > CHUNK) throw new Error("Invalid HTTP tunnel frame");
     const out = new Uint8Array(10 + bytes.length), view = new DataView(out.buffer);
-    out[0] = 1; out[1] = type; view.setUint32(2, id); view.setUint32(6, bytes.length); out.set(bytes, 10); return out;
+    out[0] = 2; out[1] = type; view.setUint32(2, id); view.setUint32(6, bytes.length); out.set(bytes, 10); return out;
   }
   function credit(n) { const out = new Uint8Array(4); new DataView(out.buffer).setUint32(0, n); return out; }
   class HTTPGatewayTunnel {
     constructor(config, ticket, streamId) {
-      this.config = config; this.streamId = streamId; this.exchanges = new Map(); this.waiters = []; this.nextId = 1; this.buffer = new Uint8Array(); this.dead = false;
+      this.config = config; this.streamId = streamId; this.exchanges = new Map(); this.sockets = new Map(); this.waiters = []; this.nextId = 1; this.nextSocketId = 1; this.buffer = new Uint8Array(); this.dead = false;
       this.idBytes = encoder.encode(streamId);
       if (this.idBytes.length !== 32) throw new Error("Invalid stream ID");
       const url = new URL(config.basePath + "/api/v1/ws", location.origin);
@@ -54,9 +54,10 @@
       const buffer = new Uint8Array(this.buffer.length + bytes.length); buffer.set(this.buffer); buffer.set(bytes, this.buffer.length); this.buffer = buffer;
       while (this.buffer.length >= 10) {
         const view = new DataView(this.buffer.buffer, this.buffer.byteOffset), size = view.getUint32(6), id = view.getUint32(2), type = this.buffer[1];
-        if (this.buffer[0] !== 1 || size > CHUNK || !id) throw new Error("Invalid HTTP tunnel framing");
+        if (this.buffer[0] !== 2 || size > CHUNK || !id) throw new Error("Invalid HTTP tunnel framing");
         if (this.buffer.length < 10 + size) return;
         const data = this.buffer.slice(10, 10 + size); this.buffer = this.buffer.slice(10 + size);
+        if ((id & 0x80000000) !== 0) { this.receiveSocket(type, id, data); continue; }
         const exchange = this.exchanges.get(id); if (!exchange) continue;
         if (type === 9) {
           if (data.length !== 4) throw new Error("Invalid upload credit");
@@ -116,7 +117,7 @@
           this.waiters.push(waiter);
         });
       }
-      if (this.dead || this.nextId > 0xffffffff) throw new Error("Gateway unavailable or exchange limit reached");
+      if (this.dead || this.nextId > 0x7fffffff) throw new Error("Gateway unavailable or exchange limit reached");
       const id = this.nextId++, url = new URL(request.url);
       if (url.origin !== location.origin || !(url.pathname === this.config.publicPrefix || url.pathname.startsWith(this.config.publicPrefix + "/"))) throw new Error("Request outside gateway publication");
       const headers = {}; request.headers.forEach((value, key) => { headers[key] = [value]; });
@@ -166,10 +167,50 @@
       const error = new Error("HTTP exchange canceled"); exchange.reject(error); exchange.controller?.error(error);
       void this.send(4, id).catch(() => {}); this.finish(id);
     }
+    async openSocket(path, protocols, notify) {
+      await this.ready;
+      if (this.dead || this.sockets.size >= MAX_WS || this.nextSocketId >= 0x7fffffff) throw new Error("WebSocket gateway limit reached");
+      const id = (0x80000000 | this.nextSocketId++) >>> 0;
+      const socket = { notify, buffer: new Uint8Array(), opened: false };
+      const opened = new Promise((resolve, reject) => { socket.resolve = resolve; socket.reject = reject; socket.timer = setTimeout(() => reject(new Error("Upstream WebSocket timed out")), 30000); });
+      opened.catch(() => {}); this.sockets.set(id, socket);
+      try { await this.send(11, id, { path, protocols }); await opened; return id; }
+      catch (error) { this.sockets.delete(id); void this.send(15, id, { code: 1000, reason: "open failed" }).catch(() => {}); throw error; }
+    }
+    async sendSocket(id, data, binary) {
+      const socket = this.sockets.get(id); if (!socket || this.dead) throw new Error("WebSocket is closed");
+      const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+      for (let offset = 0; offset < bytes.length || (bytes.length === 0 && offset === 0);) {
+        const length = Math.min(CHUNK - 2, bytes.length - offset), final = offset + length === bytes.length;
+        const payload = new Uint8Array(length + 2); payload[0] = binary ? 2 : 1; payload[1] = final ? 1 : 0; payload.set(bytes.subarray(offset, offset + length), 2);
+        await this.send(binary ? 14 : 13, id, payload); offset += length; if (final) break;
+      }
+    }
+    async closeSocket(id, code, reason) {
+      const socket = this.sockets.get(id); if (!socket) return;
+      socket.closing = true; await this.send(15, id, { code: code || 1000, reason: reason || "" });
+    }
+    receiveSocket(type, id, data) {
+      const socket = this.sockets.get(id); if (!socket) return;
+      if (type === 12) {
+        if (socket.opened) throw new Error("Duplicate WebSocket open response");
+        const meta = JSON.parse(decoder.decode(data)); socket.opened = true; clearTimeout(socket.timer); socket.resolve(meta); socket.notify({ type: "open", protocol: meta.protocol || "" });
+        const initial = credit(WINDOW); void this.send(18, id, initial); return;
+      }
+      if (type === 17) { const error = new Error(decoder.decode(data) || "Upstream WebSocket failed"); clearTimeout(socket.timer); socket.reject(error); socket.notify({ type: "error", message: error.message }); this.sockets.delete(id); return; }
+      if (type === 16) { let close = {}; try { close = JSON.parse(decoder.decode(data)); } catch {} const code = close.code || 1006; socket.notify({ type: "close", code, reason: close.reason || "", wasClean: typeof close.wasClean === "boolean" ? close.wasClean : code !== 1006 }); this.sockets.delete(id); return; }
+      if (type !== 13 && type !== 14) throw new Error("Unknown WebSocket tunnel message");
+      if (data.length < 2 || data[0] !== (type === 13 ? 1 : 2) || data[1] > 1) throw new Error("Invalid WebSocket data frame");
+      const chunk = data.slice(2), buffer = new Uint8Array(socket.buffer.length + chunk.length); buffer.set(socket.buffer); buffer.set(chunk, socket.buffer.length); socket.buffer = buffer;
+      if (buffer.length > 1048576) throw new Error("WebSocket message limit exceeded");
+      if (chunk.length) void this.send(18, id, credit(chunk.length));
+      if (data[1] === 1) { socket.notify({ type: "message", data: type === 13 ? decoder.decode(buffer) : buffer.buffer, binary: type === 14 }); socket.buffer = new Uint8Array(); }
+    }
     fail(error) {
       if (this.dead) return; this.dead = true; this.rejectReady(error);
       for (const waiter of this.waiters.splice(0)) waiter.reject(error);
       for (const [id, exchange] of this.exchanges) { exchange.reject(error); exchange.controller?.error(error); this.finish(id); }
+      for (const [id, socket] of this.sockets) { clearTimeout(socket.timer); socket.reject(error); socket.notify({ type: "close", code: 1006, reason: "gateway disconnected", wasClean: false }); this.sockets.delete(id); }
       this.socket.close(1008, "gateway failed");
     }
     close() { this.fail(new Error("Gateway closed")); }

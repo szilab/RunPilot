@@ -11,10 +11,15 @@ function worker() {
   let sweep, now = 1000, alive = [];
   class Tunnel {
     constructor(config, ticket) { this.config = config; this.ready = Promise.resolve(); this.ticket = ticket; this.dead = false; tunnels.push(this); }
-    request(request) { return Promise.resolve(new Response(this.ticket.slice(0, 1) + ":" + new URL(request.url).pathname)); }
+    request(request) {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/document.html")) return Promise.resolve(new Response("<!doctype html><html><head><title>App</title><script>app()</script></head><body>ok</body></html>", { headers: { "Content-Type": "text/html", "Content-Length": "87", ETag: '"before"' } }));
+      if (path.endsWith("/large.html")) return Promise.resolve(new Response("x".repeat(70000) + "<head><title>late</title></head>", { headers: { "Content-Type": "text/html" } }));
+      return Promise.resolve(new Response(this.ticket.slice(0, 1) + ":" + path));
+    }
     close() { this.dead = true; }
   }
-  const context = { self: { RUNPILOT_BROWSER_RUNTIME: runtime, skipWaiting: async () => {}, addEventListener(type, handler) { listeners.set(type, handler); }, clients: { claim: async () => {}, matchAll: async () => alive.map(id => ({ id })) } }, importScripts() {}, HTTPGatewayTunnel: Tunnel, URL, Response, crypto: webcrypto, Uint8Array, btoa, caches, location: { origin: "https://host" }, Date: { now: () => now }, setInterval(callback) { sweep = callback; }, fetch: async input => {
+  const context = { self: { RUNPILOT_BROWSER_RUNTIME: runtime, skipWaiting: async () => {}, addEventListener(type, handler) { listeners.set(type, handler); }, clients: { claim: async () => {}, matchAll: async () => alive.map(id => ({ id })) } }, importScripts() {}, HTTPGatewayTunnel: Tunnel, URL, Response, Headers, ReadableStream, TextEncoder, TextDecoder, crypto: webcrypto, Uint8Array, btoa, caches, location: { origin: "https://host" }, Date: { now: () => now }, setInterval(callback) { sweep = callback; }, fetch: async input => {
     const path = typeof input === "string" ? input : new URL(input.url).pathname; network.push(path);
     if (path === runtime.publicationsURL) return online ? new Response(JSON.stringify(configs)) : new Response("expired", { status: 410 });
     if (path === runtime.assets + "bootstrap.html") return new Response('<h1>package bootstrap</h1><script>const config=__RUNPILOT_PUBLICATION__;</script>');
@@ -44,6 +49,14 @@ function worker() {
   assert.equal((await w.fetch(first.url, { resultingClientId: "replay" })).status, 410);
   assert.equal(await (await w.fetch("/p/app/web/", { resultingClientId: "first-app" })).text(), "f:/p/app/web/");
   assert.equal(await (await w.fetch("/p/app/image", { clientId: "first-app", mode: "cors" })).text(), "f:/p/app/image");
+  const injected = await w.fetch("/p/app/document.html", { clientId: "first-app" }); const injectedHTML = await injected.text();
+  assert.ok(injectedHTML.startsWith("<!doctype html>"), "document type remains first: " + injectedHTML.slice(0, 100));
+  assert.ok(injectedHTML.indexOf('<script src="/p/plugins/web.apps/web/websocket-shim.js"></script>') < injectedHTML.indexOf("app()"), "same-origin shim loads before application scripts");
+  assert.equal(injected.headers.get("content-length"), null); assert.equal(injected.headers.get("etag"), null);
+  const late = await w.fetch("/p/app/large.html", { clientId: "first-app" }); const lateHTML = await late.text();
+  assert.ok(lateHTML.startsWith("x".repeat(70000))); assert.ok(!lateHTML.includes("websocket-shim.js"), "injection stops at its bounded leading-document limit");
+  await w.fetch(runtime.assets + "websocket-shim.js", { clientId: "first-app", mode: "cors" });
+  assert.ok(w.network.includes(runtime.assets + "websocket-shim.js"), "RunPilot-owned shim script is served same-origin");
   assert.equal(await (await w.fetch("/p/app/login", { replacesClientId: "first-app", resultingClientId: "chrome-next" })).text(), "f:/p/app/login");
   assert.equal((await w.fetch("/p/router/", { clientId: "first-app" })).status, 403, "client escaped its snapshotted publication");
   const before = w.network.length;

@@ -13,6 +13,11 @@ web/plugin.css        # optional
 
 A plugin may provide a backend, GUI contributions, settings, or any useful combination. Feature pages and navigation entries belong to plugins rather than core.
 
+Before building a dedicated integration for an application with an existing
+capable web GUI, consider `web.apps` when secure access to that GUI is enough.
+Use a dedicated plugin when RunPilot needs structured control, automation, data
+integration, lifecycle management, or native UI beyond the existing GUI.
+
 ## Manifest and compatibility
 
 The manifest uses a versioned plugin API and declares metadata, compatibility and optional entry points. A plugin may support both Windows and Linux or only one platform. Incompatible plugins remain installed but are not activated.

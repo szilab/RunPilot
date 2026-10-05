@@ -2,6 +2,7 @@ package httpgateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -14,20 +15,27 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 type testTunnel struct {
-	t      *testing.T
-	conn   net.Conn
-	frames chan Frame
-	write  sync.Mutex
-	next   uint32
+	t       *testing.T
+	conn    net.Conn
+	frames  chan Frame
+	pending map[uint32][]Frame
+	write   sync.Mutex
+	next    uint32
 }
 
 func openTunnel(t *testing.T, server, public, upstream string) *testTunnel {
+	return openTunnelConfig(t, Config{UpstreamURL: server, UpstreamBasePath: upstream, PublicPrefix: public})
+}
+
+func openTunnelConfig(t *testing.T, config Config) *testTunnel {
 	t.Helper()
 	browser, host := net.Pipe()
-	g, err := New(Config{server, upstream, public}, host)
+	g, err := New(config, host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,6 +62,43 @@ func openTunnel(t *testing.T, server, public, upstream string) *testTunnel {
 	})
 	return c
 }
+
+func TestProxyCompatibilityHeadersAtRootAndNestedBasePath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"host": r.Header.Get("X-Forwarded-Host"), "scheme": r.Header.Get("X-Forwarded-Proto"), "prefix": r.Header.Get("X-Forwarded-Prefix"), "script": r.Header.Get("X-Script-Name")})
+	}))
+	defer server.Close()
+	for _, test := range []struct{ prefix, header, wantPrefix, wantScript string }{
+		{"/app", "X-Forwarded-Prefix", "/app", ""},
+		{"/p/app", "X-Forwarded-Prefix", "/p/app", ""},
+		{"/app", "X-Script-Name", "", "/app"},
+		{"/p/app", "X-Script-Name", "", "/p/app"},
+	} {
+		t.Run(test.prefix+"/"+test.header, func(t *testing.T) {
+			config := Config{UpstreamURL: server.URL, UpstreamBasePath: "/", PublicPrefix: test.prefix, BasePathHeader: test.header, ForwardPublicHost: true, ForwardPublicScheme: true, PublicHost: "public.example:8443", PublicScheme: "https"}
+			response, body := openTunnelConfig(t, config).request("GET", test.prefix+"/headers", nil, nil)
+			var got map[string]string
+			if response.Status != 200 || json.Unmarshal(body, &got) != nil || got["host"] != "public.example:8443" || got["scheme"] != "https" || got["prefix"] != test.wantPrefix || got["script"] != test.wantScript {
+				t.Fatalf("headers = %s (%+v)", body, response)
+			}
+		})
+	}
+}
+
+func TestCustomHeaderValidation(t *testing.T) {
+	for _, name := range []string{"Host", "Content-Length", "Transfer-Encoding", "Connection", "Upgrade", "Cookie", "Set-Cookie", "Authorization", "Proxy-Authorization", "Proxy-Thing", "X-Forwarded-Host", "X-Forwarded-Prefix", "Origin", "Accept-Encoding", "Range", "Sec-WebSocket-Protocol", "Bad Header"} {
+		browser, host := net.Pipe()
+		_, err := New(Config{UpstreamURL: "http://localhost", UpstreamBasePath: "/", PublicPrefix: "/app", CustomHeaders: http.Header{name: {"x"}}}, host)
+		_ = browser.Close()
+		_ = host.Close()
+		if err == nil {
+			t.Fatalf("accepted forbidden custom header %q", name)
+		}
+	}
+	if err := validateCustomHeaders(http.Header{"X-Site-Mode": {"compat"}}); err != nil {
+		t.Fatal(err)
+	}
+}
 func (c *testTunnel) send(kind byte, id uint32, data []byte) {
 	c.t.Helper()
 	c.write.Lock()
@@ -75,6 +120,24 @@ func (c *testTunnel) nextFrame() Frame {
 		c.t.Fatal("gateway timed out")
 	}
 	return Frame{}
+}
+func (c *testTunnel) nextFrameFor(id uint32) Frame {
+	c.t.Helper()
+	if pending := c.pending[id]; len(pending) > 0 {
+		frame := pending[0]
+		c.pending[id] = pending[1:]
+		return frame
+	}
+	for {
+		frame := c.nextFrame()
+		if frame.ID == id {
+			return frame
+		}
+		if c.pending == nil {
+			c.pending = map[uint32][]Frame{}
+		}
+		c.pending[frame.ID] = append(c.pending[frame.ID], frame)
+	}
 }
 func (c *testTunnel) request(method, path string, headers http.Header, body []byte) (Response, []byte) {
 	c.t.Helper()
@@ -114,10 +177,7 @@ func (c *testTunnel) request(method, path string, headers http.Header, body []by
 	var result bytes.Buffer
 	defer func() { close(stop); <-uploaded }()
 	for {
-		f := c.nextFrame()
-		if f.ID != id {
-			c.t.Fatal("incorrect correlation")
-		}
+		f := c.nextFrameFor(id)
 		switch f.Type {
 		case UploadCredit:
 			select {
@@ -248,7 +308,7 @@ func TestRoutingHTTPAndCookies(t *testing.T) {
 func TestMappingAndRedirectValidation(t *testing.T) {
 	browser, host := net.Pipe()
 	defer browser.Close()
-	g, err := New(Config{"http://localhost:1234", "/app", "/p/app"}, host)
+	g, err := New(Config{UpstreamURL: "http://localhost:1234", UpstreamBasePath: "/app", PublicPrefix: "/p/app"}, host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,6 +339,128 @@ func TestMappingAndRedirectValidation(t *testing.T) {
 	headers, e := safeHeaders(http.Header{"connection": {"X-Hidden"}, "x-hidden": {"secret"}, "proxy-authorization": {"secret"}, "upgrade": {"websocket"}, "authorization": {"Bearer app-token"}}, true)
 	if e != nil || headers.Get("X-Hidden") != "" || headers.Get("Upgrade") != "" || headers.Get("Proxy-Authorization") != "" || headers.Get("Authorization") != "Bearer app-token" {
 		t.Fatal(headers, e)
+	}
+}
+
+func TestWebSocketTunnelAndProxyHeaders(t *testing.T) {
+	type observed struct{ host, proto, prefix, script, custom, origin, path, protocol, cookie string }
+	seen := make(chan observed, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/app/login" {
+			http.SetCookie(w, &http.Cookie{Name: "webapp-session", Value: "secret-cookie", Path: "/app", HttpOnly: true})
+			_, _ = io.WriteString(w, "ok")
+			return
+		}
+		if r.URL.Path != "/app/socket" {
+			http.NotFound(w, r)
+			return
+		}
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"echo"}})
+		if err != nil {
+			return
+		}
+		seen <- observed{r.Header.Get("X-Forwarded-Host"), r.Header.Get("X-Forwarded-Proto"), r.Header.Get("X-Forwarded-Prefix"), r.Header.Get("X-Script-Name"), r.Header.Get("X-Feature-Mode"), r.Header.Get("Origin"), r.URL.RequestURI(), conn.Subprotocol(), r.Header.Get("Cookie")}
+		ctx := context.Background()
+		kind, data, err := conn.Read(ctx)
+		if err == nil {
+			_ = conn.Write(ctx, kind, data)
+		}
+		_ = conn.Close(websocket.StatusNormalClosure, "finished")
+	}))
+	defer server.Close()
+	browser, host := net.Pipe()
+	config := Config{UpstreamURL: server.URL, UpstreamBasePath: "/app", PublicPrefix: "/p/app", BasePathHeader: "X-Forwarded-Prefix", ForwardPublicHost: true, ForwardPublicScheme: true, PublicHost: "public.example", PublicScheme: "https", CustomHeaders: http.Header{"X-Feature-Mode": {"safe"}}}
+	g, err := New(config, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { g.Serve(); close(done) }()
+	c := &testTunnel{t: t, conn: browser, frames: make(chan Frame, 32)}
+	go func() {
+		defer close(c.frames)
+		for {
+			frame, err := ReadFrame(browser)
+			if err != nil {
+				return
+			}
+			c.frames <- frame
+		}
+	}()
+	t.Cleanup(func() {
+		_ = browser.Close()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("WebSocket gateway did not close")
+		}
+	})
+	login, _ := c.request("GET", "/p/app/login", nil, nil)
+	if login.Headers.Get("Set-Cookie") != "" {
+		t.Fatal("upstream cookie escaped into synthetic browser response")
+	}
+	id := WebSocketIDMask | 1
+	open, _ := json.Marshal(webSocketOpen{Path: "/p/app/socket?x=%2F", Protocols: []string{"echo"}})
+	c.send(WebSocketOpen, id, open)
+	opened := c.nextFrame()
+	if opened.Type != WebSocketOpened || opened.ID != id || !strings.Contains(string(opened.Data), `"protocol":"echo"`) {
+		t.Fatal(opened)
+	}
+	c.send(WebSocketCredit, id, Credit(WebSocketWindow))
+	c.send(WebSocketText, id, []byte{byte(websocket.MessageText), 1, 'h', 'e', 'l', 'l', 'o'})
+	echo := c.nextFrame()
+	if echo.Type != WebSocketText || echo.ID != id || string(echo.Data[2:]) != "hello" || echo.Data[1] != 1 {
+		t.Fatal(echo)
+	}
+	concurrentHTTP, _ := c.request("GET", "/p/app/unrelated", nil, nil)
+	if concurrentHTTP.Status != http.StatusNotFound {
+		t.Fatalf("HTTP exchange failed while WebSocket was active: %+v", concurrentHTTP)
+	}
+	select {
+	case got := <-seen:
+		if got.host != "public.example" || got.proto != "https" || got.prefix != "/p/app" || got.script != "" || got.custom != "safe" || got.origin != server.URL || got.path != "/app/socket?x=%2F" || got.protocol != "echo" || got.cookie != "webapp-session=secret-cookie" {
+			t.Fatalf("upstream handshake = %+v", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("upstream did not receive WebSocket handshake")
+	}
+	closeInfo, _ := json.Marshal(map[string]any{"code": 1000, "reason": "done"})
+	c.send(WebSocketClose, id, closeInfo)
+	got := c.nextFrameFor(id)
+	if got.Type != WebSocketClosed || got.ID != id {
+		t.Fatal("WebSocket close was not propagated", got)
+	}
+	var closeMetadata map[string]any
+	if json.Unmarshal(got.Data, &closeMetadata) != nil || closeMetadata["code"] != float64(1000) || closeMetadata["reason"] != "finished" || closeMetadata["wasClean"] != true {
+		t.Fatalf("upstream close metadata not propagated: %s", got.Data)
+	}
+	second := openTunnelConfig(t, Config{UpstreamURL: server.URL, UpstreamBasePath: "/app", PublicPrefix: "/p/app"})
+	second.send(WebSocketOpen, WebSocketIDMask|1, open)
+	if got := second.nextFrame(); got.Type != WebSocketOpened {
+		t.Fatal("second gateway WebSocket did not open", got)
+	}
+	select {
+	case got := <-seen:
+		if got.cookie != "" {
+			t.Fatalf("WebSocket cookie leaked across gateway sessions: %q", got.cookie)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("second WebSocket handshake was not observed")
+	}
+	secondClose, _ := json.Marshal(map[string]any{"code": 1000, "reason": "done"})
+	second.send(WebSocketClose, WebSocketIDMask|1, secondClose)
+	badID := WebSocketIDMask | 2
+	badOpen, _ := json.Marshal(webSocketOpen{Path: "//attacker.example/socket"})
+	c.send(WebSocketOpen, badID, badOpen)
+	if got := c.nextFrame(); got.Type != WebSocketError || got.ID != badID {
+		t.Fatal("out-of-publication WebSocket path not rejected", got)
+	}
+	response, _ := c.request("GET", "/p/app/unrelated", nil, nil)
+	if response.Status != http.StatusNotFound {
+		t.Fatalf("unrelated HTTP exchange failed after WS rejection: %+v", response)
+	}
+	if _, err := g.mapURL("//attacker.example/socket"); err == nil {
+		t.Fatal("arbitrary WebSocket host path accepted")
 	}
 }
 func TestStreamingBackpressureCancellationAndClose(t *testing.T) {
@@ -491,7 +673,7 @@ func TestFrameSizeAndVersionBounds(t *testing.T) {
 func TestEscapedFrameworkAndUpstreamPrefixes(t *testing.T) {
 	browser, host := net.Pipe()
 	defer browser.Close()
-	g, err := New(Config{"http://localhost:1234", "/上游 base", "/tenant space/应用/app"}, host)
+	g, err := New(Config{UpstreamURL: "http://localhost:1234", UpstreamBasePath: "/上游 base", PublicPrefix: "/tenant space/应用/app"}, host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +691,7 @@ func TestEscapedFrameworkAndUpstreamPrefixes(t *testing.T) {
 func TestRedirectOriginUsesDefaultPortSemantics(t *testing.T) {
 	for _, upstream := range []string{"http://example.test:80", "https://example.test:443"} {
 		browser, host := net.Pipe()
-		g, err := New(Config{upstream, "/app", "/p/app"}, host)
+		g, err := New(Config{UpstreamURL: upstream, UpstreamBasePath: "/app", PublicPrefix: "/p/app"}, host)
 		if err != nil {
 			t.Fatal(err)
 		}

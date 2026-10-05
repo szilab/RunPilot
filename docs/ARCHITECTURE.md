@@ -235,10 +235,11 @@ implemented, rather than by expanding the System fixture now.
 - Keep themes non-executable; a future theme package should be CSS/metadata, not
   another WASM plugin.
 
-### Web Apps transport proof
+### Web Apps
 
-The unpublished `web.apps` 0.1.2 ABI-v2 plugin owns target CRUD, persisted target
-configuration and its browser UI. It motivated reusable browser publication,
+The unpublished `web.apps` 0.2.0 ABI-v2 plugin is a working first-party
+capability. It owns target CRUD, persisted target configuration and its browser
+UI, and established reusable browser publication,
 restricted stream ticket and native Go HTTP gateway capabilities; core owns no
 application-specific target behavior. Restricted browser publications bootstrap
 from the RunPilot base URL using a fragment and transition to their virtual path
@@ -246,11 +247,17 @@ only after a basePath-scoped worker has taken control. The generic root hook
 bypasses management authentication/initialization for these tabs. One owner-bound
 browser runtime shares that worker across explicitly bound client sessions;
 normal management clients retain ordinary networking. The plugin renders HTTP
-applications locally through synthetic streaming responses. All
-upstream application payload crosses the encrypted common application WebSocket,
-including when normal RunPilot payload encryption is disabled. HTTPS serves
+applications locally through synthetic streaming responses. Upstream application
+HTTP and WebSocket payload crosses the restricted, payload-encrypted common
+application WebSocket, including when normal RunPilot payload encryption is
+disabled. Root-fragment bootstrap supports deployment through URL-sensitive
+proxies and security gateways. HTTPS serves
 package bootstrap/worker assets only. Target tabs receive only a single gateway
 capability; normal RunPilot bearer credentials migrate from localStorage into
-tab-scoped sessionStorage and target tabs launch with `noopener`. Phase 1 requires
-relative URLs or compatible application base paths, with no body rewriting or
-upstream application WebSockets; follow-up compatibility work is in the backlog.
+tab-scoped sessionStorage and target tabs launch with `noopener`. Web Apps can
+avoid a dedicated integration when secure access to an application's existing
+GUI is sufficient; dedicated plugins remain appropriate for structured
+automation and control. RunPilot's own `basePath` remains supported. Arbitrary
+nested application base paths are best effort; relative URLs, native base URL
+settings and standard proxy headers are the intended compatibility model.
+Response-body URL rewriting is an intentional boundary.

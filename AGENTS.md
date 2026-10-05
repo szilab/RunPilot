@@ -16,6 +16,16 @@ architecture description elsewhere.
   implementation. Remove legacy code only after plugin parity and tests.
 - New feature semantics belong in plugins, not in core. Core may expose narrow,
   reusable host capabilities.
+- Before building a dedicated integration for an application with a capable web
+  GUI, consider `web.apps` when secure access to that GUI is sufficient.
+  Dedicated plugins fit structured control, automation, data integration,
+  lifecycle management, or RunPilot-native behavior beyond the existing UI.
+- Keep Web Apps compatibility generic: prefer HTTP, WebSocket and reverse-proxy
+  standards over per-application hacks. RunPilot's own configured `basePath`
+  remains supported at `/` and nested prefixes. Compatibility for proxied apps
+  below paths such as `/p/app` is best effort; do not spend substantial time on
+  it unless that exact application/path is requested. Do not add response-body
+  URL rewriting for arbitrary apps.
 - Backend contracts and host capabilities are intentionally extensible. When a
   plugin needs functionality that existing capabilities cannot correctly
   provide, first design a new reusable host capability. A capability is

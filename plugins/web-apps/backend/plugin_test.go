@@ -73,7 +73,7 @@ func TestTargetCRUDAndSessionSnapshot(t *testing.T) {
 	h := &fakeHost{}
 	installHost(t, h)
 	p := newPlugin()
-	result, f := p.handle("apps.targets.save", json.RawMessage(`{"target":{"name":" Jellyfin ","mountPath":"/app/","upstreamURL":"http://localhost:8096/","upstreamBasePath":"/p/app/"}}`))
+	result, f := p.handle("apps.targets.save", json.RawMessage(`{"target":{"name":" Jellyfin ","mountPath":"/app/","upstreamURL":"http://localhost:8096/","upstreamBasePath":"/p/app/","basePathHeader":"X-Script-Name","forwardPublicHost":true,"forwardPublicScheme":true,"customHeaders":{"X-Compat":"yes"}}}`))
 	if f != nil {
 		t.Fatal(f)
 	}
@@ -89,13 +89,16 @@ func TestTargetCRUDAndSessionSnapshot(t *testing.T) {
 	if f != nil || len(list.(map[string]any)["targets"].([]target)) != 1 {
 		t.Fatal(list, f)
 	}
-	opened, f := p.handle("apps.session.open", json.RawMessage(`{"targetId":"app-1"}`))
+	opened, f := p.handle("apps.session.open", json.RawMessage(`{"targetId":"app-1","publicHost":"runpilot.example","publicScheme":"https"}`))
 	if f != nil {
 		t.Fatal(f)
 	}
 	session := opened.(map[string]any)["session"].(session)
 	if h.opened["upstreamURL"] != "http://localhost:8096" || h.opened["upstreamBasePath"] != "/p/app" || session.PublicPrefix != "/p/app" {
 		t.Fatal(h.opened, session)
+	}
+	if h.opened["basePathHeader"] != "X-Script-Name" || h.opened["forwardPublicHost"] != true || h.opened["forwardPublicScheme"] != true || h.opened["publicHost"] != "runpilot.example" || h.opened["publicScheme"] != "https" || h.opened["customHeaders"].(map[string]string)["X-Compat"] != "yes" {
+		t.Fatal("proxy compatibility settings were not snapshotted into the gateway", h.opened)
 	}
 	for _, method := range []string{"apps.targets.delete", "apps.targets.save"} {
 		request := `{"id":"app-1"}`
@@ -153,6 +156,17 @@ func TestTargetValidationAndCollisions(t *testing.T) {
 		if _, f := normalizeTarget(target{Name: name, MountPath: "/app", UpstreamURL: "http://host"}); f == nil {
 			t.Fatal("invalid name")
 		}
+	}
+	for _, headers := range []map[string]string{
+		{"Authorization": "Bearer secret"}, {"Cookie": "session=secret"}, {"Proxy-Authorization": "secret"},
+		{"X-Forwarded-Host": "evil.example"}, {"Connection": "close"}, {"Accept-Encoding": "br"}, {"Range": "bytes=1-2"}, {"Bad Header": "x"}, {"X-Okay": "bad\r\nvalue"},
+	} {
+		if _, f := normalizeTarget(target{Name: "headers", MountPath: "/headers", UpstreamURL: "http://host", CustomHeaders: headers}); f == nil {
+			t.Fatalf("accepted unsafe custom headers: %#v", headers)
+		}
+	}
+	if _, f := normalizeTarget(target{Name: "headers", MountPath: "/headers", UpstreamURL: "http://host", BasePathHeader: "X-Script-Name", ForwardHost: true, ForwardScheme: true, CustomHeaders: map[string]string{"X-Compat": "yes"}}); f != nil {
+		t.Fatal("valid generic proxy configuration rejected", f)
 	}
 	if _, f := p.handle("apps.targets.save", json.RawMessage(`{"target":{"name":"first","mountPath":"/app","upstreamURL":"http://host"}}`)); f != nil {
 		t.Fatal(f)

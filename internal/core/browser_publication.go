@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net"
+	"net/http"
 	"path"
 	"strings"
 	"sync"
@@ -172,9 +173,15 @@ func (m *browserPublications) call(owner, base, method string, raw json.RawMessa
 		return json.RawMessage(`{}`), nil
 	case "http.gateway.open":
 		var in struct {
-			PublicationID    string `json:"publicationId"`
-			UpstreamURL      string `json:"upstreamURL"`
-			UpstreamBasePath string `json:"upstreamBasePath"`
+			PublicationID       string            `json:"publicationId"`
+			UpstreamURL         string            `json:"upstreamURL"`
+			UpstreamBasePath    string            `json:"upstreamBasePath"`
+			BasePathHeader      string            `json:"basePathHeader"`
+			ForwardPublicHost   bool              `json:"forwardPublicHost"`
+			ForwardPublicScheme bool              `json:"forwardPublicScheme"`
+			PublicHost          string            `json:"publicHost"`
+			PublicScheme        string            `json:"publicScheme"`
+			CustomHeaders       map[string]string `json:"customHeaders"`
 		}
 		if decodeNetworkParams(raw, &in) != nil {
 			return nil, networkInvalid("invalid gateway request")
@@ -193,7 +200,11 @@ func (m *browserPublications) call(owner, base, method string, raw json.RawMessa
 			return nil, &plugins.HostFailure{Code: "resource_limit", Message: "HTTP gateway limit reached"}
 		}
 		browser, host := net.Pipe()
-		gateway, err := httpgateway.New(httpgateway.Config{UpstreamURL: in.UpstreamURL, UpstreamBasePath: in.UpstreamBasePath, PublicPrefix: browserpath.Join(base, p.MountPath)}, host)
+		customHeaders := make(http.Header, len(in.CustomHeaders))
+		for key, value := range in.CustomHeaders {
+			customHeaders.Set(key, value)
+		}
+		gateway, err := httpgateway.New(httpgateway.Config{UpstreamURL: in.UpstreamURL, UpstreamBasePath: in.UpstreamBasePath, PublicPrefix: browserpath.Join(base, p.MountPath), BasePathHeader: in.BasePathHeader, ForwardPublicHost: in.ForwardPublicHost, ForwardPublicScheme: in.ForwardPublicScheme, PublicHost: in.PublicHost, PublicScheme: in.PublicScheme, CustomHeaders: customHeaders}, host)
 		if err != nil {
 			_ = browser.Close()
 			_ = host.Close()

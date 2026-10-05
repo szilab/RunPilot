@@ -46,6 +46,29 @@ self.addEventListener("activate", event => event.waitUntil((async () => {
   for (const key of await caches.keys()) if (key.startsWith(cachePrefix) && key !== cacheName) await caches.delete(key);
 })()));
 self.addEventListener("message", event => {
+  if (event.data?.type === "websocket.open") {
+    event.waitUntil((async () => {
+      const client = event.source, port = event.ports[0];
+      let tunnel, socketId;
+      try {
+        await routingReady;
+        tunnel = sessions.get(client.id);
+        if (!tunnel || tunnel.dead || !port || typeof event.data.url !== "string" || !Array.isArray(event.data.protocols) || event.data.protocols.length > 16) throw new Error("WebSocket publication is not bound to this client");
+        const url = new URL(event.data.url, client.url), prefix = tunnel.config.publicPrefix;
+        if ((url.protocol !== "ws:" && url.protocol !== "wss:") || url.host !== location.host || url.username || url.password || !(url.pathname === prefix || url.pathname.startsWith(prefix + "/"))) throw new Error("WebSocket URL is outside this publication");
+        socketId = await tunnel.openSocket(url.pathname + url.search, event.data.protocols, message => port.postMessage(message));
+        port.postMessage({ type: "ready" });
+        port.onmessage = async ({ data }) => {
+          try {
+            if (data?.type === "send") { await tunnel.sendSocket(socketId, data.data, !!data.binary); port.postMessage({ type: "drain", amount: data.amount }); }
+            else if (data?.type === "close") { await tunnel.closeSocket(socketId, data.code, data.reason); port.close(); }
+          } catch (error) { port.postMessage({ type: "error", message: error.message }); }
+        };
+        port.start();
+      } catch (error) { port?.postMessage({ type: "error", message: error.message || "WebSocket gateway failed" }); port?.close(); }
+    })());
+    return;
+  }
   if (!["gateway.initialize", "gateway.resume"].includes(event.data?.type)) return;
   event.waitUntil((async () => {
     const client = event.source, port = event.ports[0];
@@ -95,9 +118,14 @@ self.addEventListener("fetch", event => {
     event.respondWith((async () => {
       if (tunnel.dead) return new Response("Gateway expired. Open this Web App again from RunPilot.", { status: 502 });
       const prefix = tunnel.config.publicPrefix;
+      if (url.pathname === runtime.assets + "websocket-shim.js") return fetch(event.request);
       if (!(url.pathname === prefix || url.pathname.startsWith(prefix + "/"))) return new Response("Request outside gateway publication", { status: 403 });
       if (event.resultingClientId) bindNavigation(event.resultingClientId, tunnel);
-      try { return await tunnel.request(event.request); }
+      try {
+        const response = await tunnel.request(event.request);
+        if (event.request.mode === "navigate" && /text\/html\b/i.test(response.headers.get("content-type") || "")) return await injectWebSocketShim(response);
+        return response;
+      }
       catch (error) { return new Response(error.message || "Encrypted gateway failed", { status: 502, headers: { "Content-Type": "text/plain" } }); }
     })()); return;
   }
@@ -112,6 +140,47 @@ self.addEventListener("fetch", event => {
     catch { return new Response("Gateway expired. Open this Web App again from RunPilot.", { status: 503 }); }
   })());
 });
+
+async function injectWebSocketShim(response) {
+  if (!response.body || [204, 205, 304].includes(response.status)) return response;
+  const reader = response.body.getReader(), chunks = [], limit = 65536;
+  let size = 0, injectionPoint = -1, buffered = new Uint8Array();
+  const encoder = new TextEncoder();
+  while (size <= limit) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    chunks.push(value); size += value.length;
+    const merged = new Uint8Array(buffered.length + value.length); merged.set(buffered); merged.set(value, buffered.length); buffered = merged;
+    // Latin-1 preserves byte offsets while locating ASCII markup tokens even
+    // when an upstream document uses a legacy character encoding.
+    const text = new TextDecoder("latin1").decode(buffered);
+    const head = /<head(?:\s[^>]*)?>/i.exec(text);
+    if (head) {
+      const offset = head.index + head[0].length;
+      if (offset <= limit) injectionPoint = offset;
+      break;
+    }
+    if (/<body(?:\s|>)/i.test(text) || size > limit) break;
+  }
+  const prefix = new Uint8Array(Math.min(injectionPoint < 0 ? size : injectionPoint, size));
+  let at = 0; for (const chunk of chunks) { const take = Math.min(chunk.length, prefix.length - at); if (take > 0) { prefix.set(chunk.subarray(0, take), at); at += take; } }
+  let remainder = [];
+  if (injectionPoint >= 0) {
+    let skipped = injectionPoint;
+    for (const chunk of chunks) { if (skipped >= chunk.length) { skipped -= chunk.length; continue; } remainder.push(chunk.subarray(skipped)); skipped = 0; }
+  } else remainder = [];
+  const script = injectionPoint >= 0 ? encoder.encode(`<script src="${runtime.assets}websocket-shim.js"></script>`) : new Uint8Array();
+  const body = new ReadableStream({ async pull(controller) {
+    if (!this.prefixSent) { this.prefixSent = true; if (prefix.length) controller.enqueue(prefix); if (script.length) controller.enqueue(script); return; }
+    if (remainder.length) { const chunk = remainder.shift(); if (chunk.length) { controller.enqueue(chunk); return; } }
+    const { value, done } = await reader.read(); if (done) controller.close(); else controller.enqueue(value);
+  }, cancel(reason) { return reader.cancel(reason); } });
+  const headers = new Headers(response.headers);
+  if (injectionPoint >= 0) {
+    for (const name of ["content-length", "etag", "last-modified", "content-md5", "digest", "content-digest", "repr-digest"]) headers.delete(name);
+  }
+  return new Response(body, { status: response.status, statusText: response.statusText, headers });
+}
 setInterval(async () => {
   for (const [key, handoff] of handoffs) if (handoff.expires <= Date.now() || handoff.tunnel.dead) handoffs.delete(key);
   const clients = await self.clients.matchAll(), alive = new Set(clients.map(client => client.id));

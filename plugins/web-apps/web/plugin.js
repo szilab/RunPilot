@@ -23,11 +23,24 @@ export async function activate(runpilot) {
   function edit(existing = {}) {
     const dialog = document.createElement("dialog"); dialog.className = "dialog webapps-dialog";
     const field = (label, name, fallback = "") => `<label><span>${label}</span><input name="${name}" value="${escape(existing[name] || fallback)}" maxlength="${name === "name" ? 100 : name === "upstreamURL" ? 2048 : 1024}" required></label>`;
-    dialog.innerHTML = `<form method="dialog"><div class="dialog-head"><h2>${existing.id ? "Edit Web App" : "Add Web App"}</h2></div>${field("Name", "name")}${field("Mount path", "mountPath", "/app")}${field("Upstream HTTP(S) origin", "upstreamURL", "http://127.0.0.1:8080")}${field("Upstream base path", "upstreamBasePath", "/")}<p>Use relative application URLs or configure the application's base path to match the public path. Application WebSockets and JavaScript-visible server cookies are not supported in Phase 1.</p><p data-error role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-cancel>Cancel</button><button type="submit" class="button primary">Save</button></div></form>`;
+    const customHeaders = Object.entries(existing.customHeaders || {}).map(([key, value]) => `${key}: ${value}`).join("\n");
+    dialog.innerHTML = `<form method="dialog"><div class="dialog-head"><h2>${existing.id ? "Edit Web App" : "Add Web App"}</h2></div>${field("Name", "name")}${field("Mount path", "mountPath", "/app")}${field("Upstream HTTP(S) origin", "upstreamURL", "http://127.0.0.1:8080")}${field("Upstream base path", "upstreamBasePath", "/")}<fieldset><legend>Proxy compatibility</legend><label><span>Base path header</span><select name="basePathHeader"><option value="">None</option><option value="X-Forwarded-Prefix">X-Forwarded-Prefix</option><option value="X-Script-Name">X-Script-Name</option></select></label><label><input type="checkbox" name="forwardPublicHost"><span>Forward public host</span></label><label><input type="checkbox" name="forwardPublicScheme"><span>Forward public scheme</span></label></fieldset><details><summary>Advanced upstream headers</summary><label><span>Static headers (one Name: value per line; not for secrets)</span><textarea name="customHeaders" rows="4" maxlength="8192">${escape(customHeaders)}</textarea></label></details><p>Relative URLs and an application's own base URL setting are the most reliable ways to serve it below a nested path. JavaScript access to server cookies is not supported.</p><p data-error role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-cancel>Cancel</button><button type="submit" class="button primary">Save</button></div></form>`;
+    dialog.querySelector('[name="basePathHeader"]').value = existing.basePathHeader || "";
+    dialog.querySelector('[name="forwardPublicHost"]').checked = !!existing.forwardPublicHost;
+    dialog.querySelector('[name="forwardPublicScheme"]').checked = !!existing.forwardPublicScheme;
     dialog.querySelector("[data-cancel]").onclick = () => dialog.close();
     dialog.querySelector("form").onsubmit = async event => {
       event.preventDefault(); const form = event.target, button = form.querySelector('[type="submit"]'); button.disabled = true;
       const target = { id: existing.id || "" }; for (const key of ["name", "mountPath", "upstreamURL", "upstreamBasePath"]) target[key] = form.elements[key].value;
+      if (form.elements.basePathHeader.value) target.basePathHeader = form.elements.basePathHeader.value;
+      if (form.elements.forwardPublicHost.checked) target.forwardPublicHost = true;
+      if (form.elements.forwardPublicScheme.checked) target.forwardPublicScheme = true;
+      target.customHeaders = {};
+      for (const line of form.elements.customHeaders.value.split(/\r?\n/).filter(line => line.trim())) {
+        const split = line.indexOf(":"); if (split < 1) { button.disabled = false; dialog.querySelector("[data-error]").textContent = "Custom headers must use Name: value format"; return; }
+        target.customHeaders[line.slice(0, split).trim()] = line.slice(split + 1).trim();
+      }
+      if (!Object.keys(target.customHeaders).length) delete target.customHeaders;
       try { await call("apps.targets.save", { target }); if (existing.mountPath && existing.mountPath !== target.mountPath) await removeWorker(publicPrefix(base, existing.mountPath)); dialog.close(); await load(); }
       catch (error) { dialog.querySelector("[data-error]").textContent = error.message; button.disabled = false; }
     };
@@ -44,7 +57,7 @@ export async function activate(runpilot) {
       card.innerHTML = `<div class="docker-card-head"><div class="webapps-facts"><h2>${escape(target.name)}</h2></div></div><div class="webapps-meta-row"><div class="webapps-facts"><span title="${escape(target.upstreamURL)}">${escape(target.upstreamURL)}</span><small title="${escape(publicPrefix(base, target.mountPath))}">${escape(publicPrefix(base, target.mountPath))}</small></div></div>`;
       const actions = document.createElement("div"); actions.className = "webapps-actions";
       const button = (label, style, work) => { const el = document.createElement("button"); el.type = "button"; el.className = "button " + style; el.textContent = label; el.onclick = work; actions.append(el); };
-      button("Open", "primary small", () => action(async () => { const opened = await call("apps.session.open", { targetId: target.id }); launchGateway(opened); }));
+      button("Open", "primary small", () => action(async () => { const params = { targetId: target.id }; if (target.forwardPublicHost || target.forwardPublicScheme) { params.publicHost = location.host; params.publicScheme = location.protocol.slice(0, -1); } const opened = await call("apps.session.open", params); launchGateway(opened); }));
       button("Edit", "secondary small", () => edit(target));
       button("Delete", "danger small", () => { if (confirm(`Delete Web App “${target.name}”?`)) void action(async () => { await call("apps.targets.delete", { id: target.id }); await removeWorker(publicPrefix(base, target.mountPath)); }); });
       const active = sessions.filter(session => session.targetId === target.id);

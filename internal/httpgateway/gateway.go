@@ -13,13 +13,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/szilab/RunPilot/internal/browserpath"
 )
 
 type Config struct {
-	UpstreamURL      string `json:"upstreamURL"`
-	UpstreamBasePath string `json:"upstreamBasePath"`
-	PublicPrefix     string `json:"publicPrefix"`
+	UpstreamURL         string      `json:"upstreamURL"`
+	UpstreamBasePath    string      `json:"upstreamBasePath"`
+	PublicPrefix        string      `json:"publicPrefix"`
+	BasePathHeader      string      `json:"basePathHeader,omitempty"`
+	ForwardPublicHost   bool        `json:"forwardPublicHost,omitempty"`
+	ForwardPublicScheme bool        `json:"forwardPublicScheme,omitempty"`
+	PublicHost          string      `json:"publicHost,omitempty"`
+	PublicScheme        string      `json:"publicScheme,omitempty"`
+	CustomHeaders       http.Header `json:"customHeaders,omitempty"`
 }
 type Request struct {
 	Method  string      `json:"method"`
@@ -40,6 +47,20 @@ type exchange struct {
 	ended    bool
 	wake     chan struct{}
 }
+type wsMessage struct {
+	kind websocket.MessageType
+	data []byte
+}
+type upstreamSocket struct {
+	conn        *websocket.Conn
+	write       chan wsMessage
+	mu          sync.Mutex
+	credit      int
+	wake        chan struct{}
+	queued      int
+	messageType websocket.MessageType
+	message     []byte
+}
 type Gateway struct {
 	lastID    uint32
 	config    Config
@@ -53,6 +74,8 @@ type Gateway struct {
 	writeMu   sync.Mutex
 	mu        sync.Mutex
 	exchanges map[uint32]*exchange
+	sockets   map[uint32]*upstreamSocket
+	lastWSID  uint32
 	wg        sync.WaitGroup
 }
 
@@ -67,6 +90,24 @@ func New(config Config, conn net.Conn) (*Gateway, error) {
 	if err := browserpath.Validate(config.UpstreamBasePath, true); err != nil {
 		return nil, err
 	}
+	if config.BasePathHeader != "" && config.BasePathHeader != "X-Forwarded-Prefix" && config.BasePathHeader != "X-Script-Name" {
+		return nil, errors.New("unsupported base path header")
+	}
+	if config.PublicHost != "" {
+		publicHost, err := url.Parse("//" + config.PublicHost)
+		if err != nil || len(config.PublicHost) > 255 || publicHost == nil || publicHost.Host != config.PublicHost || publicHost.Hostname() == "" || publicHost.User != nil || publicHost.Path != "" || strings.ContainsAny(config.PublicHost, " /\\\r\n\x00") {
+			return nil, errors.New("invalid public host")
+		}
+	}
+	if config.ForwardPublicHost && config.PublicHost == "" {
+		return nil, errors.New("public host is required")
+	}
+	if config.ForwardPublicScheme && config.PublicScheme != "http" && config.PublicScheme != "https" {
+		return nil, errors.New("invalid public scheme")
+	}
+	if err := validateCustomHeaders(config.CustomHeaders); err != nil {
+		return nil, err
+	}
 	jar := newCookieJar()
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil // Always reach the configured host directly.
@@ -75,7 +116,45 @@ func New(config Config, conn net.Conn) (*Gateway, error) {
 	transport.MaxConnsPerHost = MaxExchanges
 	transport.ResponseHeaderTimeout = 30 * time.Second
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Gateway{config: config, upstream: upstream, transport: transport, jar: jar, client: &http.Client{Transport: transport, Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, ctx: ctx, cancel: cancel, conn: conn, exchanges: map[uint32]*exchange{}}, nil
+	return &Gateway{config: config, upstream: upstream, transport: transport, jar: jar, client: &http.Client{Transport: transport, Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, ctx: ctx, cancel: cancel, conn: conn, exchanges: map[uint32]*exchange{}, sockets: map[uint32]*upstreamSocket{}}, nil
+}
+
+func validateCustomHeaders(headers http.Header) error {
+	if len(headers) > 16 {
+		return errors.New("too many custom headers")
+	}
+	size := 0
+	seen := make(map[string]bool, len(headers))
+	for name, values := range headers {
+		lower := strings.ToLower(name)
+		if !validHeaderToken(name) || seen[lower] || strings.HasPrefix(lower, "proxy-") || strings.HasPrefix(lower, "sec-websocket-") {
+			return errors.New("invalid or forbidden custom header")
+		}
+		seen[lower] = true
+		switch lower {
+		case "host", "content-length", "transfer-encoding", "connection", "upgrade", "keep-alive", "te", "trailer", "cookie", "set-cookie", "authorization", "proxy-authorization", "forwarded", "origin", "referer", "service-worker", "accept-encoding", "range", "if-range", "x-real-ip", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-for", "x-forwarded-prefix", "x-script-name":
+			return errors.New("forbidden custom header")
+		}
+		if len(values) != 1 || len(name) > 128 || len(values[0]) > 1024 || strings.ContainsAny(values[0], "\r\n\x00") {
+			return errors.New("invalid custom header value")
+		}
+		size += len(name) + len(values[0])
+		if size > 8192 {
+			return errors.New("custom headers too large")
+		}
+	}
+	return nil
+}
+func validHeaderToken(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, c := range name {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("!#$%&'*+-.^_`|~", c)) {
+			return false
+		}
+	}
+	return true
 }
 func (g *Gateway) Close() {
 	g.cancel()
@@ -84,6 +163,9 @@ func (g *Gateway) Close() {
 	for _, e := range g.exchanges {
 		e.cancel()
 		_ = e.pipe.CloseWithError(context.Canceled)
+	}
+	for _, socket := range g.sockets {
+		_ = socket.conn.CloseNow()
 	}
 	g.mu.Unlock()
 	g.transport.CloseIdleConnections()
@@ -210,6 +292,9 @@ func safeHeaders(in http.Header, request bool) (http.Header, error) {
 	return out, nil
 }
 func (g *Gateway) accept(f Frame) error {
+	if f.ID&WebSocketIDMask != 0 {
+		return g.acceptWebSocket(f)
+	}
 	if f.Type == Start {
 		if f.ID <= g.lastID {
 			return errors.New("request IDs must increase")
@@ -263,6 +348,20 @@ func (g *Gateway) accept(f Frame) error {
 			return err
 		}
 		req.Header = headers
+		for key, values := range g.config.CustomHeaders {
+			for _, value := range values {
+				req.Header.Set(key, value)
+			}
+		}
+		if g.config.ForwardPublicHost {
+			req.Header.Set("X-Forwarded-Host", g.config.PublicHost)
+		}
+		if g.config.ForwardPublicScheme {
+			req.Header.Set("X-Forwarded-Proto", g.config.PublicScheme)
+		}
+		if g.config.BasePathHeader != "" {
+			req.Header.Set(g.config.BasePathHeader, g.config.PublicPrefix)
+		}
 		g.wg.Add(2)
 		go func() {
 			defer g.wg.Done()

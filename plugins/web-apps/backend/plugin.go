@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -31,11 +32,15 @@ func hostError(err error) *rpcError {
 }
 
 type target struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	MountPath        string `json:"mountPath"`
-	UpstreamURL      string `json:"upstreamURL"`
-	UpstreamBasePath string `json:"upstreamBasePath"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	MountPath        string            `json:"mountPath"`
+	UpstreamURL      string            `json:"upstreamURL"`
+	UpstreamBasePath string            `json:"upstreamBasePath"`
+	BasePathHeader   string            `json:"basePathHeader,omitempty"`
+	ForwardHost      bool              `json:"forwardPublicHost,omitempty"`
+	ForwardScheme    bool              `json:"forwardPublicScheme,omitempty"`
+	CustomHeaders    map[string]string `json:"customHeaders,omitempty"`
 }
 type targetStore struct {
 	Version int      `json:"version"`
@@ -102,6 +107,28 @@ func normalizeTarget(t target) (target, *rpcError) {
 	if browserpath.Validate(t.UpstreamBasePath, true) != nil {
 		return target{}, fail("invalid_argument", "upstream base path must be normalized")
 	}
+	if t.BasePathHeader != "" && t.BasePathHeader != "X-Forwarded-Prefix" && t.BasePathHeader != "X-Script-Name" {
+		return target{}, fail("invalid_argument", "unsupported base path header")
+	}
+	if len(t.CustomHeaders) > 16 {
+		return target{}, fail("invalid_argument", "at most 16 custom headers are allowed")
+	}
+	cleanHeaders := make(map[string]string, len(t.CustomHeaders))
+	seenHeaders := make(map[string]bool, len(t.CustomHeaders))
+	headerBytes := 0
+	for name, value := range t.CustomHeaders {
+		lower := strings.ToLower(name)
+		if !validHeaderName(name) || seenHeaders[lower] || forbiddenCustomHeader(lower) || len(name) > 128 || len(value) > 1024 || strings.ContainsAny(value, "\r\n\x00") {
+			return target{}, fail("invalid_argument", "custom header name or value is invalid or forbidden")
+		}
+		seenHeaders[lower] = true
+		headerBytes += len(name) + len(value)
+		if headerBytes > 8192 {
+			return target{}, fail("invalid_argument", "custom headers exceed 8 KiB")
+		}
+		cleanHeaders[http.CanonicalHeaderKey(name)] = value
+	}
+	t.CustomHeaders = cleanHeaders
 	u, err := url.Parse(t.UpstreamURL)
 	if err != nil || len(t.UpstreamURL) > 2048 || u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Hostname() == "" || u.ForceQuery || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || strings.ContainsAny(t.UpstreamURL, "\r\n\x00") {
 		return target{}, fail("invalid_argument", "upstream URL must be an HTTP(S) origin without userinfo, path, query or fragment")
@@ -115,6 +142,29 @@ func normalizeTarget(t target) (target, *rpcError) {
 	u.Path = ""
 	t.UpstreamURL = u.String()
 	return t, nil
+}
+
+func validHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, c := range name {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("!#$%&'*+-.^_`|~", c)) {
+			return false
+		}
+	}
+	return true
+}
+
+func forbiddenCustomHeader(name string) bool {
+	if strings.HasPrefix(name, "proxy-") || strings.HasPrefix(name, "sec-websocket-") {
+		return true
+	}
+	switch name {
+	case "host", "content-length", "transfer-encoding", "connection", "upgrade", "keep-alive", "te", "trailer", "cookie", "set-cookie", "authorization", "proxy-authorization", "forwarded", "origin", "referer", "service-worker", "accept-encoding", "range", "if-range", "x-real-ip", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-for", "x-forwarded-prefix", "x-script-name":
+		return true
+	}
+	return false
 }
 func (p *plugin) readTargets() (targetStore, *rpcError) {
 	stored := targetStore{Version: 1, NextID: 1, Targets: []target{}}
@@ -353,10 +403,15 @@ func (p *plugin) handle(method string, raw json.RawMessage) (any, *rpcError) {
 		return nil, fail("not_found", "unknown target")
 	case "apps.session.open":
 		var q struct {
-			TargetID string `json:"targetId"`
+			TargetID     string `json:"targetId"`
+			PublicHost   string `json:"publicHost"`
+			PublicScheme string `json:"publicScheme"`
 		}
 		if decode(raw, &q) != nil || !validID(q.TargetID) {
 			return nil, fail("invalid_argument", "target ID required")
+		}
+		if (q.PublicHost != "" && (len(q.PublicHost) > 255 || strings.ContainsAny(q.PublicHost, " /\\\r\n\x00"))) || (q.PublicScheme != "" && q.PublicScheme != "https" && q.PublicScheme != "http") || (q.PublicHost == "" && q.PublicScheme != "") || (q.PublicScheme == "" && q.PublicHost != "") {
+			return nil, fail("invalid_argument", "invalid public origin")
 		}
 		if len(p.sessions) >= 8 {
 			return nil, fail("resource_limit", "gateway session limit reached")
@@ -371,7 +426,7 @@ func (p *plugin) handle(method string, raw json.RawMessage) (any, *rpcError) {
 					return nil, f
 				}
 				var s session
-				if err := callHost("http.gateway.open", map[string]any{"publicationId": p.publications[t.ID], "upstreamURL": t.UpstreamURL, "upstreamBasePath": t.UpstreamBasePath}, &s); err != nil {
+				if err := callHost("http.gateway.open", map[string]any{"publicationId": p.publications[t.ID], "upstreamURL": t.UpstreamURL, "upstreamBasePath": t.UpstreamBasePath, "basePathHeader": t.BasePathHeader, "forwardPublicHost": t.ForwardHost, "forwardPublicScheme": t.ForwardScheme, "customHeaders": t.CustomHeaders, "publicHost": q.PublicHost, "publicScheme": q.PublicScheme}, &s); err != nil {
 					return nil, hostError(err)
 				}
 				if s.ID == "" {

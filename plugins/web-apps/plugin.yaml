@@ -1,8 +1,8 @@
 apiVersion: runpilot.plugin/v1
 id: web.apps
 name: Web Apps
-description: Encrypted browser HTTP access to host-reachable web applications (Phase 1)
-version: 0.1.2
+description: Encrypted browser access to host-reachable web applications
+version: 0.2.0
 requires:
   backend: ">=1.0.0 <2.0.0"
   frontend: ">=1.0.0 <2.0.0"

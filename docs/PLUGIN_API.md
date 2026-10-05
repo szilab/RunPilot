@@ -458,7 +458,7 @@ browser.runtime.register    {bootstrap, worker} -> {id, owner, bootstrap, worker
 browser.runtime.remove      {id} -> {}
 browser.publication.register {mountPath, bootstrap, runtimeId} -> {id, owner, mountPath, bootstrap, runtimeId}
 browser.publication.remove   {id} -> {}
-http.gateway.open           {publicationId, upstreamURL, upstreamBasePath} -> {id, publicPrefix, publicationId, runtimeId, baseURL}
+http.gateway.open           {publicationId, upstreamURL, upstreamBasePath, basePathHeader?, forwardPublicHost?, forwardPublicScheme?, publicHost?, publicScheme?, customHeaders?} -> {id, publicPrefix, publicationId, runtimeId, baseURL}
 http.gateway.close          {id} -> {}
 browser.stream.ticket       {streamId} -> {ticket}
 ```
@@ -517,7 +517,15 @@ standard-library client disables automatic redirects, automatic decompression
 and environment proxies. Same-upstream redirects inside the upstream base map
 back to the public prefix; HTTP(S) external redirects remain external. Unsafe
 schemes, userinfo and same-upstream redirects outside the configured base fail.
-Hop-by-hop, proxy, browser cookie and forwarding headers are stripped; the
+Hop-by-hop, proxy, browser cookie and forwarding headers are stripped. Optional
+compatibility settings regenerate `X-Forwarded-Host`, `X-Forwarded-Proto`, and
+one selected base-path header (`X-Forwarded-Prefix` or `X-Script-Name`) from the
+publication origin and prefix. Optional static custom headers are limited to 16
+names, 128 bytes per name, 1 KiB per value and 8 KiB combined. Invalid token
+names, CR/LF, hop-by-hop/routing/authentication/cookie/Proxy- headers, generated
+forwarding headers, and transport-managed `Accept-Encoding`, `Range` and
+`If-Range` are rejected. Custom headers are configuration,
+not secret storage. The
 upstream Host is fixed, Origin is synthesized for unsafe methods or when supplied,
 and in-prefix Referer URLs map to the upstream origin/base (others are removed). Application Authorization, Range, If-Range, status, content type and
 cache headers are retained. There is no body rewriting.
@@ -542,16 +550,18 @@ invoke plugin RPC, subscribe to plugin events, obtain REST authority, or become
 a normal authenticated application session. Even a normal plaintext application
 connection cannot attach these gateway streams. There is no feature endpoint.
 
-### HTTP tunnel version 1
+### HTTP and WebSocket tunnel version 2
 
 Inside the existing RPS1 binary stream, frames are concatenated without regard
 to WebSocket message boundaries. All integers are unsigned big endian:
 
 ```text
-version:u8 (=1), type:u8, requestId:u32, payloadLength:u32, payload:bytes
+version:u8 (=2), type:u8, channelId:u32, payloadLength:u32, payload:bytes
 ```
 
-Request IDs are nonzero, monotonically increasing per gateway. At most 16
+HTTP request IDs are nonzero, monotonically increasing per gateway and reserve
+the high bit as zero. WebSocket channel IDs set that bit and have an independent
+monotonic low-bit sequence. At most 16
 exchanges run concurrently; the browser admits at most 64 bounded waiting requests. Payloads are at most 16 KiB. Types:
 
 | Type | Direction | Payload |
@@ -566,6 +576,14 @@ exchanges run concurrently; the browser admits at most 64 bounded waiting reques
 | 8 response error | host → browser | safe UTF-8 message |
 | 9 upload credit | host → browser | byte count:u32 |
 | 10 download credit | browser → host | byte count:u32 |
+| 11 WebSocket open | browser → host | JSON `{path,protocols}` |
+| 12 WebSocket opened | host → browser | JSON `{protocol}` |
+| 13 WebSocket text chunk | either direction | message kind:u8, final:u8, UTF-8/data bytes |
+| 14 WebSocket binary chunk | either direction | message kind:u8, final:u8, binary bytes |
+| 15 WebSocket close | browser → host | JSON `{code,reason}` |
+| 16 WebSocket closed | host → browser | JSON `{code,reason,wasClean}` |
+| 17 WebSocket error | host → browser | safe UTF-8 message |
+| 18 WebSocket credit | browser → host | byte count:u32 |
 
 GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS share the transport; CONNECT and
 TRACE are rejected. Start/header metadata is at most 16 KiB, headers at most
@@ -576,7 +594,26 @@ bytes. The host waits for download credit before reading upstream bodies;
 ReadableStream consumption returns browser credit. Parser buffers, send queues,
 physical WebSocket buffering and stalled writes are also bounded. Invalid frames
 or excess credit close the gateway; late frames for completed IDs are ignored.
-Version/type fields allow a later protocol version to extend this contract.
+WebSocket opens accept only a publication-relative path and up to 16 standard
+subprotocol tokens. The host maps that path through the same snapshotted upstream
+origin/base path as HTTP; the browser cannot choose a host, port or scheme.
+`http`/`https` targets become `ws`/`wss`, and the upstream Origin and ephemeral
+gateway cookie jar are reused. Upstream subprotocol negotiation and close
+metadata are relayed. There are at most 16 sockets per gateway; messages are
+limited to 1 MiB and tunnel chunks to 16 KiB. Host-to-browser delivery uses a
+64 KiB credit window per channel. Browser send queues are limited to 1 MiB per
+socket, host queues to 1 MiB per socket, with at most 16 MiB queued per gateway;
+sockets close on excess or stalled transport. Parent stream close retires every
+socket; individual failures do not cancel unrelated HTTP exchanges or channels.
+
+Tunnel wire version 2 is independent of backend contract `1.0.0` and
+`web.apps` package SemVer `0.2.0`; it does not change the raw WASM ABI or the
+RunPilot application version.
+
+The HTTP gateway applies only generic reverse-proxy headers and does not rewrite
+response bodies or infer application-specific paths. RunPilot's framework
+`basePath` works at root and nested prefixes; arbitrary proxied application paths
+such as `/p/app` are best effort.
 
 The worker constructs synthetic Responses without persistent application caches.
 It negotiates gzip/deflate (identity for Range), carries compressed bytes through

@@ -1,4 +1,4 @@
-// Package httpgateway implements bounded HTTP exchanges on an owned byte stream.
+// Package httpgateway implements bounded HTTP exchanges and WebSocket channels on an owned byte stream.
 package httpgateway
 
 import (
@@ -8,21 +8,33 @@ import (
 )
 
 const (
-	Version             = 1
-	Start          byte = 1
-	Body           byte = 2
-	End            byte = 3
-	Cancel         byte = 4
-	ResponseStart  byte = 5
-	ResponseBody   byte = 6
-	ResponseEnd    byte = 7
-	ResponseError  byte = 8
-	UploadCredit   byte = 9
-	DownloadCredit byte = 10
-	Chunk               = 16 << 10
-	Window              = 4 * Chunk
-	MaxExchanges        = 16
-	MaxMetadata         = Chunk
+	Version                  = 2
+	Start               byte = 1
+	Body                byte = 2
+	End                 byte = 3
+	Cancel              byte = 4
+	ResponseStart       byte = 5
+	ResponseBody        byte = 6
+	ResponseEnd         byte = 7
+	ResponseError       byte = 8
+	UploadCredit        byte = 9
+	DownloadCredit      byte = 10
+	WebSocketOpen       byte = 11
+	WebSocketOpened     byte = 12
+	WebSocketText       byte = 13
+	WebSocketBinary     byte = 14
+	WebSocketClose      byte = 15
+	WebSocketClosed     byte = 16
+	WebSocketError      byte = 17
+	WebSocketCredit     byte = 18
+	Chunk                    = 16 << 10
+	Window                   = 4 * Chunk
+	MaxExchanges             = 16
+	MaxMetadata              = Chunk
+	MaxWebSockets            = 16
+	WebSocketWindow          = 64 << 10
+	MaxWebSocketMessage      = 1 << 20
+	WebSocketIDMask          = uint32(1 << 31)
 )
 
 type Frame struct {
