@@ -40,7 +40,7 @@ func webAppsController(t *testing.T, base string, dataDirs ...string) *core.Cont
 		dir = t.TempDir()
 	}
 	source := filepath.Join("..", "..", "plugins", "web-apps")
-	dest := filepath.Join(dir, "plugins", "web.apps", "0.1.0")
+	dest := filepath.Join(dir, "plugins", "web.apps", "0.1.1")
 	if err := filepath.WalkDir(source, func(filename string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -321,7 +321,7 @@ func TestWebAppsFrontendContracts(t *testing.T) {
 		t.Fatal("node required for frontend contracts")
 	}
 	root := filepath.Join("..", "..")
-	for _, script := range []string{"internal/web/auth_storage_test.js", "internal/web/secure_websocket_test.js", "plugins/web-apps/web/tunnel.test.cjs", "plugins/web-apps/web/frontend.test.mjs"} {
+	for _, script := range []string{"internal/web/auth_storage_test.js", "internal/web/secure_websocket_test.js", "plugins/web-apps/web/tunnel.test.cjs", "plugins/web-apps/web/frontend.test.mjs", "plugins/web-apps/web/sw.test.cjs"} {
 		cmd := exec.Command(node, script)
 		cmd.Dir = root
 		if out, err := cmd.CombinedOutput(); err != nil {

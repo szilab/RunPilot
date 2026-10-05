@@ -14,16 +14,22 @@ for (const method of ["apps.targets.save", "apps.targets.delete", "apps.targets.
 const bootstrap = await fs.readFile("plugins/web-apps/web/bootstrap.js", "utf8");
 let registration, removed = false, initialized, navigated = false;
 const status = {};
-const controller = { scriptURL: "https://host/multi/p/app/__runpilot__/sw.js?publication=generation", postMessage(message, ports) { assert.equal(removed, true); initialized = message; ports[0].peer.onmessage({ data: { ok: true } }); } };
+const controller = { scriptURL: "https://host/multi/p/app/__runpilot__/sw.js?publication=generation", postMessage(message, ports) { assert.equal(removed, true); initialized = message; ports[0].peer.onmessage({ data: { ok: true, handle: "tab-handle", url: "/multi/p/app/__runpilot__/navigate/one-use" } }); } };
 class Channel { constructor() { this.port1 = { close() {} }; this.port2 = { peer: this.port1, close() {} }; } }
-const context = { RUNPILOT_PUBLICATION: { publicPrefix: "/multi/p/app", publicationId: "generation" }, document: { getElementById() { return status; } }, location: { hash: "#ticket=one-use&stream=session&publication=generation", origin: "https://host", pathname: "/multi/p/app/", search: "", replace() { navigated = true; } }, history: { replaceState() { removed = true; } }, isSecureContext: true, crypto: { subtle: {} }, navigator: { serviceWorker: { register: async (url, options) => { registration = { url, options }; }, ready: Promise.resolve(), controller } }, localStorage: { credential: "legacy", removeItem() { this.credential = null; } }, URL, URLSearchParams, MessageChannel: Channel, setTimeout, clearTimeout };
+const context = { RUNPILOT_PUBLICATION: { publicPrefix: "/multi/p/app", publicationId: "generation" }, document: { getElementById() { return status; } }, location: { href: "https://host/multi/p/app/", hash: "#ticket=one-use&stream=session&publication=generation", origin: "https://host", pathname: "/multi/p/app/", search: "", replace(url) { navigated = url; } }, history: { replaceState() { removed = true; } }, isSecureContext: true, crypto: { subtle: {} }, navigator: { serviceWorker: { register: async (url, options) => { registration = { url, options }; }, ready: Promise.resolve(), controller } }, localStorage: { credential: "legacy", removeItem() { this.credential = null; } }, URL, URLSearchParams, MessageChannel: Channel, setTimeout, clearTimeout };
 vm.runInNewContext(await fs.readFile("internal/web/static/auth-storage.js", "utf8"), context);
 await vm.runInNewContext(bootstrap, context);
 assert.equal(context.localStorage.credential, null);
 assert.equal(registration.options.scope, "/multi/p/app/"); assert.ok(new URL(registration.url).pathname === "/multi/p/app/__runpilot__/sw.js");
-assert.equal(initialized.ticket, "one-use"); assert.equal(navigated, true);
+assert.equal(initialized.ticket, "one-use"); assert.equal(initialized.type, "gateway.initialize"); assert.equal(navigated, "/multi/p/app/__runpilot__/navigate/one-use");
+assert.equal(JSON.parse(context.name.slice("runpilot.web.apps:".length)).handle, "tab-handle");
+context.location.hash = "#application-route";
+await vm.runInNewContext(bootstrap, context);
+assert.equal(initialized.type, "gateway.resume"); assert.equal(initialized.handle, "tab-handle");
 context.isSecureContext = false; status.setAttribute = () => {};
 await vm.runInNewContext(bootstrap, context); assert.match(status.textContent, /HTTPS/);
+context.isSecureContext = true; context.name = "";
+await vm.runInNewContext(bootstrap, context); assert.match(status.textContent, /expired/);
 const worker = await fs.readFile("plugins/web-apps/web/sw.js", "utf8");
 assert.ok(worker.includes("event.resultingClientId")); assert.ok(worker.includes("status: 503"));
 assert.ok(!worker.includes("localStorage")); assert.ok(!worker.includes("sessionStorage"));

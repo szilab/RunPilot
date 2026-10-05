@@ -4,7 +4,6 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"fmt"
-	"github.com/szilab/RunPilot/internal/browserpath"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/szilab/RunPilot/internal/browserpath"
 )
 
 func TestWebAppsRealBrowser(t *testing.T) {
@@ -21,7 +22,10 @@ func TestWebAppsRealBrowser(t *testing.T) {
 	if module == "" {
 		t.Skip("optional browser integration needs RUNPILOT_PLAYWRIGHT_MODULE (playwright-core)")
 	}
-	for _, route := range []struct{ base, upstream string }{{"/", "/app"}, {"/p", "/p/app"}, {"/p", "/app"}, {"/tenant/pilot", "/app"}, {"/tenant space/应用", "/app"}} {
+	for _, route := range []struct {
+		base, upstream string
+		tls            bool
+	}{{"/", "/app", false}, {"/p", "/p/app", false}, {"/p", "/app", false}, {"/tenant/pilot", "/app", false}, {"/tenant space/应用", "/app", false}, {"/", "/app", true}} {
 		t.Run(route.base+route.upstream, func(t *testing.T) {
 			base := route.base
 			upstreamBase := route.upstream
@@ -30,19 +34,29 @@ func TestWebAppsRealBrowser(t *testing.T) {
 					http.NotFound(w, r)
 					return
 				}
-				switch strings.TrimPrefix(r.URL.Path, upstreamBase+"/") {
+				path := strings.TrimPrefix(r.URL.Path, upstreamBase+"/")
+				// Jellyfin-style entry redirects must retain the initiating tab's tunnel.
+				if path == "" || path == "entry" {
+					destination := "entry"
+					if path == "entry" {
+						destination = "web/"
+					}
+					http.Redirect(w, r, upstreamBase+"/"+destination, http.StatusFound)
+					return
+				}
+				switch strings.TrimPrefix(path, "web/") {
 				case "":
 					w.Header().Set("Content-Type", "text/html")
 					fmt.Fprint(w, `<!doctype html><link rel="stylesheet" href="style.css"><img src="pixel.png"><script src="code.js"></script>`)
 				case "code.js":
 					w.Header().Set("Content-Type", "application/javascript")
-					fmt.Fprint(w, `const ready=document.createElement("h1");ready.id="app-ready";ready.textContent="Browser rendered application";document.body.append(ready);`)
+					fmt.Fprint(w, `const ready=document.createElement("h1");ready.id="app-ready";ready.dataset.instance=crypto.randomUUID();ready.textContent="Browser rendered application";document.body.append(ready);`)
 				case "style.css":
 					w.Header().Set("Content-Type", "text/css")
 					fmt.Fprint(w, `#app-ready { color: rgb(10, 20, 30); }`)
 				case "pixel.png":
 					w.Header().Set("Content-Type", "image/png")
-					data, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j4N8AAAAASUVORK5CYII=")
+					data, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==")
 					_, _ = w.Write(data)
 				case "login":
 					_, _ = io.Copy(io.Discard, r.Body)
@@ -83,11 +97,16 @@ func TestWebAppsRealBrowser(t *testing.T) {
 			c := webAppsController(t, base)
 			openWebApp(t, c, upstream.URL, upstreamBase)
 			s, _ := New(c, base)
-			server := httptest.NewServer(s.Handler())
+			server := httptest.NewUnstartedServer(s.Handler())
+			if route.tls {
+				server.StartTLS()
+			} else {
+				server.Start()
+			}
 			defer server.Close()
 			cmd := exec.Command("node", "plugins/web-apps/web/browser.test.cjs")
 			cmd.Dir = filepath.Join("..", "..")
-			cmd.Env = append(os.Environ(), "RUNPILOT_TEST_URL="+server.URL, "RUNPILOT_TEST_UPSTREAM="+upstream.URL, "RUNPILOT_TEST_UPSTREAM_BASE="+upstreamBase, "RUNPILOT_TEST_BASE="+browserpath.Escape(strings.TrimSuffix(base, "/")), "RUNPILOT_TEST_TOKEN="+c.Snapshot().Server.Token)
+			cmd.Env = append(os.Environ(), "RUNPILOT_TEST_URL="+server.URL, "RUNPILOT_TEST_UPSTREAM="+upstream.URL, "RUNPILOT_TEST_UPSTREAM_BASE="+upstreamBase, "RUNPILOT_TEST_BASE="+browserpath.Escape(strings.TrimSuffix(base, "/")), "RUNPILOT_TEST_TOKEN="+c.Snapshot().Server.Token, fmt.Sprintf("RUNPILOT_TEST_TLS=%t", route.tls))
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("browser integration: %v\n%s", err, out)
 			} else {

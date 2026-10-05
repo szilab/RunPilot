@@ -129,7 +129,12 @@
       if (request.signal.aborted) { this.cancel(id); return response; }
       try {
         await this.send(1, id, { method: request.method, path: url.pathname + url.search, headers });
-        void this.upload(id, request.body).catch(error => { if (this.exchanges.has(id)) { exchange.reject(error); this.cancel(id); } });
+        // Firefox versions without Request.body expose incoming upload data as a
+        // browser-managed Blob. Read that Blob as a stream, never an ArrayBuffer.
+        void (async () => {
+          const body = request.body === undefined && !["GET", "HEAD"].includes(request.method) ? (await request.blob()).stream() : request.body;
+          await this.upload(id, body);
+        })().catch(error => { if (this.exchanges.has(id)) { exchange.reject(error); this.cancel(id); } });
       } catch (error) { exchange.reject(error); this.cancel(id); }
       return response;
     }

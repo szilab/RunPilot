@@ -36,8 +36,8 @@ export async function activate(runpilot) {
     if (message) { const notice = document.createElement("p"); notice.setAttribute("role", "alert"); notice.textContent = message; root.append(notice); }
     if (!targets.length) root.append(runpilot.ui.EmptyState({ title: "No Web Apps", message: "Add a host-reachable HTTP application to get started." }));
     for (const target of targets) {
-      const card = document.createElement("article"); card.className = "webapps-card";
-      card.innerHTML = `<div><h2>${escape(target.name)}</h2><p>${escape(target.upstreamURL)}</p><code>${escape(publicPrefix(base, target.mountPath))}</code></div>`;
+      const card = document.createElement("article"); card.className = "docker-card remote-card webapps-card";
+      card.innerHTML = `<div class="docker-card-head"><div class="webapps-facts"><h2>${escape(target.name)}</h2></div></div><div class="webapps-meta-row"><div class="webapps-facts"><span title="${escape(target.upstreamURL)}">${escape(target.upstreamURL)}</span><small title="${escape(publicPrefix(base, target.mountPath))}">${escape(publicPrefix(base, target.mountPath))}</small></div></div>`;
       const actions = document.createElement("div"); actions.className = "webapps-actions";
       const button = (label, style, work) => { const el = document.createElement("button"); el.type = "button"; el.className = "button " + style; el.textContent = label; el.onclick = work; actions.append(el); };
       button("Open", "primary small", () => action(async () => { const opened = await call("apps.session.open", { targetId: target.id }); launchGateway(opened); }));
@@ -45,7 +45,7 @@ export async function activate(runpilot) {
       button("Delete", "danger small", () => { if (confirm(`Delete Web App “${target.name}”?`)) void action(async () => { await call("apps.targets.delete", { id: target.id }); await removeWorker(publicPrefix(base, target.mountPath)); }); });
       const active = sessions.filter(session => session.targetId === target.id);
       if (active.length) button(`Close sessions (${active.length})`, "secondary small", () => action(async () => { for (const session of active) await call("apps.session.close", { id: session.id }); }));
-      card.append(actions); root.append(card);
+      card.querySelector(".webapps-meta-row").append(actions); root.append(card);
     }
     page.append(root);
   }

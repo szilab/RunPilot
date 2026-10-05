@@ -553,3 +553,16 @@ UI and worker load the same worker-safe `RunPilotSecureWebSocket` implementation
 Normal UI bearer authentication is held in sessionStorage: the current tab
 migrates and removes legacy localStorage tokens. Browser features must launch
 with `noopener` so their tab does not inherit that credential or an opener.
+
+Web Apps binds document navigations through a single-use, one-minute worker-local
+handoff under `publicPrefix/__runpilot__/navigate/`. Its redirect binds the
+reserved `resultingClientId` before returning to the clean application URL;
+redirect chains retain that client ID. This also works in browsers that omit
+the initiating client ID on navigation. An opaque, target-session-only lineage
+handle in the tab's `window.name` lets the package bootstrap resume that same
+worker-local session after a reload or document navigation. It grants no new
+gateway, login or target access. No handle is written to localStorage or
+sessionStorage; worker loss, host restart or session close fails closed.
+Browsers without `Request.body` use their native upload Blob's readable stream;
+upload chunks still obey the tunnel credit window. Response bodies are streamed
+without buffering or rewriting.

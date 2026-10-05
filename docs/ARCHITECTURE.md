@@ -237,7 +237,7 @@ implemented, rather than by expanding the System fixture now.
 
 ### Web Apps transport proof
 
-The unpublished `web.apps` 0.1.0 ABI-v2 plugin owns target CRUD, persisted target
+The unpublished `web.apps` 0.1.1 ABI-v2 plugin owns target CRUD, persisted target
 configuration and its browser UI. It motivated reusable browser publication,
 restricted stream ticket and native Go HTTP gateway capabilities; core owns no
 application-specific target behavior. A narrowly scoped plugin Service Worker

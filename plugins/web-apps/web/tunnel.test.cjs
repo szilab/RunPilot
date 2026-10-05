@@ -37,6 +37,18 @@ const grant = n => { const out = new Uint8Array(4); new DataView(out.buffer).set
   assert.equal(uploadBytes, 65536);
   tunnel.receive(inbound(5, 3, { status: 204, headers: {} })); const postResponse = await post; assert.equal(postResponse.body, null); tunnel.receive(inbound(7, 3));
   const abort = new AbortController(), canceled = tunnel.request(new Request("https://host/tenant/pilot/app/cancel", { signal: abort.signal })); await tick(); abort.abort(); await assert.rejects(canceled, /cancel/); assert.equal(tunnel.exchanges.size, 0);
+  // Firefox's incoming Request has blob() but no body property. Its Blob stream
+  // must carry the upload with the same credit bounds as the native body stream.
+  const firefoxRequest = new Request("https://host/tenant/pilot/app/firefox", { method: "POST", body: "x".repeat(70000) });
+  Object.defineProperty(firefoxRequest, "body", { value: undefined });
+  const firefoxId = tunnel.nextId, firefox = tunnel.request(firefoxRequest); await tick();
+  const firefoxBytes = () => binary().filter(data => data[39] === 2 && new DataView(data.buffer).getUint32(40) === firefoxId).reduce((sum, data) => sum + data.length - 48, 0);
+  assert.equal(firefoxBytes(), 0);
+  tunnel.receive(inbound(9, firefoxId, grant(65536))); await tick(); await tick();
+  assert.equal(firefoxBytes(), 65536);
+  tunnel.receive(inbound(9, firefoxId, grant(4464))); await tick(); await tick();
+  assert.equal(firefoxBytes(), 70000);
+  tunnel.receive(inbound(5, firefoxId, { status: 204, headers: {} })); await firefox; tunnel.receive(inbound(7, firefoxId));
   const queued = new context.HTTPGatewayTunnel(config, "scoped", stream); await queued.ready;
   const active = []; for (let i = 0; i < 16; i++) { const response = queued.request(new Request("https://host/tenant/pilot/app/" + i)); response.catch(() => {}); active.push(response); }
   const waiting = queued.request(new Request("https://host/tenant/pilot/app/wait")); waiting.catch(() => {}); await tick();

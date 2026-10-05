@@ -1,10 +1,12 @@
 // Optional real-browser integration: RUNPILOT_PLAYWRIGHT_MODULE points to playwright-core.
 const assert = require("node:assert/strict");
-const { chromium } = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE);
+const browserType = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE)[process.env.RUNPILOT_BROWSER_TYPE || "chromium"];
 (async () => {
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.RUNPILOT_BROWSER_EXECUTABLE });
+  // Chromium workers do not inherit the context's self-signed fixture certificate exception.
+  const args = process.env.RUNPILOT_TEST_TLS === "true" && browserType.name() === "chromium" ? ["--ignore-certificate-errors"] : [];
+  const browser = await browserType.launch({ headless: true, executablePath: process.env.RUNPILOT_BROWSER_EXECUTABLE, args });
   try {
-    const context = await browser.newContext();
+    const context = await browser.newContext({ ignoreHTTPSErrors: process.env.RUNPILOT_TEST_TLS === "true" });
     const shell = await context.newPage();
     await shell.addInitScript(({ token, path }) => { if (location.pathname === path) localStorage.setItem("runpilot.token", token); }, { token: process.env.RUNPILOT_TEST_TOKEN, path: process.env.RUNPILOT_TEST_BASE + "/" });
     await shell.goto(process.env.RUNPILOT_TEST_URL + process.env.RUNPILOT_TEST_BASE + "/");
@@ -13,17 +15,23 @@ const { chromium } = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE);
     assert.equal(await shell.evaluate(() => sessionStorage.getItem("runpilot.token")), process.env.RUNPILOT_TEST_TOKEN);
     await shell.click('[data-page="web-apps"]');
     await shell.getByRole("button", { name: "Open", exact: true }).waitFor();
+    for (const [width, columns] of [[1280, 3], [1000, 2], [640, 1]]) {
+      await shell.setViewportSize({ width, height: 800 });
+      assert.equal(await shell.locator(".webapps-list").evaluate(list => getComputedStyle(list).gridTemplateColumns.split(" ").length), columns);
+      assert.equal(await shell.locator(".webapps-card.docker-card.remote-card").count(), 1);
+    }
+    await shell.setViewportSize({ width: 1280, height: 800 });
     const appPromise = context.waitForEvent("page");
     await shell.getByRole("button", { name: "Open", exact: true }).click();
     const app = await appPromise;
     app.on("pageerror", error => console.error("application page error:", error.message));
-    await app.waitForFunction(() => document.querySelector("#app-ready"), { timeout: 15000 });
-    assert.ok(app.url().endsWith(process.env.RUNPILOT_TEST_BASE + "/app/"));
+    await app.waitForFunction(() => document.querySelector("#app-ready"), null, { timeout: 15000 });
+    assert.ok(app.url().endsWith(process.env.RUNPILOT_TEST_BASE + "/app/web/"));
     assert.equal(await app.evaluate(() => window.opener), null);
     assert.equal(await app.evaluate(() => sessionStorage.getItem("runpilot.token")), null);
     assert.equal(await app.evaluate(() => localStorage.getItem("runpilot.token")), null);
     assert.equal(await app.evaluate(() => document.querySelector("link").sheet.cssRules[0].selectorText), "#app-ready");
-    assert.equal(await app.evaluate(() => document.querySelector("img").naturalWidth), 1);
+    await app.waitForFunction(() => document.querySelector("img")?.naturalWidth === 1);
     const result = await app.evaluate(async () => {
       await fetch("login", { method: "POST", body: "login-data" });
       const cookie = await (await fetch("cookie")).text();
@@ -41,11 +49,22 @@ const { chromium } = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE);
     assert.equal(result.compressed, "compressed response"); assert.equal(result.redirect, "private-cookie");
     assert.equal(result.post, 400000); assert.equal(result.large, 20 * 1024 * 1024);
     assert.equal(new URL(result.scope).pathname, process.env.RUNPILOT_TEST_BASE + "/app/");
+    await app.reload();
+    await app.waitForFunction(() => document.querySelector("#app-ready"), null, { timeout: 15000 });
+    assert.equal(await app.evaluate(async () => (await fetch("cookie")).text()), "private-cookie");
+    // A full document navigation, including entry redirects, retains the same jar.
+    const previousDocument = await app.evaluate(() => document.querySelector("#app-ready").dataset.instance);
+    await Promise.all([app.waitForNavigation({ waitUntil: "domcontentloaded" }), app.evaluate(() => location.assign("../"))]);
+    await app.waitForFunction(previous => { const ready = document.querySelector("#app-ready"); return ready && ready.dataset.instance !== previous; }, previousDocument);
+    assert.equal(await app.evaluate(async () => (await fetch("cookie")).text()), "private-cookie");
     // Reuse the installed narrow worker in a second noopener tab, with an isolated cookie jar.
     await shell.evaluate(() => localStorage.setItem("runpilot.token", "legacy shared credential"));
     const secondPromise = context.waitForEvent("page"); await shell.getByRole("button", { name: "Open", exact: true }).click(); const second = await secondPromise;
     await second.waitForFunction(() => document.querySelector("#app-ready"));
     assert.equal(await second.evaluate(async () => (await fetch("cookie")).text()), "");
+    await second.reload(); await second.waitForFunction(() => document.querySelector("#app-ready"));
+    assert.equal(await second.evaluate(async () => (await fetch("cookie")).text()), "");
+    assert.equal(await app.evaluate(async () => (await fetch("cookie")).text()), "private-cookie");
     assert.equal(await second.evaluate(() => localStorage.getItem("runpilot.token")), null);
     assert.equal(await second.evaluate(() => sessionStorage.getItem("runpilot.token")), null);
     await second.close();
