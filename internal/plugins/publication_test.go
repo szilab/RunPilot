@@ -82,6 +82,9 @@ func TestPublicationRecordMatchesArtifact(t *testing.T) {
 	if _, err := policy.Rule("system"); err == nil {
 		t.Fatal("repository policy publishes System")
 	}
+	if _, err := policy.Rule("tasks"); err != nil {
+		t.Fatalf("Tasks plugin is not publishable: %v", err)
+	}
 }
 func TestManagerSemverAndRetiredAssets(t *testing.T) {
 	dataDir := t.TempDir()

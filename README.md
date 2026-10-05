@@ -6,18 +6,22 @@
 
 RunPilot is a lightweight Windows/Linux host-management application written in Go. One native service manages configured workloads and operations and exposes an embedded local web UI. Windows uses Windows Service Control Manager; Linux uses a systemd user service.
 
-The current release provides process supervision, scheduling, backups, storage,
-software management, Terminal, and independently installable remote desktop
-plugins.
+The normal UI provides plugin management and Overview contributions. Tasks,
+Terminal, RDP and VNC have first-party plugins; installing and enabling them is
+explicit. Legacy backup, storage, software and Docker backends remain available
+through their existing APIs and configuration, but their pages are hidden.
 
 > **RunPilot provides the framework; plugins provide the features.**
 
-Existing functionality remains in place until its plugin replacement reaches
-parity. First-party plugin source stays in this repository, while plugin
+Legacy backends remain in place until their plugin replacements reach parity.
+First-party plugin source stays in this repository, while plugin
 packages are versioned and published independently through the GitHub-backed
 plugin catalog.
 
 ## Capabilities
+
+The following capabilities include legacy backend functions whose pages are
+currently hidden:
 
 - Native service through Windows SCM or a Linux systemd user service
 - Long-running process supervision with restart policies and backoff
@@ -36,9 +40,9 @@ plugin catalog.
 
 The target core is a small plugin host: package/runtime management, versioned
 host capabilities, one authenticated application WebSocket, the web shell,
-shared UI/theme primitives and framework settings. Tasks, Storage, Docker,
-Terminal, Software, Backup and Remote Access migrate incrementally to plugins.
-RDP and VNC are plugin-owned; Xpra remains a temporary internal core exception
+shared UI/theme primitives and framework settings. Tasks, Terminal, RDP and VNC
+are plugin-owned in the normal UI. Storage, Docker, Software and Backup remain
+transitional core implementations. Xpra remains a temporary internal core exception
 with no user-facing navigation while its plugin capabilities are designed.
 
 Host CPU/memory/disk presentation is planned as widget contributions rather
@@ -87,6 +91,9 @@ A RunPilot scheduled task can update the installed binary non-interactively and
 ask systemd to restart RunPilot after the task has had time to finish recording
 its result. Because a RunPilot `sh` interpreter runs a script path, use a
 direct `/bin/sh -c` command for an inline pipeline:
+
+The YAML example below is a legacy job definition. Create an equivalent
+scheduled command in the Tasks plugin UI when using the plugin.
 
 ```yaml
 name: RunPilot update
@@ -259,7 +266,7 @@ The default data directory is `%ProgramData%\RunPilot`.
 
 ## Configuration model
 
-Tasks are presented as one user-facing capability while continuous process supervision and scheduled execution retain separate internal lifecycle engines. Processes are continuous workloads; scheduled jobs are one-shot executions; backups are a typed job subtype sharing scheduler, history and manual-run machinery without becoming arbitrary shell-script templates.
+The Tasks plugin presents continuous and scheduled command tasks. Legacy task definitions remain in `runpilot.yaml` and are not imported automatically. The legacy process and job engines continue running configured workloads; backups remain typed legacy jobs until their own plugin migration.
 
 Storage locations are runtime capabilities, not user-managed configuration records. `local` always exposes filesystem roots available to the RunPilot service identity. `docker-volumes` is one Docker-backed location whose root lists current volumes as directories. Volume contents are accessed through short-lived Docker helper containers, never through a Docker host mountpoint; running volumes are read-only.
 
@@ -288,7 +295,7 @@ backup:
     retryWaitSeconds: 5
 ```
 
-`mirror` mode maps to Robocopy `/MIR` and can delete destination-only files. The UI displays an explicit warning before saving it.
+`mirror` mode maps to Robocopy `/MIR` and can delete destination-only files. The hidden legacy editor retains its warning if it is reintroduced during migration.
 
 Restic uses a repository and native snapshots; it can run `forget` retention (optionally with `--prune`) and a post-backup repository check. Passwords are not stored in configuration: use an optional `passwordFile` path or Restic's normal externally supplied environment.
 
@@ -331,7 +338,7 @@ software:
         root: D:\RunPilotApps # optional; empty uses <data-dir>\software\scoop
 ```
 
-RunPilot downloads and bootstraps this isolated Scoop instance on first use, including Scoop's managed portable Git prerequisite under the same root. It never uses, changes, or imports an existing user Scoop installation; it does not permanently add Scoop shims to PATH or set global Scoop environment variables. Changing `root` selects a new isolated installation and leaves the old root untouched. Packages are standard portable Scoop packages and remain separate from RunPilot Process definitions. The Software page can list, add and remove Scoop buckets through typed controls; the required `main` bucket, Git and 7-Zip remain visible but their individual package controls are disabled because Scoop manages them.
+RunPilot downloads and bootstraps this isolated Scoop instance on first use, including Scoop's managed portable Git prerequisite under the same root. It never uses, changes, or imports an existing user Scoop installation; it does not permanently add Scoop shims to PATH or set global Scoop environment variables. Changing `root` selects a new isolated installation and leaves the old root untouched. Packages are standard portable Scoop packages and remain separate from legacy RunPilot Process definitions. The legacy Software API and hidden page support bucket management; the required `main` bucket, Git and 7-Zip cannot be individually removed because Scoop manages them.
 
 ## Architecture
 
@@ -357,15 +364,15 @@ migrated on startup without deleting the legacy file.
 
 RunPilot has a deliberately narrow, Linux-only Docker Compose v2 feature. Managed projects are directories below `<data-dir>/compose/<project-name>/`; each can contain `compose.yaml` and a secret-bearing `.env` file. Project directories are the registry, so a managed project appears before its first `up`.
 
-The Docker page has projects, volumes, and networks. It discovers other Compose projects through Docker too, but leaves them read-only. RunPilot never adopts or edits them. Managed projects expose only `up -d`, `start`, `stop`, and `down`; commands always include the project name, project directory, and Compose file. `down` does not remove volumes or images. A managed directory can be deleted only after Docker confirms there are no containers with its Compose project label. Containers in managed projects can be started, stopped, and deleted only when stopped; their logs can be viewed and a running container can open a PTY-backed `docker exec -it <id> /bin/sh` terminal. These actions validate the container ID, Compose project label, and managed-project directory before using fixed Docker arguments; they are not a general container-control or command API.
+The hidden legacy Docker page and API manage projects, volumes, and networks. They discover other Compose projects through Docker too, but leave them read-only. RunPilot never adopts or edits them. Managed projects expose only `up -d`, `start`, `stop`, and `down`; commands always include the project name, project directory, and Compose file. `down` does not remove volumes or images. A managed directory can be deleted only after Docker confirms there are no containers with its Compose project label. Containers in managed projects can be started, stopped, and deleted only when stopped; their logs can be viewed and a running container can open a PTY-backed `docker exec -it <id> /bin/sh` terminal. These actions validate the container ID, Compose project label, and managed-project directory before using fixed Docker arguments; they are not a general container-control or command API.
 
 Volumes are discovered with Docker metadata and show Compose ownership only when Compose labels exist. Every discoverable volume is automatically a Storage location. RunPilot can create named local-driver volumes and may delete an unreferenced volume; deletion never uses force. Non-local drivers remain visible but unavailable for browsing. Running-volume Storage is read-only.
 
 Docker volume mountpoints are resolved only through `docker volume inspect` internally and are never sent through the Storage API. This prepares a future provider-neutral Backup source flow; no Docker volume backup job exists yet. A filesystem backup of a volume used by a running application, especially a database, is not automatically application-consistent. Future backup support must explicitly require downtime or provide a separate quiescing strategy.
 
-Docker networks are also visible on the Docker page. RunPilot can create named bridge networks and delete an unused network only after Docker confirms that no running or stopped container references it. Compose ownership is shown only from Compose labels. It does not expose network driver options, attach/detach controls, firewall configuration, or generic Docker networking commands.
+Docker networks remain available through the legacy API and hidden page. RunPilot can create named bridge networks and delete an unused network only after Docker confirms that no running or stopped container references it. Compose ownership is shown only from Compose labels. It does not expose network driver options, attach/detach controls, firewall configuration, or generic Docker networking commands.
 
-Docker authority is exactly the authority of the process running RunPilot. The page tests the Docker CLI, Compose v2 plugin, and daemon access under that identity, distinguishing missing CLI/plugin, unavailable daemon, and permission denial. It never invokes sudo, changes Docker socket permissions, or modifies group membership.
+Docker authority is exactly the authority of the process running RunPilot. The legacy backend tests the Docker CLI, Compose v2 plugin, and daemon access under that identity, distinguishing missing CLI/plugin, unavailable daemon, and permission denial. It never invokes sudo, changes Docker socket permissions, or modifies group membership.
 
 ## Near-term roadmap
 

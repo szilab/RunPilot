@@ -5,7 +5,7 @@
     {"id": "remote.rdp", "source": "plugins/remote-rdp", "publish": true},
     {"id": "remote.vnc", "source": "plugins/remote-vnc", "publish": true},
     {"id": "hello", "source": "plugins/examples/hello", "publish": false},
-    {"id": "tasks", "source": "plugins/tasks", "publish": false},
+    {"id": "tasks", "source": "plugins/tasks", "publish": true},
     {"id": "terminal", "source": "plugins/terminal", "publish": true},
     {"id": "web.apps", "source": "plugins/web-apps", "publish": false}
   ]

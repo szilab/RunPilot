@@ -435,8 +435,7 @@ export function activate(runpilot) {
   ];
 
   runpilot.navigation.register({
-    // "tasks" is the legacy page's ID; this page coexists with it until cutover.
-    id: "tasks-plugin", title: "Tasks (plugin)", icon: "☑",
+    id: "tasks", title: "Tasks", icon: "☑",
     render: root => { page = root; render(); load(); },
   });
   load();

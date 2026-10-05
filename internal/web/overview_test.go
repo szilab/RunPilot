@@ -70,3 +70,33 @@ func TestSystemEndpointProvidesCapabilities(t *testing.T) {
 		t.Fatal("system response is missing capabilities")
 	}
 }
+
+func TestHiddenLegacyFeaturesKeepTheirAuthenticatedAPIs(t *testing.T) {
+	ctrl, err := core.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	server, err := New(ctrl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"/api/v1/processes", "/api/v1/jobs", "/api/v1/storage",
+		"/api/v1/software/providers", "/api/v1/overview",
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer "+ctrl.Snapshot().Server.Token)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Errorf("%s = %d: %s", path, response.Code, response.Body.String())
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/docker", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Errorf("Docker legacy API authentication = %d: %s", response.Code, response.Body.String())
+	}
+}

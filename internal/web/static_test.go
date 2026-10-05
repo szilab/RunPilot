@@ -1,9 +1,82 @@
 package web
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestCoreShellLeavesFeatureNavigationToPlugins(t *testing.T) {
+	index, err := staticFS.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(index)
+	for _, id := range []string{"tasks", "storage", "software", "docker"} {
+		if strings.Contains(page, `data-page="`+id+`"`) {
+			t.Errorf("legacy %s navigation is exposed", id)
+		}
+	}
+	for _, id := range []string{"overview", "settings"} {
+		if !strings.Contains(page, `data-page="`+id+`"`) {
+			t.Errorf("core %s navigation is missing", id)
+		}
+	}
+	for _, id := range []string{"tasks", "storage", "software", "docker"} {
+		if strings.Contains(page, `id="`+id+`Page"`) || !strings.Contains(page, `id="legacy`+strings.ToUpper(id[:1])+id[1:]+`Page"`) {
+			t.Errorf("legacy %s markup reserves the plugin page ID", id)
+		}
+	}
+	app, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(app)
+	for _, want := range []string{
+		`document.querySelector("nav").append(button)`,
+		`pluginNavigation.set(entry.id, { ...entry, button, page, extension })`,
+		`if (!Object.hasOwn(pageMeta, page) && !registered) return;`,
+		`if (pluginSnapshot) { pluginStatuses = pluginSnapshot.plugins || [];`,
+		`if (frontendSnapshot) await loadPluginExtensions(frontendSnapshot);`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("plugin shell behavior missing %q", want)
+		}
+	}
+	if strings.Contains(script, `$("dockerNav")`) {
+		t.Error("Docker capability can re-enable legacy navigation")
+	}
+	refreshStart := strings.Index(script, "async function refresh() {")
+	refreshEnd := strings.Index(script, "async function loadPluginExtensions(")
+	if refreshStart < 0 || refreshEnd <= refreshStart {
+		t.Fatal("shell refresh or plugin loader is missing")
+	}
+	refresh := script[refreshStart:refreshEnd]
+	for _, path := range []string{"api/v1/processes", "api/v1/jobs", "api/v1/storage", "api/v1/overview", "api/v1/docker"} {
+		if strings.Contains(refresh, path) {
+			t.Errorf("shell refresh still loads legacy %s", path)
+		}
+	}
+	pageSwitchStart := strings.Index(script, "function setPage(page) {")
+	pageSwitchEnd := strings.Index(script, `document.querySelectorAll(".nav").forEach`)
+	if pageSwitchStart < 0 || pageSwitchEnd <= pageSwitchStart {
+		t.Fatal("page switcher is missing")
+	}
+	pageSwitch := script[pageSwitchStart:pageSwitchEnd]
+	for _, old := range []string{`page === "docker"`, `page === "software"`} {
+		if strings.Contains(pageSwitch, old) {
+			t.Errorf("legacy page switcher still matches %s", old)
+		}
+	}
+	plugin, err := os.ReadFile(filepath.Join("..", "..", "plugins", "tasks", "web", "plugin.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(plugin), `id: "tasks", title: "Tasks"`) || strings.Contains(string(plugin), `id: "tasks-plugin"`) {
+		t.Error("Tasks plugin does not own the normal Tasks page")
+	}
+}
 
 func TestPluginSettingsUseSharedSectionsAndNamedNavigationIcons(t *testing.T) {
 	app, err := staticFS.ReadFile("static/app.js")
@@ -185,10 +258,9 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		`id="overviewPage"`,
 		`runpilot-logo.png`,
 		`id="themeToggle"`,
-		`data-page="software"`,
 		`vendor/xterm/xterm.js`,
 		`vendor/xterm/addon-fit.js`,
-		`id="softwarePage"`,
+		`id="legacySoftwarePage"`,
 		`id="softwareProviderSelect"`,
 		`id="softwareProviderCard"`,
 		`data-software-tab="buckets"`,
@@ -209,8 +281,7 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		`for="storageProvider"`,
 		`class="storage-provider-label">Location</label>`,
 		`id="storageNewFile"`,
-		`data-page="tasks"`,
-		`id="tasksPage"`,
+		`id="legacyTasksPage"`,
 		`data-task-kind="continuous"`,
 		`class="row task-choice"`,
 		`class="docker-resources-grid"`,
@@ -249,7 +320,7 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 			t.Fatalf("UI still contains obsolete presentation %q", removed)
 		}
 	}
-	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "api/v1/software/providers", "/buckets", "api/v1/overview", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "dockerProjectErrors", "Compose operation failed", "const projectColumns = [[], []];", "docker-project-column", "const canUp = ready && hasCompose && !busy;", "const canDelete = ready && !volume.inUse && !busy", "const deleteAction = volume.inUse ? \"\"", "const composeManaged=!!network.composeProject", "docker-resource-action-slot", "docker-resource-row", "function openDockerVolumeStorage", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function initializeSidebar", "sidebarStorageKey", `class="row"`} {
+	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "function renderOverview", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "/buckets", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "dockerProjectErrors", "Compose operation failed", "const projectColumns = [[], []];", "docker-project-column", "const canUp = ready && hasCompose && !busy;", "const canDelete = ready && !volume.inUse && !busy", "const deleteAction = volume.inUse ? \"\"", "const composeManaged=!!network.composeProject", "docker-resource-action-slot", "docker-resource-row", "function openDockerVolumeStorage", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function initializeSidebar", "sidebarStorageKey", `class="row"`} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js does not contain %q", want)
 		}

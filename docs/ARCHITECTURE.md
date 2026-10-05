@@ -10,14 +10,14 @@ being refactored into a small **plugin host and management framework**.
 The target core owns infrastructure that multiple features need: plugin
 installation/runtime, versioned host capabilities, one authenticated application
 WebSocket, the web shell, shared UI/theme primitives, and framework settings.
-Tasks, Storage, Docker, Terminal, Software, Backup and Remote Access belong in
-plugins once their migrations reach parity. RDP and VNC have migrated to
-first-party plugins. Xpra is the temporary Remote exception described below.
+Tasks, Terminal, RDP and VNC are plugin-owned in the normal UI. Storage, Docker,
+Software and Backup remain transitional core implementations without normal
+navigation. Xpra is the temporary Remote exception described below.
 
-The migration is incremental. Those features still exist in the legacy core
-today and must remain operational until the equivalent plugin path is implemented
-and tested. New architecture work must not use that transitional state as a
-reason to add more feature semantics to core.
+The migration is incremental. Legacy backends, APIs and configuration remain
+operational until plugin parity and any required state migration decision. New
+architecture work must not use that transitional state as a reason to add more
+feature semantics to core.
 
 ## Core boundary
 
@@ -143,9 +143,10 @@ Core owns layout and visual primitives; plugins own feature pages and feature
 semantics. Plugin CSS should use public semantic design tokens rather than
 hard-code RunPilot's current colors or spacing.
 
-Overview is an extension host rather than a fixed dashboard. Host CPU/memory/disk
-presentation is planned as widget contributions; the current System package is a
-technical fixture, not the intended user-facing System feature.
+Overview and Settings remain core extension hosts. Overview renders plugin
+contributions; host monitoring presentation is planned as widget contributions.
+The current System package is a technical fixture, not the intended user-facing
+System feature.
 
 ## Plugin publication and installation
 
@@ -176,14 +177,9 @@ The next work is feature migration, not further expansion of the core plugin
 framework. Migrate one feature at a time and remove its legacy core/API code only
 after plugin parity and automated regression coverage.
 
-Current intended order:
-
-1. Tasks and execution history;
-2. Storage;
-3. Docker;
-4. Terminal;
-5. Software and backup integrations;
-6. Finish Remote provider migrations (one provider at a time).
+Tasks, Terminal, RDP and VNC have migrated in the normal UI. Docker is the next
+active feature migration. Storage, Software, Backup and Xpra follow as separate
+plugin work; see the [backlog](../BACKLOG.md).
 
 ### Remote status
 
@@ -196,25 +192,26 @@ are designed; see the concise [backlog](../BACKLOG.md).
 
 ### Tasks status
 
-Tasks has a real first-party plugin (`plugins/tasks`, version `0.1.0`, ABI v2,
-unpublished and never auto-enabled). It covers continuous command tasks and
+Tasks has a publishable first-party plugin (`plugins/tasks`, version `0.1.0`,
+ABI v2, never auto-enabled). It covers continuous command tasks and
 scheduled command tasks, owns their definitions and semantics, and talks to the
 browser only through the common WebSocket. It runs on the generic storage,
-scheduler, process, history and event capabilities; core has no Task concept.
+scheduler, process, history and event capabilities without adding a Task host
+capability.
 
-**The legacy Tasks implementation remains the active production path** until an
-explicit, separate cutover. Both can be installed side by side (the plugin page
-is "Tasks (plugin)"), and legacy Tasks, `runpilot.yaml` and Run history are
-unaffected by it. **Backup is not part of the Tasks plugin**: Backup jobs stay
-in the legacy job engine until their own migration.
+The plugin owns the normal `tasks` page. Legacy task definitions in
+`runpilot.yaml`, their Run history and the legacy backend remain intact but are
+not shown in the normal UI. No automatic conversion is performed; migration or
+cleanup requires a separate decision. **Backup is not part of the Tasks
+plugin**: Backup jobs remain in the legacy job engine until their own migration.
 
 The capability changes made for Tasks are generic framework infrastructure:
 interpreter-aware `process.start` (launcher semantics), process timeouts and
 captured output, `scheduler.validate`, the owner-scoped `history.*` family, and
 ordered/bounded event delivery. See [PLUGIN_API.md](PLUGIN_API.md).
 
-The async ABI-v2 process/scheduler/event path should remain covered by real-WASM
-race/integration tests before stateful feature migrations depend on it.
+The async ABI-v2 process/scheduler/event path remains covered by real-WASM
+race/integration tests.
 
 The widget contribution model should be designed when the first real widgets are
 implemented, rather than by expanding the System fixture now.

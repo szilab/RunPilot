@@ -172,12 +172,12 @@ application release workflows no longer bundle plugin artifacts.
 Host metrics presentation will use future plugin/widget contributions. No System
 feature expansion is part of the registry implementation.
 
-`plugins/tasks` is the first feature plugin (continuous and scheduled command
-tasks). It is registered in `plugins/publication.json` with `publish: false`,
-is not installed or enabled automatically, and does not replace the legacy
-Tasks page (its navigation entry is "Tasks (plugin)"). Backup is not part of
-it. Unit tests inject a fake host; `internal/core/tasks_plugin_test.go` runs the
-real ABI-v2 WASM through the normal controller path.
+`plugins/tasks` owns the Tasks page for continuous and scheduled command tasks.
+It is publishable, but is not installed or enabled automatically. Legacy task
+definitions remain separate state pending a migration decision. Backup is not
+part of this plugin. Unit tests inject a fake host;
+`internal/core/tasks_plugin_test.go` runs the real ABI-v2 WASM through the normal
+controller path.
 
 `plugins/terminal` provides interactive sessions through the generic process
 session capability. Its tab strip uses `+` to open a session and per-tab close

@@ -28,11 +28,6 @@ const sidebarStorageKey = "runpilot.sidebar-collapsed";
 
 const pageMeta = {
   overview: ["Overview", null],
-  storage: ["Storage", null],
-  tasks: ["Tasks", "Add task"],
-  software: ["Software", null],
-  terminal: ["Terminal", null],
-  docker: ["Docker", "Create project"],
   settings: ["Settings", null],
 };
 
@@ -163,7 +158,7 @@ function pluginNavigationIcon(icon) {
 function registerPluginNavigation(extension, entry) {
   if (!entry || typeof entry.id !== "string" || !entry.id || typeof entry.render !== "function" || (entry.headerActions !== undefined && typeof entry.headerActions !== "function") || pluginNavigation.has(entry.id) || $(entry.id + "Page")) throw new Error("invalid or duplicate plugin navigation entry");
   const button = document.createElement("button"); button.className = "nav"; button.type = "button"; button.dataset.page = entry.id; button.title = entry.title || entry.id; button.innerHTML = `${pluginNavigationIcon(entry.icon)}<span class="nav-label">${escapeHtml(entry.title || entry.id)}</span>`;
-  document.querySelector("nav").insertBefore(button, $('[data-page="settings"]'));
+  document.querySelector("nav").append(button);
   const page = document.createElement("section"); page.id = entry.id + "Page"; page.className = "page"; document.querySelector("main").append(page);
   pluginNavigation.set(entry.id, { ...entry, button, page, extension });
   button.addEventListener("click", () => setPage(entry.id));
@@ -474,43 +469,19 @@ async function refresh() {
   if (refreshing || !token) return;
   refreshing = true;
   try {
-    const [p, j, o, st, sw, docker, pluginSnapshot, frontendSnapshot] = await Promise.all([
-      api("api/v1/processes"),
-      api("api/v1/jobs"),
-      api("api/v1/overview"), api("api/v1/storage"),
-      currentPage === "software" ? api("api/v1/software/providers") : Promise.resolve(null),
-      currentPage === "docker" ? Promise.all([api("api/v1/docker/projects"), api("api/v1/docker/volumes"), api("api/v1/docker/networks")]) : Promise.resolve(null),
+    const [pluginSnapshot, frontendSnapshot] = await Promise.all([
       currentPage === "settings" ? api("api/v1/plugins") : Promise.resolve(null),
       api("api/v1/plugins/runtime")
     ]);
-    processes = p;
-    jobs = j;
-    overview = o;
-    storage = st;
-    if (sw) {
-      softwareProviders = sw;
-      if (!sw.some(p => p.id === softwareProviderID)) softwareProviderID = sw[0]?.id || "";
-      const selected = sw.find(p => p.id === softwareProviderID);
-      if (selected?.state === "ready") {
-        await loadSoftwareView();
-      } else {
-        softwarePackages = []; softwareUpdates = []; softwareSearchResults = []; softwareBuckets = []; softwareLoading = false; softwareLoadingKey = ""; softwareLoadedKey = "";
-      }
-    }
-    renderOverview();
-    renderTasks();
-    renderStorage();
-    if (currentPage === "software") renderSoftware();
-    if (docker) applyDockerSnapshot(docker);
     if (pluginSnapshot) { pluginStatuses = pluginSnapshot.plugins || []; pluginDiscoveryErrors=pluginSnapshot.discoveryErrors || []; pluginRestartRequired=!!pluginSnapshot.restartRequired; renderPluginSettings(); if (!pluginCatalogLoaded && !pluginCatalogLoading) refreshPluginCatalog(); }
     if (frontendSnapshot) await loadPluginExtensions(frontendSnapshot);
+    renderOverview();
     setConnected(true);
   } catch (e) {
     softwareLoading = false; softwareLoadingKey = "";
     setConnected(!!e.serverReachable);
     if (e.message === "Unauthorized") $("loginDialog").showModal();
     else toast(e.message);
-    if (currentPage === "software") renderSoftware();
   } finally {
     refreshing = false;
   }
@@ -617,19 +588,9 @@ async function managePlugin(id, action, version="") {
 }
 
 function renderOverview() {
-  if (!overview) return;
-  $("overviewMetrics").innerHTML = [
-    ["Tasks", `${overview.runningTasks || 0} running / ${overview.taskCount || 0}`, percent(overview.runningTasks || 0, overview.taskCount || 0), "green"],
-  ].map(metric => Array.isArray(metric) ? `<div class="metric"><span>${metric[0]}</span><strong>${escapeHtml(metric[1])}</strong>${meter(metric[2], metric[3])}</div>` : metric).join("");
+  $("overviewMetrics").replaceChildren();
   for (const entry of pluginOverview.values()) { try { const node=entry.render(); if(node) $("overviewMetrics").append(node); } catch(error) { console.error(`plugin overview ${entry.id}`,error); } }
-  $("diskDetails").closest("section").classList.add("hidden");
-
-  const issues = overview.issues || [];
-  $("issueCount").textContent = issues.length ? `${issues.length} issue${issues.length === 1 ? "" : "s"}` : "No issues";
-  $("issueDetails").innerHTML = issues.length ? issues.map(issue => `<article class="row issue-row">
-    <div class="row-head"><div><h3>${escapeHtml(issue.name)}</h3><div class="meta">${escapeHtml(issue.source)}</div></div>${statusBadge("failure")}</div>
-    <div class="row-details"><div class="kv"><span>Details</span><span>${escapeHtml(issue.message)}</span></div></div>
-  </article>`).join("") : `<div class="empty compact"><h2>All clear</h2><p>No current task or host errors were reported.</p></div>`;
+  if (!$("overviewMetrics").childElementCount) $("overviewMetrics").append(pluginUI().EmptyState({ title: "No overview widgets yet", message: "Enabled plugins can add widgets here." }));
 }
 
 function startAutoRefresh() {
@@ -1065,7 +1026,6 @@ async function loadSystemInfo() {
   window.runPilotWebSocketPayloadMode = systemInfo?.websocketPayloadMode || "disabled";
   if (connectionOnline) setConnected(true);
   configurePlatformAwareFields(systemInfo.capabilities || {});
-	$("dockerNav").classList.toggle("hidden", !systemInfo?.capabilities?.dockerCompose);
 }
 
 function configurePlatformAwareFields(capabilities) {
@@ -1095,11 +1055,12 @@ function dockerAttachWebSocketURL(ticket) {
 }
 
 function setPage(page) {
+  const registered = pluginNavigation.get(page);
+  if (!Object.hasOwn(pageMeta, page) && !registered) return;
   currentPage = page;
   document.querySelectorAll(".nav").forEach(n => n.classList.toggle("active", n.dataset.page === page));
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
   $(`${page}Page`).classList.add("active");
-  const registered = pluginNavigation.get(page);
   const headerActions = $("pluginHeaderActions");
   headerActions.replaceChildren();
   headerActions.classList.add("hidden");
@@ -1111,10 +1072,6 @@ function setPage(page) {
   $("pageTitle").textContent = title;
   $("primaryAction").textContent = action || "";
   $("primaryAction").classList.toggle("hidden", !action);
-	$("dockerVolumeAction").classList.toggle("hidden", page !== "docker");
-	$("dockerNetworkAction").classList.toggle("hidden", page !== "docker");
-	if (page === "software") renderSoftware();
-	if (page === "docker") renderDocker();
 	if (page === "settings") renderPluginSettings();
 	if (registered) { registered.page.replaceChildren(); registered.render(registered.page); }
   refresh();
