@@ -10,7 +10,6 @@ let storageClipboard = null, editingTextPath = null, storageShowHidden = false, 
 let overview = null;
 let systemInfo = null;
 let dockerRuntime = null, dockerProjects = [], dockerVolumes = [], dockerNetworks = [], dockerBusy = new Set(), dockerPendingContainerStates = new Map(), dockerProjectErrors = new Map(), dockerEditing = null, dockerAttachTerminal = null;
-let remoteProviders = [], remoteTargets = [], remoteSessions = [], remoteSessionID = "", remoteStartingTargets = new Set(), remoteRDPInteraction = null, remoteVNCInteraction = null, remotePendingTarget = null, remoteVNCPendingCredentials = null;
 let pluginStatuses = [], pluginBusy = new Set();
 let pluginDiscoveryErrors = [], pluginRestartRequired = false;
 let pluginCatalog = [], pluginCatalogError = "", pluginCatalogLoaded = false, pluginCatalogLoading = false;
@@ -34,7 +33,6 @@ const pageMeta = {
   software: ["Software", null],
   terminal: ["Terminal", null],
   docker: ["Docker", "Create project"],
-  remote: ["Remote Access", "Add target"],
   settings: ["Settings", null],
 };
 
@@ -162,7 +160,14 @@ function pluginNavigationIcon(icon) {
   if (icon === "monitor") return '<svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>';
   return `<span class="nav-icon" aria-hidden="true">${escapeHtml(icon || "•")}</span>`;
 }
-function registerPluginNavigation(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginNavigation.has(entry.id)||$(entry.id+"Page")) throw new Error("invalid or duplicate plugin navigation entry"); const button=document.createElement("button");button.className="nav";button.type="button";button.dataset.page=entry.id;button.title=entry.title||entry.id;button.innerHTML=`${pluginNavigationIcon(entry.icon)}<span class="nav-label">${escapeHtml(entry.title||entry.id)}</span>`;document.querySelector("nav").insertBefore(button,$('[data-page="settings"]'));const page=document.createElement("section");page.id=entry.id+"Page";page.className="page";document.querySelector("main").append(page);pluginNavigation.set(entry.id,{...entry,button,page,extension});button.addEventListener("click",()=>setPage(entry.id));}
+function registerPluginNavigation(extension, entry) {
+  if (!entry || typeof entry.id !== "string" || !entry.id || typeof entry.render !== "function" || (entry.headerActions !== undefined && typeof entry.headerActions !== "function") || pluginNavigation.has(entry.id) || $(entry.id + "Page")) throw new Error("invalid or duplicate plugin navigation entry");
+  const button = document.createElement("button"); button.className = "nav"; button.type = "button"; button.dataset.page = entry.id; button.title = entry.title || entry.id; button.innerHTML = `${pluginNavigationIcon(entry.icon)}<span class="nav-label">${escapeHtml(entry.title || entry.id)}</span>`;
+  document.querySelector("nav").insertBefore(button, $('[data-page="settings"]'));
+  const page = document.createElement("section"); page.id = entry.id + "Page"; page.className = "page"; document.querySelector("main").append(page);
+  pluginNavigation.set(entry.id, { ...entry, button, page, extension });
+  button.addEventListener("click", () => setPage(entry.id));
+}
 function registerPluginOverview(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginOverview.has(entry.id)) throw new Error("invalid or duplicate overview card"); pluginOverview.set(entry.id,{...entry,extension}); }
 function registerPluginSettings(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginSettings.has(entry.id)) throw new Error("invalid or duplicate settings section"); pluginSettings.set(entry.id,{...entry,extension}); }
 
@@ -230,7 +235,6 @@ function initializeTheme() {
 
 function setSidebarCollapsed(collapsed) {
   const shell=document.querySelector(".shell"), changing=shell.classList.contains("sidebar-collapsed")!==collapsed;
-  if (changing) remoteRDPInteraction?.layoutTransitionStarted?.();
   shell.classList.toggle("sidebar-collapsed", collapsed);
   $("sidebarToggle").setAttribute("aria-expanded", String(!collapsed));
   const label = collapsed ? "Expand sidebar" : "Collapse sidebar";
@@ -470,13 +474,12 @@ async function refresh() {
   if (refreshing || !token) return;
   refreshing = true;
   try {
-    const [p, j, o, st, sw, docker, remote, pluginSnapshot, frontendSnapshot] = await Promise.all([
+    const [p, j, o, st, sw, docker, pluginSnapshot, frontendSnapshot] = await Promise.all([
       api("api/v1/processes"),
       api("api/v1/jobs"),
       api("api/v1/overview"), api("api/v1/storage"),
       currentPage === "software" ? api("api/v1/software/providers") : Promise.resolve(null),
       currentPage === "docker" ? Promise.all([api("api/v1/docker/projects"), api("api/v1/docker/volumes"), api("api/v1/docker/networks")]) : Promise.resolve(null),
-      currentPage === "remote" ? Promise.all([api("api/v1/remote/providers"), api("api/v1/remote/targets"), api("api/v1/remote/sessions")]) : Promise.resolve(null),
       currentPage === "settings" ? api("api/v1/plugins") : Promise.resolve(null),
       api("api/v1/plugins/runtime")
     ]);
@@ -499,7 +502,6 @@ async function refresh() {
     renderStorage();
     if (currentPage === "software") renderSoftware();
     if (docker) applyDockerSnapshot(docker);
-    if (remote) { [remoteProviders, remoteTargets, remoteSessions] = remote; renderRemote(); }
     if (pluginSnapshot) { pluginStatuses = pluginSnapshot.plugins || []; pluginDiscoveryErrors=pluginSnapshot.discoveryErrors || []; pluginRestartRequired=!!pluginSnapshot.restartRequired; renderPluginSettings(); if (!pluginCatalogLoaded && !pluginCatalogLoading) refreshPluginCatalog(); }
     if (frontendSnapshot) await loadPluginExtensions(frontendSnapshot);
     setConnected(true);
@@ -519,7 +521,7 @@ async function loadPluginExtensions(extensions) {
   for (const [id, loaded] of pluginExtensions) {
     if (!active.has(id)) {
       if (typeof loaded.root === "function") loaded.root(); else loaded.root?.remove();
-      for (const [key, entry] of pluginNavigation) if (entry.extension === id) { entry.button.remove(); entry.page.remove(); pluginNavigation.delete(key); }
+      for (const [key, entry] of pluginNavigation) if (entry.extension === id) { entry.button.remove(); entry.page.remove(); pluginNavigation.delete(key); if (currentPage === key) { $("pluginHeaderActions").replaceChildren(); $("pluginHeaderActions").classList.add("hidden"); } }
       for (const [key, entry] of pluginOverview) if (entry.extension === id) pluginOverview.delete(key);
       for (const [key, entry] of pluginSettings) if (entry.extension === id) pluginSettings.delete(key);
       pluginExtensions.delete(id);
@@ -547,9 +549,6 @@ async function loadPluginExtensions(extensions) {
       overview: Object.freeze({ register: entry => registerPluginOverview(extension.id, entry), render: renderOverview }),
       settings: Object.freeze({ register: entry => registerPluginSettings(extension.id, entry) }),
       ws: pluginWS,
-      // Temporary first-party Remote compatibility while that core feature has
-      // not migrated. It is intentionally not part of the public plugin API.
-      remote: Object.freeze({ registerProviderUI: metadata => window.RunPilotRemoteUI?.registerProvider(extension.id, metadata) }),
     });
     pluginExtensions.set(extension.id, { module, root: await module.activate(runpilot) });
   }
@@ -615,148 +614,6 @@ async function managePlugin(id, action, version="") {
     pluginStatuses=response.plugins || []; pluginRestartRequired=!!response.restartRequired; toast("Package changed. Restart required."); await refreshPluginCatalog();
   } catch(error) { toastError(error.message); }
   finally { pluginBusy.delete(id); renderPluginSettings(); }
-}
-
-function remoteStatus(state) { return state === "available" ? "running" : state === "not-installed" || state === "unsupported" ? "stopped" : "failure"; }
-function guacdValue() { return {host:$("guacdHost").value.trim(),port:Number($("guacdPort").value),tls:$("guacdTLS").checked,connectTimeoutSeconds:Number($("guacdTimeout").value)}; }
-function setGuacdError(message="") { $("guacdSettingsError").textContent=message; $("guacdSettingsError").classList.toggle("hidden",!message); }
-function setGuacdStatus(message="", error=false) { const node=$("guacdSettingsStatus"); node.textContent=message; node.classList.toggle("hidden",!message); node.classList.toggle("form-error",error); }
-function validateGuacdForm(value) { if(!value.host) return "guacd host is required"; if(!Number.isInteger(value.port)||value.port<1||value.port>65535) return "guacd port must be between 1 and 65535"; if(!Number.isInteger(value.connectTimeoutSeconds)||value.connectTimeoutSeconds<1||value.connectTimeoutSeconds>60) return "guacd connect timeout must be between 1 and 60 seconds"; return ""; }
-async function openGuacdSettings() { setGuacdError(); setGuacdStatus(); try { const value=await api("api/v1/remote/guacd"); $("guacdHost").value=value.host||"127.0.0.1"; $("guacdPort").value=value.port||4822; $("guacdTLS").checked=!!value.tls; $("guacdTimeout").value=value.connectTimeoutSeconds||5; $("guacdSettingsDialog").showModal(); } catch(e) { toastError(e.message); } }
-function remoteProviderHint(provider) { return provider.state === "available" ? "" : provider.installHint || provider.message || "This provider is not currently available."; }
-function remoteProviderCard(provider) { const hint=remoteProviderHint(provider), metadata=[provider.platform,provider.version].filter(Boolean).join(" · "), rdp=provider.id==="rdp", summary=provider.message ? `<div class="meta">${escapeHtml(provider.message)}</div>` : (metadata ? `<div class="meta">${escapeHtml(metadata)}</div>` : ""); return `<article class="docker-card remote-provider-card"><div class="docker-card-head"><div><h2>${escapeHtml(provider.name)}</h2>${summary}</div><div class="remote-provider-status"><span class="status ${remoteStatus(provider.state)}">${escapeHtml(provider.state)}</span>${hint&&!rdp ? `<span class="provider-info" tabindex="0" role="img" aria-label="Provider installation hint" data-tooltip="${escapeHtml(hint)}">ⓘ</span>` : ""}</div></div></article>`; }
-function remoteTargetCard(target, sessions) {
-  const starting = remoteStartingTargets.has(target.id);
-  const endpoint = target.provider === "rdp" ? target.rdp : target.provider === "vnc" ? target.vnc : null;
-  const detail = endpoint ? `${endpoint.host || ""}${endpoint.port ? `:${endpoint.port}` : ""}` : `${target.type} · ${target.command?.path || ""}`;
-  const session = sessions[0];
-  const statusState = session ? session.state : "idle";
-  const sessionDetails = sessions.map(session => `<div class="remote-target-session"><span class="meta">Started ${escapeHtml(fmtDate(session.startedAt || session.createdAt))}</span>${session.message ? `<span class="meta" title="${escapeHtml(session.message)}">${escapeHtml(session.message)}</span>` : ""}${session.failure ? `<span class="form-error">${escapeHtml(session.failure)}</span>` : ""}</div>`).join("");
-  const diagnoseButton = session ? `<button class="button secondary small" onclick="openRemoteDiagnostics('${session.id}')">Diagnostics</button>` : `<button class="button secondary small" disabled>Diagnostics</button>`;
-  const openButton = session ? `<button class="button primary small remote-open-button" ${session.state === "running" ? "" : "disabled"} onclick="openRemoteSession('${session.id}')">Open</button>` : `<button class="button primary small remote-open-button" ${!starting ? "" : "disabled"} aria-busy="${starting}" onclick="startRemoteSession('${target.id}')">${starting ? '<span class="spinner remote-button-spinner" aria-hidden="true"></span>Starting…' : "Open"}</button>`;
-  return `<article class="docker-card remote-card"><div class="docker-card-head"><div><h2>${escapeHtml(target.name)}</h2><div class="meta">${escapeHtml(detail)}</div></div><div class="remote-card-status"><span class="status ${escapeHtml(statusState)}">${escapeHtml(statusState)}</span><span class="status ${escapeHtml(target.provider === "xpra" ? "installed" : "running")}">${escapeHtml(target.provider)}</span></div></div>${sessionDetails}<div class="row-actions"><button class="button danger small" onclick="deleteRemoteTarget('${target.id}')">Delete</button>${diagnoseButton}<button class="button secondary small" onclick="editRemoteTarget('${target.id}')">Edit</button>${openButton}</div></article>`;
-}
-function renderRemote() {
-  if (!$("remoteProviders")) return;
-  $("remoteProviders").innerHTML = remoteProviders.map(remoteProviderCard).join("") || `<div class="empty compact"><h2>No providers registered</h2></div>`;
-  const activeByTarget = new Map();
-  remoteSessions.filter(session => ["starting", "running", "stopping"].includes(session.state)).forEach(session => { const sessions=activeByTarget.get(session.targetId) || []; sessions.push(session); activeByTarget.set(session.targetId, sessions); });
-  $("remoteTargets").innerHTML = remoteTargets.map(target => remoteTargetCard(target, activeByTarget.get(target.id) || [])).join("");
-  $("remoteTargetsEmpty").classList.toggle("hidden", remoteTargets.length > 0);
-  if (remoteSessionID && !remoteSessions.some(session => session.id === remoteSessionID)) {
-    closeRemoteSession();
-    toast("The remote session is no longer available.");
-    return;
-  }
-  if (remoteSessionID) renderRemoteSession();
-}
-function remoteXpraDefaults() { return remoteProviders.find(provider => provider.id === "xpra")?.xpraDefaults || {}; }
-function setRemoteXpraSettings(options = remoteXpraDefaults()) { $("remoteXpraProfile").value=options.profile || "recommended"; $("remoteXpraEncoding").value=options.encoding || "webp"; $("remoteXpraVideo").checked=!!options.video; $("remoteXpraDPIMode").value=options.dpiMode || "auto"; $("remoteXpraDPI").value=options.dpi || 96; $("remoteXpraLaunchAfterConnect").checked=options.launchAfterConnect !== false; $("remoteXpraClipboard").checked=options.clipboard !== false; $("remoteXpraDynamicResize").checked=options.dynamicResize !== false; $("remoteXpraMenu").value=options.menu || "autohide"; $("remoteXpraToolbarPosition").value=options.toolbarPosition || "top-left"; updateRemoteXpraSettings(); }
-function updateRemoteXpraSettings() { const provider=$("remoteTargetProvider").value, xpra=provider === "xpra", rdp=provider === "rdp", vnc=provider === "vnc", customDPI=$("remoteXpraDPIMode").value === "custom"; $("remoteXpraSettings").classList.toggle("hidden",!xpra); $("remoteRDPSettings").classList.toggle("hidden",!rdp); $("remoteVNCSettings").classList.toggle("hidden",!vnc); document.querySelectorAll(".remote-xpra-only").forEach(node=>node.classList.toggle("hidden",!xpra)); $("remoteXpraDPIWrap").classList.toggle("hidden",!xpra || !customDPI); $("remoteXpraDPI").required=xpra && customDPI; $("remotePath").required=xpra; $("remoteRDPHost").required=rdp; $("remoteVNCHost").required=vnc; if (!xpra) $("remoteTargetType").value="desktop"; }
-function applyRemoteXpraProfile() { const profile=$("remoteXpraProfile").value; const values={recommended:["webp",false],automatic:["auto",true],compatibility:["rgb",false]}; if (values[profile]) { $("remoteXpraEncoding").value=values[profile][0]; $("remoteXpraVideo").checked=values[profile][1]; } }
-function splitRDPUsername(value) { const text=(value||"").trim(), separator=text.indexOf("\\"); return separator > 0 ? {domain:text.slice(0,separator),username:text.slice(separator+1)} : {domain:"",username:text}; }
-function formatRDPUsername(username, domain) { return domain ? `${domain}\\${username}` : username||""; }
-function populateRemoteProviderSelect(selected, editing) { const select=$("remoteTargetProvider"); let providers=remoteProviders; if (editing && selected && !providers.some(provider=>provider.id===selected)) providers=[...providers,{id:selected,name:selected,state:"unavailable"}]; const available=providers.filter(provider=>provider.state==="available"); select.innerHTML=providers.map(provider => `<option value="${escapeHtml(provider.id)}" ${provider.state === "available" || provider.id === selected ? "" : "disabled"}>${escapeHtml(provider.name)}</option>`).join(""); select.value=selected || available[0]?.id || ""; select.disabled=editing || !available.length; $("remoteTargetSave").disabled=!editing && !available.length; }
-function updateRemoteTargetDialogCopy(editing=!!$("remoteTargetId").value) { const provider=$("remoteTargetProvider").value, label=provider === "rdp" ? "RDP" : provider === "vnc" ? "VNC" : "Xpra"; $("remoteTargetDialogTitle").textContent=editing ? `Edit ${label} target` : "Add remote target"; $("remoteTargetDialogDescription").textContent=provider === "rdp" ? "Save a desktop endpoint; credentials are requested each time you connect." : provider === "vnc" ? "Save a VNC desktop endpoint. noVNC requests credentials only when the VNC server requires them." : "Launch an application or desktop in an isolated Xpra session."; }
-function openRemoteTarget(existing = null, providerID = "") { if (!existing && !remoteProviders.some(provider=>provider.state==="available")) { toast("No Remote provider is available. Enable a provider plugin before adding a target."); return; } const provider=existing?.provider||providerID; $("remoteTargetForm").reset(); populateRemoteProviderSelect(provider, !!existing); $("remoteTargetId").value=existing?.id||""; $("remoteTargetName").value=existing?.name||""; $("remoteTargetType").value=existing?.type||"application"; $("remoteDBusMode").value=existing?.dbusMode || (existing?.forwardDbus ? "host-session" : "isolated"); setRemoteXpraSettings(existing?.xpra || remoteXpraDefaults()); const rdp=existing?.rdp||{}, vnc=existing?.vnc||{}; $("remoteRDPHost").value=rdp.host||""; $("remoteRDPPort").value=rdp.port||3389; $("remoteRDPUsername").value=formatRDPUsername(rdp.username,rdp.domain); $("remoteRDPSecurity").value=rdp.securityMode||"automatic"; $("remoteRDPLayout").value=rdp.serverLayout||""; $("remoteRDPResize").value=rdp.resizeMethod||"display-update"; $("remoteRDPCertificate").value=rdp.certificatePolicy||"validate"; $("remoteRDPTimeout").value=rdp.timeoutSeconds||10; $("remoteRDPClipboard").value=rdp.clipboardNormalization||"preserve"; $("remoteRDPPerformance").value=rdp.performanceProfile||"balanced"; $("remoteVNCHost").value=vnc.host||""; $("remoteVNCPort").value=vnc.port||5900; $("remoteVNCConfigUsername").value=vnc.username||""; $("remoteVNCTimeout").value=vnc.connectTimeoutSeconds||10; populateCommandEditor("remote",existing?.command||{interpreter:"direct"}); updateRemoteXpraSettings(); updateRemoteTargetDialogCopy(!!existing); $("remoteTargetDialog").showModal(); }
-function editRemoteTarget(id) { openRemoteTarget(remoteTargets.find(target => target.id === id)); }
-async function deleteRemoteTarget(id) { if (!confirm("Delete this remote target?")) return; try { await api(`api/v1/remote/targets/${id}`,{method:"DELETE"}); await refresh(); } catch (e) { toast(e.message); } }
-function promptRDPConnection(target) { remotePendingTarget=target; $("remoteRDPConnectTitle").textContent=`Connect to ${target.name||"RDP target"}`; $("remoteRDPConnectUsername").value=formatRDPUsername(target.rdp?.username,target.rdp?.domain); $("remoteRDPConnectPassword").value=""; $("remoteRDPConnectDialog").showModal(); }
-async function startRemoteSession(id) { const target=remoteTargets.find(item=>item.id===id); if (target?.provider === "rdp") { promptRDPConnection(target); return; } await beginRemoteSession(id); }
-async function beginRemoteSession(id, credentials=null) { if (remoteStartingTargets.has(id)) return; remoteStartingTargets.add(id); renderRemote(); try { const session=await api(`api/v1/remote/targets/${id}/sessions`,{method:"POST",body:credentials ? JSON.stringify(credentials) : undefined}); if (credentials) credentials.password=""; await refresh(); await openRemoteSession(session.id,credentials); } catch (e) { toastError(e.message); await refresh(); } finally { remoteStartingTargets.delete(id); if (currentPage === "remote") renderRemote(); } }
-async function stopRemoteSession(id) {
-  // Close the local client first so its session-bound tunnel is released before
-  // returning to the Remote overview.
-  const closingCurrentSession = remoteSessionID === id;
-  if (closingCurrentSession) closeRemoteSession();
-  try {
-    await api(`api/v1/remote/sessions/${id}`, {method: "DELETE"});
-    await refresh();
-  } catch (e) {
-    toastError(e.message);
-  }
-}
-async function openRemoteDiagnostics(id) { const session=remoteSessions.find(item=>item.id===id); openLog(`${session?.targetName || "Remote session"} diagnostics`, async () => { const details=await api(`api/v1/remote/sessions/${id}/diagnostics`); return details.log || details.session.message || "No Xpra diagnostics were captured."; }); }
-function focusRemoteClient() {
-  if (!remoteSessionID) return;
-  const client = remoteRDPInteraction ? $("remoteRDP") : remoteVNCInteraction ? $("remoteVNC") : $("remoteFrame");
-  client.focus({preventScroll: true});
-}
-async function openRemoteSession(id, credentials=null) { const session=remoteSessions.find(item=>item.id===id); if (session?.provider === "rdp" && !credentials) { promptRDPConnection({name:session.targetName,rdp:session.rdp,sessionID:id}); return; } remoteSessionID=id; setPage("remote",false); $("remoteSessionError").classList.add("hidden"); $("remoteLoading").classList.remove("hidden"); renderRemoteSession(); try { if (session?.provider === "rdp") await openRDPRemoteSession(session,credentials); else if (session?.provider === "vnc") await openVNCRemoteSession(session); else { const ticket=await api(`api/v1/remote/sessions/${id}/client-ticket`,{method:"POST"}); const frame=$("remoteFrame"); $("remoteRDP").classList.add("hidden"); $("remoteVNC").classList.add("hidden"); frame.classList.remove("hidden"); frame.src=`api/v1/remote/sessions/${encodeURIComponent(id)}/client/?ticket=${encodeURIComponent(ticket.ticket)}`; } history.replaceState(null,"",`?remoteSession=${encodeURIComponent(id)}`); } catch(e) { closeRemoteSession(); toastError(`Remote session unavailable: ${e.message}`); } }
-function renderRemoteSession() { const session=remoteSessions.find(item=>item.id===remoteSessionID); document.querySelector("main").classList.add("remote-active"); $("remoteOverview").classList.add("hidden"); $("remoteSessionView").classList.remove("hidden"); $("remoteSessionName").textContent=session?.targetName||"Remote session"; $("remoteSessionMeta").textContent=session ? `${session.state} · ${fmtDate(session.startedAt || session.createdAt)}` : "Loading session…"; $("remoteStop").disabled=!session || !["starting","running","stopping"].includes(session.state); $("remoteSessionNotice").textContent=session?.message || ""; $("remoteSessionNotice").classList.toggle("hidden", !session?.message); }
-function closeRemoteSession() {
-  const rdpInteraction = remoteRDPInteraction, vncInteraction = remoteVNCInteraction;
-  remoteSessionID = "";
-  remoteRDPInteraction = null;
-  remoteVNCInteraction = null;
-  remoteVNCPendingCredentials = null;
-  if ($("remoteVNCCredentialsDialog").open) $("remoteVNCCredentialsDialog").close();
-  // Restore navigation before asking the embedded client to tear down. Its
-  // session may already be gone when the remote side or Stop button ended it.
-  document.querySelector("main").classList.remove("remote-active");
-  $("remoteFrame").src = "about:blank";
-  $("remoteFrame").classList.remove("hidden");
-  $("remoteRDP").classList.remove("rdp-active");
-  $("remoteRDP").classList.add("hidden");
-  $("remoteVNC").replaceChildren();
-  $("remoteVNC").classList.remove("vnc-active");
-  $("remoteVNC").classList.add("hidden");
-  $("remoteLoading").classList.add("hidden");
-  $("remoteSessionNotice").classList.add("hidden");
-  $("remoteOverview").classList.remove("hidden");
-  $("remoteSessionView").classList.add("hidden");
-  history.replaceState(null, "", location.pathname);
-  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-  try {
-    rdpInteraction?.shutdown();
-    vncInteraction?.shutdown();
-  } catch (error) {
-    console.warn("RDP client shutdown completed after a transport error.", error);
-  }
-}
-
-// WebSocketTunnel appends the argument passed to client.connect() after "?".
-// Keep its endpoint query-free and supply the one-time ticket there; otherwise
-// Guacamole creates a malformed URL ending in "?undefined".
-function remoteTransportURL(id) { const url=new URL(`api/v1/remote/sessions/${encodeURIComponent(id)}/transport`,document.baseURI); url.protocol=url.protocol === "https:" ? "wss:" : "ws:"; return url.toString(); }
-function remoteTransportParams(ticket, options) { return RunPilotRDPSize.transportParams(ticket,options); }
-function nextAnimationFrame() { return new Promise(resolve=>requestAnimationFrame(resolve)); }
-function currentRDPSurfaceSize(container) { const width=Math.round(container.clientWidth), height=Math.round(container.clientHeight); return width>0&&height>0 ? {width,height} : null; }
-async function initialRDPSurfaceSize(container) { const measured=await RunPilotRDPSize.measureAfterLayout(nextAnimationFrame,()=>currentRDPSurfaceSize(container)); const resolved=RunPilotRDPSize.resolveInitialSize(measured); if(resolved.fallback) console.warn("initial RDP surface unavailable; using fallback 640x480"); else console.debug(`initial RDP surface size: ${resolved.width}x${resolved.height}`); return resolved; }
-function guacamoleTunnelError(status) { const code=Number(status?.code), message=String(status?.message||""); if(message.includes("Could not establish tunnel to guacd")) { const detail=message.replace(/^512\s+/,"").trim(); return `${detail}. Check Remote session diagnostics.${Number.isFinite(code) ? ` (${code})` : ""}`; } const descriptions={512:"Guacamole server error",513:"Guacamole server is busy",514:"The upstream RDP connection timed out",515:"The upstream RDP connection failed",516:"The requested RDP resource was not found",517:"The RDP resource is in conflict",518:"The RDP resource was closed",519:"Guacamole could not find the upstream RDP service",520:"The upstream RDP service is unavailable",521:"The Guacamole session is in conflict",522:"The Guacamole session timed out",523:"The Guacamole session was closed",768:"Invalid Guacamole tunnel request",769:"Guacamole tunnel authorization failed",771:"Guacamole tunnel access was denied",776:"The Guacamole client timed out",781:"The Guacamole client was too slow",783:"Unsupported Guacamole client message",797:"Too many Guacamole clients"}; if(Number.isFinite(code) && descriptions[code]) return `${descriptions[code]}. Check Remote session diagnostics. (${code})`; return `RDP session ended: ${message||"connection closed"}${Number.isFinite(code) ? ` (${code})` : ""}`; }
-function guacamoleClientError(status) { const code=Number(status?.code), message=String(status?.message||"").trim(); return `Guacamole client/RDP error: ${message||"remote desktop connection failed"}${Number.isFinite(code) ? ` (${code})` : ""}. Check Remote session diagnostics.`; }
-function guacamoleStateName(states,state) { return Object.keys(states||{}).find(name=>states[name]===state)||`unknown (${state})`; }
-function instrumentGuacamoleResizeMessages(tunnel) { const previous=tunnel.sendMessage; tunnel.sendMessage=function(opcode,...args) { if(opcode==="size") console.debug(`Guacamole client emitted size ${args[0]}x${args[1]}`); return previous.call(tunnel,opcode,...args); }; return ()=>{tunnel.sendMessage=previous}; }
-async function openRDPRemoteSession(session, credentials) {
-  const ticket=await api(`api/v1/remote/sessions/${session.id}/transport-ticket`,{method:"POST"}), surface=$("remoteRDP"), frameShell=$("remoteFrameShell");
-  $("remoteFrame").src="about:blank"; $("remoteFrame").classList.add("hidden"); surface.classList.remove("hidden"); surface.classList.add("rdp-active"); surface.replaceChildren();
-  const initialSize=await initialRDPSurfaceSize(frameShell), transportParams=remoteTransportParams(ticket.ticket,{width:initialSize.width,height:initialSize.height,dpi:window.devicePixelRatio > 1 ? 120 : 96,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||""});
-  const tunnel=new Guacamole.WebSocketTunnel(remoteTransportURL(session.id)), stopResizeInstrumentation=instrumentGuacamoleResizeMessages(tunnel); const client=new Guacamole.Client(tunnel), display=client.getDisplay(); surface.append(display.getElement());
-  const sizing=RunPilotRDPSize.createController({resizeMethod:session.rdp?.resizeMethod||"display-update",initialSize,getSurfaceSize:()=>currentRDPSurfaceSize(frameShell),sendRemoteSize:size=>{ console.debug(`remote RDP resize requested ${size.width}x${size.height}`); client.sendSize(size.width,size.height); },fitLocal:(available,remote)=>{ const scale=RunPilotRDPSize.fitScale(available,remote); if(scale!==null) display.scale(scale); }}), previousDisplayResize=display.onresize;
-  display.onresize=(width,height)=>{ previousDisplayResize?.(width,height); sizing.displayResized({width,height}); };
-  const mouse=new Guacamole.Mouse(display.getElement()); mouse.onEach(["mousedown","mousemove","mouseup"],event=>client.sendMouseState(event.state));
-  const keyboard=new Guacamole.Keyboard(surface); keyboard.onkeydown=keysym=>client.sendKeyEvent(1,keysym); keyboard.onkeyup=keysym=>client.sendKeyEvent(0,keysym);
-  const shell=document.querySelector(".shell"), surfaceChanged=()=>sizing.surfaceChanged(), layoutTransitionFinished=event=>{ if(event.target===shell&&event.propertyName==="grid-template-columns") sizing.layoutTransitionFinished(); };
-  remoteRDPInteraction={shutdown:()=>{ sizing.dispose(); stopResizeInstrumentation(); keyboard.reset(); keyboard.onkeydown=null; keyboard.onkeyup=null; mouse.onEach(["mousedown","mousemove","mouseup"],null); client.disconnect(); }, focus:()=>surface.focus({preventScroll:true}), surfaceChanged, layoutTransitionStarted:()=>sizing.layoutTransitionStarted()};
-  surface.addEventListener("pointerdown",()=>surface.focus({preventScroll:true})); const observer=new ResizeObserver(surfaceChanged); observer.observe(frameShell); window.addEventListener("resize",surfaceChanged); shell.addEventListener("transitionend",layoutTransitionFinished); shell.addEventListener("transitioncancel",layoutTransitionFinished); const prior=remoteRDPInteraction.shutdown; remoteRDPInteraction.shutdown=()=>{observer.disconnect();window.removeEventListener("resize",surfaceChanged);shell.removeEventListener("transitionend",layoutTransitionFinished);shell.removeEventListener("transitioncancel",layoutTransitionFinished);prior()};
-  tunnel.onstatechange=state=>{ console.debug("Guacamole tunnel state",guacamoleStateName(Guacamole.Tunnel.State,state)); if(state===Guacamole.Tunnel.State.OPEN){ $("remoteLoading").classList.add("hidden"); surface.focus({preventScroll:true}); toast(`Connected to ${session.targetName||"RDP session"}.`); } }; tunnel.onerror=status=>{ console.warn("Guacamole WebSocket tunnel error",{code:status?.code,message:status?.message}); if(remoteSessionID===session.id) toastError(guacamoleTunnelError(status)); }; client.onstatechange=state=>{ console.debug("Guacamole client state",guacamoleStateName(Guacamole.Client.State,state)); sizing.setConnected(state===Guacamole.Client.State.CONNECTED); }; client.onerror=status=>{ console.warn("Guacamole client/RDP error",{code:status?.code,message:status?.message}); if(remoteSessionID===session.id) toastError(guacamoleClientError(status)); };
-  client.connect(transportParams);
-}
-
-function remoteVNCTransportURL(id, ticket) { const url=new URL(remoteTransportURL(id)); url.searchParams.set("ticket",ticket); return url.toString(); }
-function promptVNCCredentials(session, rfb) { remoteVNCPendingCredentials={sessionID:session.id,rfb}; $("remoteVNCCredentialsTitle").textContent=`Credentials for ${session.targetName||"VNC target"}`; $("remoteVNCUsername").value=session.vnc?.username||""; $("remoteVNCPassword").value=""; $("remoteVNCCredentialsDialog").showModal(); }
-async function openVNCRemoteSession(session) {
-  if (!window.RunPilotNoVNC?.RFB) throw new Error("The embedded noVNC client is still loading. Try again in a moment.");
-  const ticket=await api(`api/v1/remote/sessions/${session.id}/transport-ticket`,{method:"POST"}), surface=$("remoteVNC");
-  $("remoteFrame").src="about:blank"; $("remoteFrame").classList.add("hidden"); $("remoteRDP").classList.add("hidden"); surface.classList.remove("hidden"); surface.classList.add("vnc-active"); surface.replaceChildren();
-  const rfb=new window.RunPilotNoVNC.RFB(surface,remoteVNCTransportURL(session.id,ticket.ticket),{shared:true});
-  rfb.scaleViewport=true; rfb.resizeSession=true; rfb.clipViewport=false; rfb.viewOnly=false;
-  rfb.addEventListener("connect",()=>{ if(remoteSessionID===session.id){ $("remoteLoading").classList.add("hidden"); surface.focus({preventScroll:true}); toast(`Connected to ${session.targetName||"VNC session"}.`); } });
-  rfb.addEventListener("credentialsrequired",()=>{ if(remoteSessionID===session.id) promptVNCCredentials(session,rfb); });
-  rfb.addEventListener("securityfailure",event=>{ if(remoteSessionID===session.id) toastError(`VNC authentication failed${event.detail?.status ? `: ${event.detail.status}` : ""}.`); });
-  rfb.addEventListener("disconnect",event=>{ if(remoteSessionID===session.id && !event.detail?.clean) toastError("VNC session disconnected unexpectedly. Check Remote session diagnostics."); });
-  remoteVNCInteraction={shutdown:()=>rfb.disconnect(),focus:()=>surface.focus({preventScroll:true})};
-  surface.addEventListener("pointerdown",()=>surface.focus({preventScroll:true}),{once:true});
 }
 
 function renderOverview() {
@@ -1239,21 +1096,25 @@ function dockerAttachWebSocketURL(ticket) {
 
 function setPage(page) {
   currentPage = page;
-	if (page !== "remote") document.querySelector("main").classList.remove("remote-active");
   document.querySelectorAll(".nav").forEach(n => n.classList.toggle("active", n.dataset.page === page));
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
   $(`${page}Page`).classList.add("active");
   const registered = pluginNavigation.get(page);
+  const headerActions = $("pluginHeaderActions");
+  headerActions.replaceChildren();
+  headerActions.classList.add("hidden");
+  if (registered?.headerActions) {
+    registered.headerActions(headerActions);
+    headerActions.classList.toggle("hidden", headerActions.childElementCount === 0);
+  }
   const [title, action] = pageMeta[page] || [registered?.title || page, null];
   $("pageTitle").textContent = title;
   $("primaryAction").textContent = action || "";
   $("primaryAction").classList.toggle("hidden", !action);
 	$("dockerVolumeAction").classList.toggle("hidden", page !== "docker");
 	$("dockerNetworkAction").classList.toggle("hidden", page !== "docker");
-	$("rdpSettingsAction").classList.toggle("hidden", page !== "remote");
 	if (page === "software") renderSoftware();
 	if (page === "docker") renderDocker();
-	if (page === "remote") renderRemote();
 	if (page === "settings") renderPluginSettings();
 	if (registered) { registered.page.replaceChildren(); registered.render(registered.page); }
   refresh();
@@ -1270,51 +1131,7 @@ $("softwareSearchInput").addEventListener("keydown", event => { if (event.key ==
 $("softwareBucketSource").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareAddBucket(); } });
 $("dockerVolumeAction").addEventListener("click", openDockerVolumeCreate);
 $("dockerNetworkAction").addEventListener("click", openDockerNetworkCreate);
-$("rdpSettingsAction").addEventListener("click", openGuacdSettings);
-document.querySelectorAll("[data-dismiss]").forEach(button => button.addEventListener("click", () => {
-  $(button.dataset.dismiss).close();
-}));
-$("primaryAction").addEventListener("click", () => {
-	if (currentPage === "tasks") $("taskDialog").showModal();
-	if (currentPage === "docker") openDockerCreate();
-	if (currentPage === "remote") openRemoteTarget();
-});
-
-$("remoteBack").addEventListener("click", closeRemoteSession);
-$("remoteStop").addEventListener("click", () => { if (remoteSessionID) stopRemoteSession(remoteSessionID); });
-$("remoteFullscreen").addEventListener("click", async () => {
-  try {
-    const surface = remoteRDPInteraction ? $("remoteRDP") : remoteVNCInteraction ? $("remoteVNC") : $("remoteFrame");
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else await surface.requestFullscreen();
-    focusRemoteClient();
-  } catch (error) {
-    toast(`Fullscreen unavailable: ${error.message}`);
-  }
-});
-document.addEventListener("fullscreenchange", () => { focusRemoteClient(); remoteRDPInteraction?.surfaceChanged?.(); });
-$("remoteFrame").addEventListener("load", () => { if (remoteSessionID) { $("remoteLoading").classList.add("hidden"); focusRemoteClient(); } });
-$("remoteFrame").addEventListener("pointerenter", focusRemoteClient);
-$("remoteFrame").addEventListener("pointerdown", focusRemoteClient);
-$("remoteXpraDPIMode").addEventListener("change", updateRemoteXpraSettings);
-$("remoteXpraProfile").addEventListener("change", applyRemoteXpraProfile);
-$("remoteTargetProvider").addEventListener("change", () => { updateRemoteXpraSettings(); updateRemoteTargetDialogCopy(); });
-[$("remoteXpraEncoding"), $("remoteXpraVideo")].forEach(control => control.addEventListener("change", () => { $("remoteXpraProfile").value="custom"; }));
-$("remoteTargetForm").addEventListener("submit", async event => {
-  event.preventDefault(); const id=$("remoteTargetId").value, provider=$("remoteTargetProvider").value, isRDP=provider === "rdp", isVNC=provider === "vnc", command=isRDP||isVNC ? undefined : commandFromEditor("remote"); if (!isRDP && !isVNC && !command) return;
-  const xpra=$("remoteTargetProvider").value === "xpra" ? {profile:$("remoteXpraProfile").value,encoding:$("remoteXpraEncoding").value,video:$("remoteXpraVideo").checked,dpiMode:$("remoteXpraDPIMode").value,dpi:Number($("remoteXpraDPI").value),launchAfterConnect:$("remoteXpraLaunchAfterConnect").checked,clipboard:$("remoteXpraClipboard").checked,dynamicResize:$("remoteXpraDynamicResize").checked,menu:$("remoteXpraMenu").value,toolbarPosition:$("remoteXpraToolbarPosition").value} : undefined;
-  const rdpIdentity=splitRDPUsername($("remoteRDPUsername").value), rdp=isRDP ? {host:$("remoteRDPHost").value.trim(),port:Number($("remoteRDPPort").value),username:rdpIdentity.username,domain:rdpIdentity.domain,securityMode:$("remoteRDPSecurity").value,serverLayout:$("remoteRDPLayout").value,resizeMethod:$("remoteRDPResize").value,certificatePolicy:$("remoteRDPCertificate").value,timeoutSeconds:Number($("remoteRDPTimeout").value),clipboardNormalization:$("remoteRDPClipboard").value,performanceProfile:$("remoteRDPPerformance").value,copy:true,paste:true} : undefined;
-  const vnc=isVNC ? {host:$("remoteVNCHost").value.trim(),port:Number($("remoteVNCPort").value),username:$("remoteVNCConfigUsername").value.trim(),connectTimeoutSeconds:Number($("remoteVNCTimeout").value)} : undefined;
-  const body={name:$("remoteTargetName").value.trim(),provider,type:isRDP||isVNC ? "desktop" : $("remoteTargetType").value,dbusMode:$("remoteDBusMode").value,command,xpra,rdp,vnc};
-  try { await api(id ? `api/v1/remote/targets/${id}` : "api/v1/remote/targets",{method:id?"PUT":"POST",body:JSON.stringify(body)}); $("remoteTargetDialog").close(); await refresh(); } catch(error) { setCommandError("remote",error.message); }
-});
-$("remoteRDPConnectForm").addEventListener("submit", async event => { event.preventDefault(); const target=remotePendingTarget; if (!target) return; const password=$("remoteRDPConnectPassword").value, identity=password ? splitRDPUsername($("remoteRDPConnectUsername").value) : {domain:"",username:""}, credentials={username:identity.username,domain:identity.domain,password}; remotePendingTarget=null; $("remoteRDPConnectDialog").close(); if (target.sessionID) await openRemoteSession(target.sessionID,credentials); else await beginRemoteSession(target.id,credentials); });
-$("remoteVNCCredentialsForm").addEventListener("submit", event => { event.preventDefault(); const pending=remoteVNCPendingCredentials; if (!pending) return; remoteVNCPendingCredentials=null; const credentials={username:$("remoteVNCUsername").value,password:$("remoteVNCPassword").value}; $("remoteVNCUsername").value=""; $("remoteVNCPassword").value=""; $("remoteVNCCredentialsDialog").close(); // noVNC retains this object while it completes the asynchronous RFB authentication handshake.
-  pending.rfb.sendCredentials(credentials); });
-$("remoteVNCCredentialsDialog").addEventListener("close",()=>{ const pending=remoteVNCPendingCredentials; remoteVNCPendingCredentials=null; if(pending) pending.rfb.disconnect(); });
-$("guacdSettingsForm").addEventListener("submit",async event=>{event.preventDefault();const value=guacdValue(),error=validateGuacdForm(value);setGuacdError(error);if(error)return;try{await api("api/v1/remote/guacd",{method:"PUT",body:JSON.stringify(value)});$("guacdSettingsDialog").close();toast("guacd settings saved.");await refresh()}catch(e){setGuacdError(e.message)}});
-$("guacdTest").addEventListener("click",async()=>{const value=guacdValue(),error=validateGuacdForm(value);setGuacdError(error);setGuacdStatus();if(error)return;try{const status=await api("api/v1/remote/guacd/test",{method:"POST",body:JSON.stringify(value)});setGuacdStatus(status.state==="available" ? "Connected to guacd." : status.message||"Unable to connect to guacd.",status.state!=="available")}catch(e){setGuacdStatus(e.message,true)}});
-
+document.querySelectorAll("[data-dismiss]").forEach(button => button.addEventListener("click", () => $(button.dataset.dismiss)?.close()));
 document.querySelectorAll("[data-task-filter]").forEach(button => button.addEventListener("click", () => { taskFilter = button.dataset.taskFilter; document.querySelectorAll("[data-task-filter]").forEach(item => item.classList.toggle("active", item === button)); renderTasks(); }));
 document.querySelectorAll("[data-task-kind]").forEach(button => button.addEventListener("click", () => { $("taskDialog").close(); if (button.dataset.taskKind === "continuous") openProcess(); else if (button.dataset.taskKind === "scheduled") openJob(); else openBackup(); }));
 $("storageCreate").addEventListener("click",async()=>{if(!storageLocation)return;const name=prompt("Folder name:");if(!name)return;try{await api(`api/v1/storage/${storageLocation}/directories`,{method:"POST",body:JSON.stringify({parentPath:storagePath,name})});browseStorage(storageLocation,storagePath)}catch(e){toast(e.message)}});
@@ -1528,8 +1345,6 @@ $("loginForm").addEventListener("submit", async e => {
   startConnectionMonitor();
   try { await connectApplicationSocket(); } catch (e) { toast(e.message); }
   await refresh();
-  const requestedSession = new URLSearchParams(location.search).get("remoteSession");
-  if (requestedSession) { setPage("remote"); await openRemoteSession(requestedSession); }
   try { await loadSystemInfo(); } catch (e) { if (e.message !== "Unauthorized") toast(e.message); }
   startAutoRefresh();
 })();

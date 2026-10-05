@@ -75,6 +75,8 @@ test("session surface hides the local cursor on every Guacamole layer", () => {
 test("RDP navigation uses a monitor and targets reuse the legacy responsive cards", () => {
   const css = readFileSync(new URL("./plugin.css", import.meta.url), "utf8");
   assert.match(frontendSource, /title: "RDP", icon: "monitor"/);
+  assert.match(frontendSource, /headerActions\(root\)/);
+  assert.doesNotMatch(frontendSource, /<h2>RDP targets<\/h2>/);
   assert.match(frontendSource, /settingsForm.className = "plugin-settings-form rdp-plugin-settings"/);
   assert.match(frontendSource, /class="docker-card remote-card rdp-target-card"/);
   assert.match(frontendSource, /class="rdp-target-meta-row"><div class="rdp-target-facts"><span title=/);

@@ -65,8 +65,9 @@ ABI/frontend/WebSocket fixture and is no longer installed on fresh startup.
 Existing manual System installations are not deleted. The Tasks plugin is
 registered with `publish: false` until its legacy cutover is reviewed. The RDP
 plugin is publishable after its backend, authenticated stream transport, target
-management and session lifecycle implementation. Other Remote packages remain
-disabled until their compatibility work is complete. The hello example is
+management and session lifecycle implementation. The VNC plugin is publishable
+after its plugin-owned target/session implementation and packaged noVNC client.
+`remote.xpra` remains disabled while its migration is deferred. The hello example is
 buildable and locally testable; opt in using a temporary policy for publication
 tests.
 

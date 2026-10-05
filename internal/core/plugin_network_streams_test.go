@@ -30,7 +30,7 @@ func TestPluginNetworkStreamTCPReadWriteOwnershipAndAttach(t *testing.T) {
 	manager := newPluginNetworkStreamManager(nil)
 	defer manager.close()
 	address := listener.Addr().(*net.TCPAddr)
-	opened, err := manager.open(context.Background(), "remote.rdp", mustJSON(t, pluginNetworkOpen{Host: "127.0.0.1", Port: address.Port, ConnectTimeoutSeconds: 2}))
+	opened, err := manager.open(context.Background(), "test.streams", mustJSON(t, pluginNetworkOpen{Host: "127.0.0.1", Port: address.Port, ConnectTimeoutSeconds: 2}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestPluginNetworkStreamTCPReadWriteOwnershipAndAttach(t *testing.T) {
 	peer := <-accepted
 	defer peer.Close()
 	encoded := base64.StdEncoding.EncodeToString([]byte("client-data"))
-	if _, err := manager.write(context.Background(), "remote.rdp", mustJSON(t, map[string]string{"id": result.ID, "data": encoded})); err != nil {
+	if _, err := manager.write(context.Background(), "test.streams", mustJSON(t, map[string]string{"id": result.ID, "data": encoded})); err != nil {
 		t.Fatal(err)
 	}
 	if err := peer.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
@@ -56,7 +56,7 @@ func TestPluginNetworkStreamTCPReadWriteOwnershipAndAttach(t *testing.T) {
 	if _, err := peer.Write([]byte("server-data")); err != nil {
 		t.Fatal(err)
 	}
-	read, err := manager.read(context.Background(), "remote.rdp", mustJSON(t, map[string]any{"id": result.ID, "maxBytes": 64, "timeoutMilliseconds": 1000}))
+	read, err := manager.read(context.Background(), "test.streams", mustJSON(t, map[string]any{"id": result.ID, "maxBytes": 64, "timeoutMilliseconds": 1000}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,27 +84,27 @@ func TestPluginNetworkStreamTCPReadWriteOwnershipAndAttach(t *testing.T) {
 	if _, err := manager.closeStream("other.plugin", mustJSON(t, map[string]string{"id": result.ID})); !isHostFailure(err, "not_found") {
 		t.Fatalf("foreign close error = %v", err)
 	}
-	conn, release, err := manager.attach("remote.rdp", result.ID)
+	conn, release, err := manager.attach("test.streams", result.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := manager.attach("remote.rdp", result.ID); !isHostFailure(err, "failed_precondition") {
+	if _, _, err := manager.attach("test.streams", result.ID); !isHostFailure(err, "failed_precondition") {
 		t.Fatalf("second attach error = %v", err)
 	}
 	release()
-	if _, err := manager.write(context.Background(), "remote.rdp", mustJSON(t, map[string]string{"id": result.ID, "data": encoded})); !isHostFailure(err, "failed_precondition") {
+	if _, err := manager.write(context.Background(), "test.streams", mustJSON(t, map[string]string{"id": result.ID, "data": encoded})); !isHostFailure(err, "failed_precondition") {
 		t.Fatalf("closed stream write error = %v", err)
 	}
-	if _, err := manager.read(context.Background(), "remote.rdp", mustJSON(t, map[string]any{"id": result.ID, "maxBytes": 1, "timeoutMilliseconds": 10})); !isHostFailure(err, "failed_precondition") {
+	if _, err := manager.read(context.Background(), "test.streams", mustJSON(t, map[string]any{"id": result.ID, "maxBytes": 1, "timeoutMilliseconds": 10})); !isHostFailure(err, "failed_precondition") {
 		t.Fatalf("closed stream read error = %v", err)
 	}
 	if _, err := conn.Write([]byte("closed")); err == nil {
 		t.Fatal("released stream still accepts writes")
 	}
-	if _, err := manager.closeStream("remote.rdp", mustJSON(t, map[string]string{"id": result.ID})); err != nil {
+	if _, err := manager.closeStream("test.streams", mustJSON(t, map[string]string{"id": result.ID})); err != nil {
 		t.Fatalf("idempotent close: %v", err)
 	}
-	if _, err := manager.closeStream("remote.rdp", mustJSON(t, map[string]string{"id": "already-expired"})); err != nil {
+	if _, err := manager.closeStream("test.streams", mustJSON(t, map[string]string{"id": "already-expired"})); err != nil {
 		t.Fatalf("close after record eviction: %v", err)
 	}
 }

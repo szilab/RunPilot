@@ -7,9 +7,8 @@
 RunPilot is a lightweight Windows/Linux host-management application written in Go. One native service manages configured workloads and operations and exposes an embedded local web UI. Windows uses Windows Service Control Manager; Linux uses a systemd user service.
 
 The current release provides process supervision, scheduling, backups, storage,
-software management, Terminal and Remote Access. The architecture is
-incrementally moving these product features out of the legacy core and into
-independently versioned plugins.
+software management, Terminal, and independently installable remote desktop
+plugins.
 
 > **RunPilot provides the framework; plugins provide the features.**
 
@@ -28,7 +27,7 @@ plugin catalog.
 - Local and Docker-backed storage access
 - Software Management through the RunPilot-owned Scoop provider
 - Interactive Terminal tabs backed by Linux PTY or Windows ConPTY
-- Remote Access through Xpra, embedded-browser RDP and VNC/noVNC providers
+- Remote desktop access through the optional RDP and VNC plugins
 - Embedded authenticated web UI
 - Plugin package/runtime support with independent backend/frontend contracts
 - GitHub-backed plugin catalog with explicit install/update/enable lifecycle
@@ -39,6 +38,8 @@ The target core is a small plugin host: package/runtime management, versioned
 host capabilities, one authenticated application WebSocket, the web shell,
 shared UI/theme primitives and framework settings. Tasks, Storage, Docker,
 Terminal, Software, Backup and Remote Access migrate incrementally to plugins.
+RDP and VNC are plugin-owned; Xpra remains a temporary internal core exception
+with no user-facing navigation while its plugin capabilities are designed.
 
 Host CPU/memory/disk presentation is planned as widget contributions rather
 than expanding the nonpublic System ABI fixture into a permanent feature.
@@ -225,109 +226,21 @@ Windows it is the configured service identity. It is protected by the same API
 token boundary as process and job management. Plugin requests and session
 events use the authenticated application WebSocket.
 
-## Remote Access
+## Remote desktop plugins
 
-Remote Access is a provider-based capability, not a remote-display protocol.
-Xpra is available on Linux hosts. Add an enabled application target
-(for example `firefox`) or desktop target (for example `startxfce4`) from the
-Remote page; its command, arguments, working directory and environment are
-stored in `runpilot.yaml` like other configured workloads. Each Open action
-creates a new, ephemeral isolated session.
+RDP and VNC are separate first-party plugins. Install the desired package and
+enable it in **Settings → Plugins**, then restart RunPilot. Each plugin owns its
+target list and session page. RDP uses its packaged Guacamole client and the
+generic network stream capability; VNC packages noVNC 1.7.0 and uses the same
+authenticated RunPilot application WebSocket for binary stream traffic.
+Connection passwords are requested only when needed and remain in memory for
+the active browser session.
 
-RunPilot discovers `xpra` on `PATH` and reports the installed version, missing
-binary, or unsupported platform without preventing the daemon from starting.
-Install Xpra using your distribution's package source (for example, `apt install
-xpra` on Debian/Ubuntu or `dnf install xpra` on Fedora where those packages are
-available). The selected application and any desktop environment/window manager
-must already be installed; RunPilot does not install or configure them.
-
-Each target selects a D-Bus mode. **Isolated** (the default) sanitizes the
-RunPilot graphical-session environment and starts a private Xpra session bus
-when `dbus-launch` is installed (on Debian-family systems this is commonly in
-`dbus-x11`). **Host session** is an advanced compatibility mode that explicitly
-passes `DBUS_SESSION_BUS_ADDRESS` to the target. It can cause single-instance
-or D-Bus-activated applications to open on the physical desktop, so it should
-only be used deliberately.
-
-RunPilot's environment is not a remote graphical session. The Xpra server does
-not inherit the host `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, or session
-D-Bus bindings by default. Remote children are configured for X11 through
-Xpra's supported environment options. For Firefox, Chromium, Electron, and
-other single-instance applications, configure target-specific arguments and an
-isolated profile/data directory—for example Firefox `--new-instance --profile
-<dedicated-profile>`—rather than relying on the user's normal desktop profile.
-
-Xpra targets also have a browser-administration display profile. The default
-**Recommended** profile uses WebP with video codecs disabled, automatic DPI,
-clipboard and dynamic resize enabled, starts the target after the first browser
-client connects, and keeps the Xpra floating menu auto-hidden. Sound, printing,
-and Xpra file transfer are explicitly disabled. **Automatic** uses Xpra's
-automatic encoding with video enabled; **Compatibility / Lossless** uses RGB
-with video disabled to help diagnose partial-repaint corruption; **Custom**
-exposes the encoding and video choices. Xpra 6.5 supports the server options
-`--start-after-connect` / `--start-child-after-connect`, `--dpi`,
-`--resize-display`, clipboard, printing, file-transfer, speaker, and microphone
-controls. The bundled xpra-html5 v19 client receives only its supported client
-parameters: `encoding`, `video`, `clipboard`, `sound`, `printing`,
-`file_transfer`, `floating_menu`, `autohide`, and `toolbar_position`.
-
-Xpra listens only on a per-session `127.0.0.1` WebSocket/HTTP port. The browser
-loads Xpra's upstream HTML5 client through a same-origin, ticketed RunPilot
-reverse proxy, so no Xpra port is exposed publicly. The ticket is exchanged for
-an HttpOnly, path-scoped, bounded-lifetime cookie used only for the embedded client's assets and
-WebSocket upgrade. RunPilot never accepts a browser-supplied upstream host or
-port. Clipboard, dynamic resize, and fullscreen are supplied by the upstream
-Xpra HTML5 client when the installed Xpra build supports them.
-
-Sessions are intentionally ephemeral: RunPilot stops the Xpra processes it owns
-during shutdown and does not adopt orphaned sessions after a restart. The first
-supported deployment is RunPilot directly on a Linux host. Xpra server support
-is reported as unsupported on Windows.
-
-### RDP
-
-RDP is implemented through Apache Guacamole's `guacd` daemon. RunPilot embeds
-the official Apache Guacamole 1.6.0 `guacamole-common-js` client; the full
-Guacamole web application, Tomcat, Java, and a Guacamole database are not
-required. `guacd` is the only external RDP runtime component.
-
-Configure the provider's guacd host, port, TLS, and connection timeout on the
-Remote Access page. Keep guacd on a trusted private network: it has no
-authentication. For a host deployment, bind it only to loopback:
-
-```bash
-docker run -d --name runpilot-guacd --restart unless-stopped \
-  -p 127.0.0.1:4822:4822 guacamole/guacd:1.6.0
-```
-
-RDP targets remain desktop-only and retain the public `rdp` provider ID. They
-store only non-secret target settings (host, port, username/domain, keyboard
-layout and typed advanced options). Passwords are posted over the authenticated
-same-origin API, used once for the guacd handshake, then discarded. They never
-enter YAML, browser storage, URLs, sessions, diagnostics, or logs.
-
-The browser WebSocket carries only the Guacamole protocol and a short-lived
-session ticket. RunPilot snapshots both the target and guacd configuration and
-chooses every destination, so it is not a generic guacd/TCP proxy. The target
-host is resolved by guacd; when guacd is in Docker, `127.0.0.1` means that
-container. Use a host gateway name such as `host.docker.internal` when needed.
-For Hungarian RDP servers choose **Hungarian** in the target keyboard layout;
-this sends `server-layout=hu-hu-qwertz`.
-
-### VNC / noVNC
-
-VNC is a built-in, desktop-only provider on Linux and Windows. It embeds the
-noVNC 1.7.0 browser client and needs neither `websockify`, a native VNC client,
-nor another RunPilot-managed daemon. Configure the VNC host, port, and connect
-timeout on a `vnc` target. When the VNC server requires authentication, noVNC
-asks in the browser; those credentials are not saved in YAML, browser storage,
-session views, diagnostics, or logs.
-
-The browser opens a short-lived, single-use, session-scoped WebSocket ticket.
-RunPilot bridges its binary RFB frames to TCP by calling the Remote provider's
-captured `Runtime.Dial()` target. The WebSocket has no host, port, or upstream
-destination parameters, so it cannot be used as a generic TCP proxy. Unlike
-RDP, VNC does not use guacd.
+The old combined Remote page has been removed. Xpra's legacy core runtime is
+temporarily retained without user-facing navigation. Its migration to a
+`remote.xpra` plugin is deferred while reusable process, listener, and browser
+publication capabilities are designed; Xpra is not currently available from
+the RunPilot GUI.
 
 ## Windows build
 

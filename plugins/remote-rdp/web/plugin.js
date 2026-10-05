@@ -162,7 +162,7 @@ function defaultGuacdSettings() { return { host: "127.0.0.1", port: 4822, tls: f
 
 export async function activate(runpilot) {
   const ui = runpilot.ui, call = (method, params = {}) => runpilot.ws.call(PLUGIN, method, params);
-  let page = null, targets = [], notice = "", activeSession = null, settingsForm = null, disposed = false;
+  let page = null, targets = [], notice = "", activeSession = null, headerAction = null, settingsForm = null, disposed = false;
   const settingsState = { loaded: false, loading: false, busy: false, error: "", status: "", value: defaultGuacdSettings() };
 
   function addDiagnostic(state, stage) {
@@ -210,12 +210,11 @@ export async function activate(runpilot) {
 
   function render() {
     if (!page?.isConnected || activeSession) return;
-    page.innerHTML = `<section class="rdp-plugin"><div class="rdp-plugin-head"><h2>RDP targets</h2><div class="rdp-plugin-actions"><button class="button primary small" data-add>Add target</button></div></div>${notice ? `<div class="rdp-plugin-notice" role="alert">${escapeHTML(notice)}</div>` : ""}<div class="rdp-target-list">${targets.map(target => {
+    page.innerHTML = `<section class="rdp-plugin">${notice ? `<div class="rdp-plugin-notice" role="alert">${escapeHTML(notice)}</div>` : ""}<div class="rdp-target-list">${targets.map(target => {
       const endpoint = `${target.options.host || ""}${target.options.port && target.options.port !== 3389 ? `:${target.options.port}` : ""}`;
       const identity = formatUsername(target.options.username, target.options.domain) || "Interactive sign-in";
       return `<article class="docker-card remote-card rdp-target-card"><div class="docker-card-head"><div class="rdp-target-facts"><h2>${escapeHTML(target.name)}</h2></div></div><div class="rdp-target-meta-row"><div class="rdp-target-facts"><span title="${escapeHTML(endpoint)}">${escapeHTML(endpoint)}</span><small class="rdp-target-identity" title="${escapeHTML(identity)}">${escapeHTML(identity)}</small></div><div class="rdp-target-actions"><button class="button danger small" data-delete="${escapeHTML(target.id)}">Delete</button><button class="button secondary small" data-edit="${escapeHTML(target.id)}">Edit</button><button class="button primary small" data-connect="${escapeHTML(target.id)}">Connect</button></div></div></article>`;
     }).join("") || '<div class="empty rdp-target-empty"><h2>No RDP targets</h2></div>'}</div></section>`;
-    page.querySelector("[data-add]").addEventListener("click", () => editTarget());
     page.querySelectorAll("[data-connect]").forEach(button => button.addEventListener("click", () => connectPrompt(targets.find(target => target.id === button.dataset.connect))));
     page.querySelectorAll("[data-edit]").forEach(button => button.addEventListener("click", () => editTarget(targets.find(target => target.id === button.dataset.edit))));
     page.querySelectorAll("[data-delete]").forEach(button => button.addEventListener("click", () => deleteTarget(button.dataset.delete)));
@@ -332,6 +331,7 @@ export async function activate(runpilot) {
     const diagnosticId = globalThis.crypto?.randomUUID?.().replaceAll("-", "") || `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
     const state = { target, view, client: null, stream: null, session: null, diagnosticId, diagnostics: [], diagnosticsOutput: null, resizeOff: null, closing: false, connected: false, lastResize: null };
     activeSession = state;
+    if (headerAction?.isConnected) headerAction.hidden = true;
     const labelIcon = (element, name, label) => { element.classList.add("rdp-toolbar-icon", `rdp-toolbar-${name}`); element.setAttribute("aria-label", label); element.title = label; };
     const backButton = view.element.querySelector(".rp-interactive-heading > button");
     const [fullscreenButton, disconnectButton] = view.actions.querySelectorAll("button");
@@ -468,6 +468,7 @@ export async function activate(runpilot) {
     const state = activeSession;
     if (!state || state.closing) return;
     state.closing = true; activeSession = null;
+    if (headerAction?.isConnected) headerAction.hidden = false;
     state.resizeOff?.();
     clearClipboardState(state);
     state.diagnosticsOutput?.closest("dialog")?.close();
@@ -491,6 +492,11 @@ export async function activate(runpilot) {
   });
   runpilot.navigation.register({
     id: "remote-rdp", title: "RDP", icon: "monitor",
+    headerActions(root) {
+      if (activeSession) return;
+      const button = document.createElement("button"); button.type = "button"; button.className = "button primary small"; button.textContent = "Add target"; button.addEventListener("click", () => editTarget());
+      headerAction = button; root.append(button);
+    },
     render(root) { page = root; if (activeSession) root.append(activeSession.view.element); else void loadTargets(); },
   });
   return () => { disposed = true; stopDiagnosticEvents(); void closeSession(false); };

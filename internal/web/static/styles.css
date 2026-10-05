@@ -84,6 +84,7 @@ main { padding: 17px 21px 24px; overflow: hidden; }
 header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 18px; }
 h1 { margin: 0; font-size: 28px; color: var(--rp-text-strong); }
 .header-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.plugin-header-actions { display: contents; }
 .button { border: 1px solid transparent; border-radius: 8px; padding: 9px 13px; font-weight: 600; }
 .button.primary { background: #1F437F; color: white; }
 .button.primary:hover { background: #173563; }
@@ -325,46 +326,9 @@ h1 { margin: 0; font-size: 28px; color: var(--rp-text-strong); }
 .docker-attach-pane { height:min(65vh,600px); min-height:360px; overflow:hidden; border:1px solid #28374a; border-radius:10px; padding:8px; background:#0b1220; }
 .docker-attach-pane .xterm { height:100%; }
 .docker-attach-pane .xterm-viewport { overflow-y:auto !important; }
-.remote-overview { display:grid; gap:0; }
-#remoteTargets, #remoteProviders { grid-template-columns:repeat(3,minmax(0,1fr)); }
-.remote-card { width:100%; min-width:0; gap:8px; padding:14px; }
-.remote-card > .row-actions { justify-content:flex-end; }
-.remote-card-status, .remote-provider-status { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:6px; flex:0 1 auto; min-width:0; }
-.remote-provider-card { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; padding:12px 14px; }
-.remote-provider-card > .docker-card-head { grid-column:1; }
-.remote-provider-card > .button { grid-column:2; grid-row:1; width:auto; }
-.remote-provider-card h2 { font-size:15px; }
-.remote-target-session { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:9px 0 0; border-top:1px solid #eef1f5; }
-.provider-info { position:relative; display:inline-grid; width:18px; height:18px; place-items:center; border:1px solid #94a3b8; border-radius:50%; color:#475569; font-size:12px; font-weight:700; cursor:help; outline:none; }
-.provider-info::after { content:attr(data-tooltip); position:absolute; z-index:20; right:0; top:calc(100% + 8px); width:min(280px,calc(100vw - 40px)); padding:8px 10px; border-radius:7px; background:#1e293b; color:#f8fafc; font-size:12px; font-weight:500; line-height:1.35; text-transform:none; letter-spacing:normal; opacity:0; pointer-events:none; transform:translateY(-3px); transition:opacity .15s ease,transform .15s ease; }
-.provider-info:hover::after, .provider-info:focus-visible::after { opacity:1; transform:translateY(0); }
-.remote-session-notice { margin: 10px 0 0; }
-.remote-session-view { height: calc(100vh - 166px); min-height: 460px; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); gap: 10px; }
-.remote-session-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 14px; }
-.remote-session-toolbar > div:first-child { display: grid; gap: 3px; }
-.remote-session-toolbar strong { color: #111827; font-size: 17px; }
-.remote-frame-shell { position: relative; min-width: 0; min-height: 0; overflow: hidden; overscroll-behavior: contain; border: 1px solid #28374a; border-radius: 10px; background: #0b1220; }
-.remote-frame { display: block; width: 100%; height: 100%; min-height: 0; border: 0; background: #0b1220; }
-.remote-rdp { display: block; width: 100%; height: 100%; min-height: 0; background: #0b1220; }
-.remote-rdp.hidden { display: none; }
-.remote-rdp.rdp-active { display: grid; place-items: center; overflow: hidden; cursor: none; }
-.remote-rdp.rdp-active, .remote-rdp.rdp-active * { cursor: none; }
-.remote-vnc { display: block; width: 100%; height: 100%; min-height: 0; background: #0b1220; }
-.remote-vnc.hidden { display: none; }
-.remote-vnc.vnc-active { overflow: hidden; }
-.remote-vnc.vnc-active canvas { outline: 0; }
-.remote-loading { position: absolute; inset: 0; z-index: 1; display: grid; place-content: center; justify-items: center; gap: 10px; color: #b9c7d9; background: #0b1220; font-size: 13px; }
-.remote-loading strong { color: #f8fafc; font-size: 15px; }
-main.remote-active { padding-top: 22px; padding-bottom: 22px; }
-main.remote-active > header { display: none; }
-main.remote-active #remotePage { height: calc(100vh - 44px); }
-main.remote-active .remote-session-view { height: 100%; min-height: 0; display: flex; flex-direction: column; }
-main.remote-active .remote-frame-shell { flex: 1 1 0; height: 0; min-height: 0; }
 .button.danger { color: #b91c1c; background: #fff; border-color: #fecaca; }
 .button.danger:hover:not(:disabled) { background: #fef2f2; border-color: #fca5a5; }
 .spinner { width: 28px; height: 28px; border: 3px solid #cbd5e1; border-top-color: #2563eb; border-radius: 50%; animation: software-spin .8s linear infinite; }
-.remote-open-button { display: inline-flex; align-items: center; gap: 6px; }
-.remote-button-spinner { width: 12px; height: 12px; border: 2px solid rgba(255,255,255,.45); border-top-color: #fff; }
 @keyframes software-spin { to { transform: rotate(360deg); } }
 code { font-family: "Cascadia Code", Consolas, monospace; }
 .table-wrap { background: white; border: 1px solid #e3e7ee; border-radius: 12px; overflow: auto; }
@@ -381,10 +345,6 @@ tr:last-child td { border-bottom: 0; }
 .icon-btn { border: 0; background: transparent; font-size: 26px; line-height: 1; color: #64748b; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .form-grid > .span-2, .provider-fields > .span-2 { grid-column: 1 / -1; }
-.remote-xpra-settings { display: grid; gap: 12px; padding: 14px; border: 1px solid #d7dee8; border-radius: 10px; background: #fafbfc; }
-.remote-xpra-settings .section-head { margin: 0; }.remote-xpra-settings h3 { margin: 0; font-size: 15px; color: #1e293b; }
-.remote-xpra-settings .section-head .muted { margin: 3px 0 0; }.remote-xpra-grid { gap: 12px; }
-.remote-xpra-advanced { padding:12px 14px; border:1px solid #d7dee8; border-radius:10px; background:#fafbfc; }.remote-xpra-advanced summary { cursor:pointer; color:#334155; font-size:13px; font-weight:600; }.remote-xpra-advanced .form-grid { margin-top:12px; }.remote-xpra-advanced > .muted { margin:12px 0 0; }.remote-rdp-clipboard-note { display:grid; align-content:start; gap:4px; padding-top:2px; }.remote-rdp-clipboard-note strong { color:#475569; font-size:13px; }.remote-rdp-clipboard-note span { font-size:12px; line-height:1.4; }
 .provider-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .provider-fields > label, .provider-fields > p { display: flex; flex-direction: column; gap: 6px; }
 .retention-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -455,7 +415,6 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 }
 :root[data-theme="dark"] body, :root[data-theme="dark"] main { background: #111827; }
 :root[data-theme="dark"] .sidebar { background: #0b1426; }
-:root[data-theme="dark"] .remote-session-toolbar strong { color: #f8fafc; }
 :root[data-theme="dark"] .nav:hover, :root[data-theme="dark"] .nav.active { background: #1F437F; }
 :root[data-theme="dark"] h1,
 :root[data-theme="dark"] .metric strong,
@@ -493,9 +452,6 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 :root[data-theme="dark"] input,
 :root[data-theme="dark"] select { background: #172235; }
 :root[data-theme="dark"] .task-choice { background: #1d2a3e; color: #f8fafc; }
-:root[data-theme="dark"] .remote-xpra-settings { background:#1d2a3e; border-color:#3a4b64; }
-:root[data-theme="dark"] .remote-xpra-settings h3, :root[data-theme="dark"] .remote-xpra-advanced summary { color:#f8fafc; }
-:root[data-theme="dark"] .remote-xpra-advanced { border-color:#3a4b64; }
 :root[data-theme="dark"] .task-choice .meta { color: #aebdd0; }
 :root[data-theme="dark"] .task-choice:hover { background: #29374c; }
 :root[data-theme="dark"] .storage-entry.openable:hover { background: #1d2a3e; }
@@ -509,8 +465,6 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 :root[data-theme="dark"] .dialog h2 { color: #f8fafc; }
 :root[data-theme="dark"] .run-history-row .row-head > div > strong { color: #f8fafc; }
 :root[data-theme="dark"] .run-history-row:hover, :root[data-theme="dark"] .run-history-row:focus-visible { background: #29374c; }
-:root[data-theme="dark"] .remote-xpra-advanced { border-color:#3a4b64; background:#172235; }
-:root[data-theme="dark"] .remote-xpra-advanced summary, :root[data-theme="dark"] .remote-rdp-clipboard-note strong { color:#dbe7f5; }
 :root[data-theme="dark"] th { background: #1d2a3e; }
 :root[data-theme="dark"] .empty { background: rgba(23,34,53,.7); border-color: #3a4b64; }
 :root[data-theme="dark"] .button.secondary { background: #172235; border-color: #3a4b64; color: #e5e7eb; }
@@ -525,12 +479,10 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 :root[data-theme="dark"] .software-loading { border-color: #3a4b64; color: #aebdd0; }
 :root[data-theme="dark"] .software-loading strong { color: #f8fafc; }
 :root[data-theme="dark"] .docker-card, :root[data-theme="dark"] .docker-volume-list { background:#172235; border-color:#29374c; }
-:root[data-theme="dark"] .remote-target-session { border-color:#29374c; }
 @media (max-width: 760px) {
   .run-history-layout { grid-template-columns: 1fr; }
   .run-history-log pre { min-height: 240px; }
 }
-:root[data-theme="dark"] .provider-info { border-color:#7f91a9; color:#cbd5e1; }
 :root[data-theme="dark"] .docker-card h2, :root[data-theme="dark"] .docker-container-name { color:#f8fafc; }
 :root[data-theme="dark"] .plugin-setting-info > strong { color:#f8fafc; }
 :root[data-theme="dark"] .plugin-setting-state { background:#29374c; color:#cbd5e1; }
@@ -545,7 +497,6 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 :root[data-theme="dark"] .docker-action-files .button, :root[data-theme="dark"] .docker-action-support .button { background:#172235; border-color:#3a4b64; color:#e5e7eb; }
 :root[data-theme="dark"] .docker-actions .button:disabled, :root[data-theme="dark"] .docker-container-actions .button:disabled { background:#29374c; border-color:#3a4b64; color:#7f91a9; }
 :root[data-theme="dark"] .docker-container-actions .docker-action-lifecycle .row-icon { background:transparent; border-color:transparent; color:#9ec5ff; }:root[data-theme="dark"] .docker-container-actions .docker-action-destructive .row-icon { background:transparent; border-color:transparent; color:#fca5a5; }:root[data-theme="dark"] .docker-container-actions .docker-action-support .row-icon { background:transparent; border-color:transparent; color:#cbd5e1; }:root[data-theme="dark"] .docker-container-actions .docker-container-icon:hover:not(:disabled) { background:#29374c; }:root[data-theme="dark"] .docker-container-actions .docker-container-icon:disabled { background:transparent; border-color:transparent; color:#7f91a9; }
-@media (max-width: 1100px) { .docker-grid, .docker-resources-grid { grid-template-columns:1fr; } #remoteTargets, #remoteProviders { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 :root[data-theme="dark"] .spinner { border-color: #3a4b64; border-top-color: #60a5fa; }
 :root[data-theme="dark"] .warning { background: #342711; border-color: #8c6716; color: #fcd34d; }
 :root[data-theme="dark"] .form-error { background: #351d25; border-color: #7f3345; color: #fecaca; }
@@ -587,12 +538,8 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
   .software-package-meta { grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .software-package-row .row-actions { grid-column: 1 / -1; }
   .docker-grid { grid-template-columns:1fr; }
-  #remoteTargets, #remoteProviders { grid-template-columns:1fr; }
-  .remote-card { width:100%; }
-  .remote-provider-card { grid-template-columns:minmax(0,1fr) auto; }
   .docker-container { grid-template-columns:10px minmax(0,1fr) auto; }
   .docker-container .docker-resource-status { grid-column:2 / -1; text-align:left; }
-  .terminal-workspace { height: calc(100vh - 220px); }
   .storage-list-head { display: none; }
   .storage-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 7px; }
   .storage-row .storage-name { grid-column: 1 / -1; }

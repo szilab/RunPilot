@@ -2,6 +2,39 @@
   min-width: 0;
 }
 
+@media (min-width: 801px) {
+  main:has(> #terminalPage.active) {
+    display: flex;
+    height: 100vh;
+    flex-direction: column;
+  }
+
+  #terminalPage.active {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+  }
+
+  #terminalPage.active > .terminal-plugin {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+
+  .terminal-plugin-panes {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+  }
+
+  .terminal-plugin-screen:not([hidden]) {
+    height: auto;
+    min-height: 0;
+    flex: 1;
+  }
+}
+
 .terminal-plugin-toolbar {
   display: flex;
   align-items: end;

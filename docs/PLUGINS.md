@@ -102,8 +102,10 @@ runpilot.ws
 
 Feature frontend code must not depend on private RunPilot JavaScript implementation details.
 
-The public namespaces and their registration hosts are implemented. Existing Remote frontend compatibility is
-temporary and is not a public API for new plugins.
+The public namespaces and their registration hosts are implemented. The former
+legacy Remote frontend compatibility surface has been removed; remote features
+register through the same public navigation, UI, and WebSocket APIs as other
+plugins.
 
 ## WebSocket protocol
 
@@ -186,16 +188,13 @@ process session with the entered command and arguments, without saving them
 or interrupting existing sessions. Regenerate its WASM backend with
 `go generate ./plugins/terminal/backend` after backend changes.
 
-`plugins/remote-rdp` includes a publishable ABI-v2 backend and a plugin-
-owned target/connect page. Target definitions and guacd settings use
-plugin-namespaced storage; the guacd endpoint is edited in a Settings card.
-Passwords are supplied for each session only. The
-plugin owns Guacamole negotiation over the generic TCP/TLS stream capability
-and uses the shared interactive-session view for sizing, fullscreen, focus and
-cleanup. The plugin package includes its Guacamole 1.6.0 browser client and
-license notices, so it does not depend on the legacy Remote page's core asset.
-Its Diagnose action reads a bounded plugin-owned stage log; live
-diagnostic events include endpoint and handshake progress but no usernames or
-passwords. Deleting a target with an active session is rejected. The legacy
-Remote/RDP UI and provider remain available as the production path and are not
-replaced by this migration phase.
+`plugins/remote-rdp` and `plugins/remote-vnc` are publishable ABI-v2 plugins
+with plugin-owned targets and navigation pages. RDP owns Guacamole negotiation
+over the generic TCP/TLS stream capability and includes its browser client.
+VNC owns target storage and ephemeral sessions over `network.stream.*`, adapts
+`runpilot.ws.openStream()` to noVNC 1.7.0, and packages noVNC plus its license
+files. Both use `runpilot.ui.createInteractiveSessionView()` for shared session
+controls. Passwords are never persisted. Core no longer contains the legacy
+RDP/VNC providers, transports, or combined Remote page. Xpra remains a
+temporary internal legacy implementation without normal UI exposure; its
+migration is deferred while reusable host lifecycle capabilities are designed.

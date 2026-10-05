@@ -45,10 +45,6 @@ type Server struct {
 	dockerAttachMu      sync.Mutex
 	remoteTickets       map[string]remoteClientTicket
 	remoteTicketMu      sync.Mutex
-	transportTickets    map[string]remoteTransportTicket
-	transportTicketMu   sync.Mutex
-	rdpCredentials      map[string]rdpCredentials
-	rdpCredentialMu     sync.Mutex
 	applicationTickets  map[string]time.Time
 	applicationTicketMu sync.Mutex
 	docker              *dockercompose.Manager
@@ -67,11 +63,6 @@ type remoteClientTicket struct {
 	ClientParams map[string]string
 	Expires      time.Time
 }
-type remoteTransportTicket struct {
-	SessionID string
-	Expires   time.Time
-}
-type rdpCredentials struct{ Username, Domain, Password string }
 
 func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	basePath := "/"
@@ -82,7 +73,7 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, dockerTerminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), dockerAttachTickets: map[string]dockerAttachTicket{}, remoteTickets: map[string]remoteClientTicket{}, transportTickets: map[string]remoteTransportTicket{}, rdpCredentials: map[string]rdpCredentials{}, applicationTickets: map[string]time.Time{}, docker: ctrl.Docker()}, nil
+	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, dockerTerminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), dockerAttachTickets: map[string]dockerAttachTicket{}, remoteTickets: map[string]remoteClientTicket{}, applicationTickets: map[string]time.Time{}, docker: ctrl.Docker()}, nil
 }
 
 func (s *Server) BasePath() string { return s.basePath }
@@ -137,20 +128,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/v1/docker/projects/{name}/actions/{action}", s.handleDockerAction)
 	api.HandleFunc("GET /api/v1/docker/projects/{name}/files/{kind}", s.handleDockerReadFile)
 	api.HandleFunc("PUT /api/v1/docker/projects/{name}/files/{kind}", s.handleDockerWriteFile)
-	api.HandleFunc("GET /api/v1/remote/providers", s.handleRemoteProviders)
-	api.HandleFunc("GET /api/v1/remote/guacd", s.handleGuacdConfig)
-	api.HandleFunc("PUT /api/v1/remote/guacd", s.handleUpdateGuacdConfig)
-	api.HandleFunc("POST /api/v1/remote/guacd/test", s.handleTestGuacd)
-	api.HandleFunc("GET /api/v1/remote/targets", s.handleRemoteTargets)
-	api.HandleFunc("POST /api/v1/remote/targets", s.handleCreateRemoteTarget)
-	api.HandleFunc("PUT /api/v1/remote/targets/{id}", s.handleUpdateRemoteTarget)
-	api.HandleFunc("DELETE /api/v1/remote/targets/{id}", s.handleDeleteRemoteTarget)
-	api.HandleFunc("GET /api/v1/remote/sessions", s.handleRemoteSessions)
-	api.HandleFunc("GET /api/v1/remote/sessions/{id}/diagnostics", s.handleRemoteSessionDiagnostics)
-	api.HandleFunc("POST /api/v1/remote/targets/{id}/sessions", s.handleStartRemoteSession)
-	api.HandleFunc("DELETE /api/v1/remote/sessions/{id}", s.handleStopRemoteSession)
 	api.HandleFunc("POST /api/v1/remote/sessions/{id}/client-ticket", s.handleRemoteClientTicket)
-	api.HandleFunc("POST /api/v1/remote/sessions/{id}/transport-ticket", s.handleRemoteTransportTicket)
 	api.HandleFunc("GET /api/v1/overview", s.handleOverview)
 	api.HandleFunc("GET /api/v1/processes", s.handleListProcesses)
 	api.HandleFunc("POST /api/v1/processes", s.handleCreateProcess)
@@ -202,8 +180,6 @@ func (s *Server) Handler() http.Handler {
 	// asset and WebSocket request. It receives only a scoped, HttpOnly,
 	// path-scoped cookie after an authenticated client-ticket request.
 	mux.HandleFunc("GET /api/v1/remote/sessions/{id}/client/{path...}", s.handleRemoteClient)
-	mux.HandleFunc("GET /api/v1/remote/sessions/{id}/transport", s.handleRemoteTransport)
-	mux.HandleFunc("GET /remote/session/{id}", s.handleRemoteSessionPage)
 	// Docker attach uses a scoped, short-lived ticket rather than the API token.
 	mux.HandleFunc("GET /api/v1/docker/attach", s.handleDockerAttach)
 	mux.HandleFunc("GET /plugins/{id}/{path...}", s.handlePluginAsset)

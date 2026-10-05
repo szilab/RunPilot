@@ -364,6 +364,23 @@ inside their owning plugin's card only while that plugin is enabled. Plugins
 provide their heading, fields, and actions using the host's shared responsive
 layout without imposing a custom section width.
 
+A navigation entry may provide `headerActions(root)` to add page-specific
+buttons to the application header beside the theme switcher. The host clears
+this slot when the user leaves that page:
+
+```javascript
+runpilot.navigation.register({
+    id: "example", title: "Example", render,
+    headerActions(root) {
+        const button = document.createElement("button");
+        button.className = "button primary small";
+        button.textContent = "Add item";
+        button.addEventListener("click", addItem);
+        root.append(button);
+    },
+});
+```
+
 Interactive plugins may use `runpilot.ui.createInteractiveSessionView()` for a
 provider-neutral session shell and measured surface:
 

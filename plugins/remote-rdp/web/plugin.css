@@ -1,7 +1,5 @@
 .rdp-plugin { min-width: 0; }
-.rdp-plugin-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-.rdp-plugin-head h2 { margin: 0; color: var(--rp-text-strong); font-size: 18px; }
-.rdp-plugin-actions, .rdp-target-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
+.rdp-target-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
 .rdp-plugin-notice { margin: 0 0 12px; padding: 9px 11px; border: 1px solid #f0b4ae; border-radius: var(--rp-radius); color: #8f2018; background: #fff4f2; font-size: 13px; }
 .rdp-target-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .rdp-target-card { grid-template-rows: auto 1fr; border-radius: var(--rp-radius); background: var(--rp-surface-elevated); }
@@ -57,8 +55,6 @@
 	.rdp-target-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 680px) {
-	.rdp-plugin-head { align-items: flex-start; flex-direction: column; }
-	.rdp-plugin-actions { justify-content: flex-start; }
 	.rdp-target-list { grid-template-columns: minmax(0, 1fr); }
 	.rdp-target-meta-row { gap:6px; }
 	.rdp-target-card .rdp-target-actions { gap:4px; }

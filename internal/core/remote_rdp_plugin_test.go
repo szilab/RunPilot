@@ -4,20 +4,76 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/szilab/RunPilot/internal/config"
 	"github.com/szilab/RunPilot/internal/model"
-	"github.com/szilab/RunPilot/internal/remote/guacd"
 )
 
 const remoteRDPPluginID = "remote.rdp"
+
+type testGuacInstruction struct {
+	Opcode string
+	Args   []string
+}
+
+func readTestGuacInstruction(reader *bufio.Reader) (testGuacInstruction, error) {
+	values := []string{}
+	for {
+		number, err := reader.ReadString('.')
+		if err != nil {
+			return testGuacInstruction{}, err
+		}
+		length, err := strconv.Atoi(strings.TrimSuffix(number, "."))
+		if err != nil || length < 0 || length > 1<<20 {
+			return testGuacInstruction{}, os.ErrInvalid
+		}
+		value := make([]byte, length)
+		if _, err := io.ReadFull(reader, value); err != nil {
+			return testGuacInstruction{}, err
+		}
+		separator, err := reader.ReadByte()
+		if err != nil {
+			return testGuacInstruction{}, err
+		}
+		values = append(values, string(value))
+		if separator == ';' {
+			break
+		}
+		if separator != ',' {
+			return testGuacInstruction{}, os.ErrInvalid
+		}
+	}
+	if len(values) == 0 {
+		return testGuacInstruction{}, os.ErrInvalid
+	}
+	return testGuacInstruction{Opcode: values[0], Args: values[1:]}, nil
+}
+
+func writeTestGuacInstruction(writer io.Writer, opcode string, args ...string) error {
+	values := append([]string{opcode}, args...)
+	var encoded strings.Builder
+	for index, value := range values {
+		encoded.WriteString(strconv.Itoa(len(value)))
+		encoded.WriteByte('.')
+		encoded.WriteString(value)
+		if index == len(values)-1 {
+			encoded.WriteByte(';')
+		} else {
+			encoded.WriteByte(',')
+		}
+	}
+	_, err := io.WriteString(writer, encoded.String())
+	return err
+}
 
 func TestRemoteRDPPluginWASMNegotiatesThroughController(t *testing.T) {
 	dataDir := t.TempDir()
@@ -38,7 +94,7 @@ func TestRemoteRDPPluginWASMNegotiatesThroughController(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	peerResult := make(chan []guacd.Instruction, 1)
+	peerResult := make(chan []testGuacInstruction, 1)
 	peerFailure := make(chan error, 1)
 	peerClosed := make(chan net.Conn, 1)
 	go func() {
@@ -49,26 +105,26 @@ func TestRemoteRDPPluginWASMNegotiatesThroughController(t *testing.T) {
 		}
 		peerClosed <- conn
 		reader := bufio.NewReader(conn)
-		instructions := make([]guacd.Instruction, 0, 8)
+		instructions := make([]testGuacInstruction, 0, 8)
 		args := []string{"VERSION_1_5_0", "password", "hostname", "username"}
 		for range 64 {
 			args = append(args, "unknown-parameter")
 		}
 		for len(instructions) < 8 {
-			instruction, readErr := guacd.DecodeInstruction(reader)
+			instruction, readErr := readTestGuacInstruction(reader)
 			if readErr != nil {
 				peerFailure <- readErr
 				return
 			}
 			instructions = append(instructions, instruction)
 			if instruction.Opcode == "select" {
-				if writeErr := guacd.WriteInstruction(conn, "args", args...); writeErr != nil {
+				if writeErr := writeTestGuacInstruction(conn, "args", args...); writeErr != nil {
 					peerFailure <- writeErr
 					return
 				}
 			}
 			if instruction.Opcode == "connect" {
-				if writeErr := guacd.WriteInstruction(conn, "ready", "ready-connection"); writeErr != nil {
+				if writeErr := writeTestGuacInstruction(conn, "ready", "ready-connection"); writeErr != nil {
 					peerFailure <- writeErr
 					return
 				}
@@ -79,12 +135,6 @@ func TestRemoteRDPPluginWASMNegotiatesThroughController(t *testing.T) {
 		peerFailure <- os.ErrInvalid
 	}()
 	address := listener.Addr().(*net.TCPAddr)
-	if err := store.Update(func(cfg *model.Config) error {
-		cfg.Remote.Guacd = model.GuacdConfig{Host: "127.0.0.1", Port: address.Port, ConnectTimeoutSeconds: 5}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
 	controller, err := Open(dataDir)
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +187,7 @@ func TestRemoteRDPPluginWASMNegotiatesThroughController(t *testing.T) {
 	if opened.StreamID == "" || opened.Session.ID != opened.StreamID || opened.Session.State != "ready" || opened.Session.ConnectionID != "ready-connection" {
 		t.Fatalf("unsafe or incomplete session response: %s", result)
 	}
-	var instructions []guacd.Instruction
+	var instructions []testGuacInstruction
 	select {
 	case instructions = <-peerResult:
 	case err := <-peerFailure:

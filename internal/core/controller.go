@@ -23,8 +23,6 @@ import (
 	"github.com/szilab/RunPilot/internal/plugins"
 	"github.com/szilab/RunPilot/internal/processmgr"
 	"github.com/szilab/RunPilot/internal/remote"
-	"github.com/szilab/RunPilot/internal/remote/rdp"
-	"github.com/szilab/RunPilot/internal/remote/vnc"
 	"github.com/szilab/RunPilot/internal/remote/xpra"
 	"github.com/szilab/RunPilot/internal/scheduler"
 	"github.com/szilab/RunPilot/internal/software"
@@ -133,10 +131,8 @@ func Open(dataDir string) (*Controller, error) {
 	for _, pluginErr := range c.plugins.Reload() {
 		log.Printf("plugin discovery: %v", pluginErr)
 	}
-	// Remote remains a working core feature until its plugin migration reaches
-	// parity. Phase 1 freezes framework contracts only; it must not make the
-	// existing providers disappear from fresh installations.
-	c.remote = remote.New(dataDir, xpra.New(), rdp.New(c.GuacdConfig), vnc.New())
+	// Xpra remains the temporary legacy Remote runtime; its user interface has been removed.
+	c.remote = remote.New(dataDir, xpra.New())
 	if err := c.loadPluginRuntimes(); err != nil {
 		return nil, err
 	}
@@ -320,6 +316,23 @@ func (c *Controller) awaitPluginRuntime(plugin string) *plugins.Runtime {
 
 func (c *Controller) Remote() *remote.Service   { return c.remote }
 func (c *Controller) Plugins() *plugins.Manager { return c.plugins }
+
+// RemoteTargets retains only legacy Xpra configuration for the internal
+// runtime. RDP and VNC definitions are owned by their plugins.
+func (c *Controller) RemoteTargets() []model.RemoteTarget {
+	targets := c.config.Snapshot().RemoteTargets
+	for i := range targets {
+		if targets[i].Provider != "xpra" {
+			continue
+		}
+		options, err := model.NormalizeXpraRemoteOptions(targets[i].Xpra)
+		if err != nil {
+			options = model.DefaultXpraRemoteOptions()
+		}
+		targets[i].Xpra = &options
+	}
+	return targets
+}
 
 func boolValue(value *bool) bool { return value != nil && *value }
 
@@ -605,182 +618,6 @@ func (c *Controller) pluginStorageSet(pluginID, key string, value json.RawMessag
 		return err
 	}
 	return os.Rename(temporary, path)
-}
-
-func (c *Controller) GuacdConfig() model.GuacdConfig {
-	value, err := model.NormalizeGuacdConfig(c.config.Snapshot().Remote.Guacd)
-	if err != nil {
-		return c.config.Snapshot().Remote.Guacd
-	}
-	return value
-}
-
-func (c *Controller) UpdateGuacdConfig(value model.GuacdConfig) (model.GuacdConfig, error) {
-	if strings.TrimSpace(value.Host) == "" {
-		return value, fmt.Errorf("guacd host is required")
-	}
-	value, err := model.NormalizeGuacdConfig(value)
-	if err != nil {
-		return value, err
-	}
-	err = c.config.Update(func(cfg *model.Config) error { cfg.Remote.Guacd = value; return nil })
-	return value, err
-}
-
-func (c *Controller) TestGuacdConfig(ctx context.Context, value model.GuacdConfig) (model.RemoteProviderStatus, error) {
-	if strings.TrimSpace(value.Host) == "" {
-		return model.RemoteProviderStatus{}, fmt.Errorf("guacd host is required")
-	}
-	value, err := model.NormalizeGuacdConfig(value)
-	if err != nil {
-		return model.RemoteProviderStatus{}, err
-	}
-	return rdp.ProbeGuacd(ctx, value), nil
-}
-
-func (c *Controller) RemoteTargets() []model.RemoteTarget {
-	targets := c.config.Snapshot().RemoteTargets
-	for i := range targets {
-		switch targets[i].Provider {
-		case "xpra":
-			options, err := model.NormalizeXpraRemoteOptions(targets[i].Xpra)
-			if err != nil {
-				// A manually edited invalid legacy YAML value must not make all Remote
-				// pages unusable. API writes still reject invalid values below.
-				options = model.DefaultXpraRemoteOptions()
-			}
-			targets[i].Xpra = &options
-		case "rdp":
-			options, err := model.NormalizeRDPRemoteOptions(targets[i].RDP)
-			if err == nil {
-				targets[i].RDP = &options
-			}
-		case "vnc":
-			options, err := model.NormalizeVNCRemoteOptions(targets[i].VNC)
-			if err == nil {
-				targets[i].VNC = &options
-			}
-		}
-	}
-	return targets
-}
-
-func (c *Controller) RemoteTarget(id string) (model.RemoteTarget, error) {
-	for _, target := range c.RemoteTargets() {
-		if target.ID == id {
-			return target, nil
-		}
-	}
-	return model.RemoteTarget{}, fmt.Errorf("unknown remote target %q", id)
-}
-
-func (c *Controller) UpsertRemoteTarget(target model.RemoteTarget) (model.RemoteTarget, error) {
-	if strings.TrimSpace(target.Name) == "" {
-		return target, fmt.Errorf("remote target name is required")
-	}
-	if target.Provider == "" {
-		return target, fmt.Errorf("remote target provider is required")
-	}
-	if target.ID == "" && !c.remote.HasProvider(target.Provider) {
-		return target, fmt.Errorf("remote provider %q is not available", target.Provider)
-	}
-	if target.Type != model.RemoteTargetApplication && target.Type != model.RemoteTargetDesktop {
-		return target, fmt.Errorf("remote target type must be application or desktop")
-	}
-	switch target.Provider {
-	case "xpra":
-		if strings.TrimSpace(target.Command.Path) == "" {
-			return target, fmt.Errorf("remote target command path is required")
-		}
-		if target.Command.Interpreter != "" && target.Command.Interpreter != "direct" && target.Command.Interpreter != "auto" {
-			return target, fmt.Errorf("remote targets require a direct executable command")
-		}
-		target.Command.Interpreter = "direct"
-		if target.DBusMode == "" {
-			if target.ForwardDBus {
-				target.DBusMode = model.RemoteDBusHost
-			} else {
-				target.DBusMode = model.RemoteDBusIsolated
-			}
-		}
-		if target.DBusMode != model.RemoteDBusIsolated && target.DBusMode != model.RemoteDBusHost {
-			return target, fmt.Errorf("remote target D-Bus mode must be isolated or host-session")
-		}
-		target.ForwardDBus = false
-		options, err := model.NormalizeXpraRemoteOptions(target.Xpra)
-		if err != nil {
-			return target, err
-		}
-		target.Xpra = &options
-		target.RDP = nil
-		target.VNC = nil
-		if err := model.ValidateCommand(target.Command); err != nil {
-			return target, err
-		}
-	case "rdp":
-		if target.Type != model.RemoteTargetDesktop {
-			return target, fmt.Errorf("RDP supports desktop sessions only")
-		}
-		options, err := model.NormalizeRDPRemoteOptions(target.RDP)
-		if err != nil {
-			return target, err
-		}
-		target.RDP = &options
-		target.Xpra = nil
-		target.VNC = nil
-		target.Command = model.CommandSpec{}
-		target.DBusMode = ""
-		target.ForwardDBus = false
-	case "vnc":
-		if target.Type != model.RemoteTargetDesktop {
-			return target, fmt.Errorf("VNC supports desktop sessions only")
-		}
-		options, err := model.NormalizeVNCRemoteOptions(target.VNC)
-		if err != nil {
-			return target, err
-		}
-		target.VNC = &options
-		target.Xpra = nil
-		target.RDP = nil
-		target.Command = model.CommandSpec{}
-		target.DBusMode = ""
-		target.ForwardDBus = false
-	default:
-		return target, fmt.Errorf("unknown remote provider %q", target.Provider)
-	}
-	if target.ID == "" {
-		target.ID = config.NewID("remote-target")
-	}
-	err := c.config.Update(func(cfg *model.Config) error {
-		for i := range cfg.RemoteTargets {
-			if cfg.RemoteTargets[i].ID == target.ID {
-				cfg.RemoteTargets[i] = target
-				return nil
-			}
-		}
-		cfg.RemoteTargets = append(cfg.RemoteTargets, target)
-		return nil
-	})
-	return target, err
-}
-
-func (c *Controller) DeleteRemoteTarget(id string) error {
-	return c.config.Update(func(cfg *model.Config) error {
-		out := cfg.RemoteTargets[:0]
-		found := false
-		for _, target := range cfg.RemoteTargets {
-			if target.ID == id {
-				found = true
-				continue
-			}
-			out = append(out, target)
-		}
-		if !found {
-			return fmt.Errorf("unknown remote target %q", id)
-		}
-		cfg.RemoteTargets = out
-		return nil
-	})
 }
 
 func (c *Controller) DataDir() string        { return c.dataDir }

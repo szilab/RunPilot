@@ -11,7 +11,8 @@ The target core owns infrastructure that multiple features need: plugin
 installation/runtime, versioned host capabilities, one authenticated application
 WebSocket, the web shell, shared UI/theme primitives, and framework settings.
 Tasks, Storage, Docker, Terminal, Software, Backup and Remote Access belong in
-plugins once their migrations reach parity.
+plugins once their migrations reach parity. RDP and VNC have migrated to
+first-party plugins. Xpra is the temporary Remote exception described below.
 
 The migration is incremental. Those features still exist in the legacy core
 today and must remain operational until the equivalent plugin path is implemented
@@ -34,8 +35,10 @@ Target core responsibilities are:
 
 Core must not permanently understand domain concepts such as Task, Docker
 container, backup repository, terminal session type, Xpra target or Scoop
-package. Generic engines may remain in core when they are exposed as reusable
-host capabilities.
+package. Xpra remains in core temporarily because its subprocess/display
+lifecycle and local HTTP/WebSocket browser publication do not map cleanly to
+current capabilities. Generic engines may remain in core when exposed as
+reusable host capabilities.
 
 ## Plugin model
 
@@ -180,7 +183,16 @@ Current intended order:
 3. Docker;
 4. Terminal;
 5. Software and backup integrations;
-6. Remote providers (one provider at a time).
+6. Finish Remote provider migrations (one provider at a time).
+
+### Remote status
+
+`remote.rdp` and `remote.vnc` are independently packaged, publishable ABI-v2
+plugins. The legacy RDP and VNC providers, browser transports, and combined
+Remote page have been removed from core. Xpra's legacy provider/runtime remains
+internal with no normal UI or navigation. Its plugin migration is deferred
+until reusable process, listener, and browser-publication lifecycle capabilities
+are designed; see the concise [backlog](../BACKLOG.md).
 
 ### Tasks status
 

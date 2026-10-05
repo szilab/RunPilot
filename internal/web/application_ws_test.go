@@ -245,7 +245,7 @@ func TestApplicationWebSocketMultiplexesOwnedNetworkStreamAndRPC(t *testing.T) {
 	if err := readApplicationJSON(t, connection, &control); err != nil || control["type"] != "stream.error" || control["code"] != "not_found" {
 		t.Fatalf("unknown stream response=%v err=%v", control, err)
 	}
-	if err := connection.Write(context.Background(), websocket.MessageText, applicationTestJSON(t, map[string]string{"type": "stream.attach", "plugin": "remote.rdp", "streamId": stream.ID})); err != nil {
+	if err := connection.Write(context.Background(), websocket.MessageText, applicationTestJSON(t, map[string]string{"type": "stream.attach", "plugin": "test.streams", "streamId": stream.ID})); err != nil {
 		t.Fatal(err)
 	}
 	if err := readApplicationJSON(t, connection, &control); err != nil {

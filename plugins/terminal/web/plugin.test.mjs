@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import { activate, splitArgs, formatArgs } from "./plugin.js";
 
 const frontendSource = readFileSync(new URL("./plugin.js", import.meta.url), "utf8");
+const frontendStyles = readFileSync(new URL("./plugin.css", import.meta.url), "utf8");
+assert.match(frontendStyles, /main:has\(> #terminalPage\.active\)[\s\S]*?height: 100vh/);
+assert.match(frontendStyles, /#terminalPage\.active > \.terminal-plugin[\s\S]*?flex: 1;[\s\S]*?flex-direction: column/);
+assert.match(frontendStyles, /\.terminal-plugin-screen:not\(\[hidden\]\)[\s\S]*?flex: 1/);
 assert.match(frontendSource, /data-settings-test/);
 assert.match(frontendSource, /call\("terminal.settings.test", \{ command: settings.command, args \}\)/);
 assert.match(frontendSource, /settings\.saving \|\| settings\.testing/);
