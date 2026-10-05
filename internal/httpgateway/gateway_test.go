@@ -111,6 +111,37 @@ func TestCustomHeaderValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestUpstreamTLSVerificationOption(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "ok") }))
+	defer server.Close()
+	for _, test := range []struct {
+		name   string
+		ignore bool
+		wantOK bool
+	}{{"verify by default", false, false}, {"allow explicitly trusted self-signed certificate", true, true}} {
+		t.Run(test.name, func(t *testing.T) {
+			browser, host := net.Pipe()
+			gateway, err := New(Config{UpstreamURL: server.URL, UpstreamBasePath: "/", PublicPrefix: "/app", InsecureSkipVerify: test.ignore}, host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := gateway.client.Get(server.URL + "/")
+			if test.wantOK {
+				if err != nil {
+					t.Fatalf("trusted self-signed upstream failed: %v", err)
+				}
+				_ = response.Body.Close()
+			} else if err == nil {
+				_ = response.Body.Close()
+				t.Fatal("self-signed upstream was accepted without explicit opt-in")
+			}
+			gateway.Close()
+			_ = browser.Close()
+			_ = host.Close()
+		})
+	}
+}
 func (c *testTunnel) send(kind byte, id uint32, data []byte) {
 	c.t.Helper()
 	c.write.Lock()
@@ -357,7 +388,7 @@ func TestMappingAndRedirectValidation(t *testing.T) {
 func TestWebSocketTunnelAndProxyHeaders(t *testing.T) {
 	type observed struct{ host, proto, prefix, script, custom, origin, path, protocol, cookie string }
 	seen := make(chan observed, 2)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/app/login" {
 			http.SetCookie(w, &http.Cookie{Name: "webapp-session", Value: "secret-cookie", Path: "/app", HttpOnly: true})
 			_, _ = io.WriteString(w, "ok")
@@ -381,7 +412,7 @@ func TestWebSocketTunnelAndProxyHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 	browser, host := net.Pipe()
-	config := Config{UpstreamURL: server.URL, UpstreamBasePath: "/app", PublicPrefix: "/p/app", BasePathHeader: "X-Forwarded-Prefix", BasePathHeaderValue: "/custom/socket-base", ForwardPublicHost: true, ForwardPublicScheme: true, PublicHost: "public.example", PublicScheme: "https", CustomHeaders: http.Header{"X-Feature-Mode": {"safe"}}}
+	config := Config{UpstreamURL: server.URL, UpstreamBasePath: "/app", PublicPrefix: "/p/app", BasePathHeader: "X-Forwarded-Prefix", BasePathHeaderValue: "/custom/socket-base", InsecureSkipVerify: true, ForwardPublicHost: true, ForwardPublicScheme: true, PublicHost: "public.example", PublicScheme: "https", CustomHeaders: http.Header{"X-Feature-Mode": {"safe"}}}
 	g, err := New(config, host)
 	if err != nil {
 		t.Fatal(err)
@@ -446,7 +477,7 @@ func TestWebSocketTunnelAndProxyHeaders(t *testing.T) {
 	if json.Unmarshal(got.Data, &closeMetadata) != nil || closeMetadata["code"] != float64(1000) || closeMetadata["reason"] != "finished" || closeMetadata["wasClean"] != true {
 		t.Fatalf("upstream close metadata not propagated: %s", got.Data)
 	}
-	second := openTunnelConfig(t, Config{UpstreamURL: server.URL, UpstreamBasePath: "/app", PublicPrefix: "/p/app"})
+	second := openTunnelConfig(t, Config{UpstreamURL: server.URL, UpstreamBasePath: "/app", PublicPrefix: "/p/app", InsecureSkipVerify: true})
 	second.send(WebSocketOpen, WebSocketIDMask|1, open)
 	if got := second.nextFrame(); got.Type != WebSocketOpened {
 		t.Fatal("second gateway WebSocket did not open", got)

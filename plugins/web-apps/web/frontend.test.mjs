@@ -7,6 +7,8 @@ assert.ok(advanced, "advanced settings use a collapsible details frame");
 assert.match(advanced, /Advanced Settings/);
 assert.match(advanced, /Base path header/);
 assert.match(advanced, /Static headers/);
+assert.match(advanced, /Ignore upstream TLS certificate validation/);
+assert.match(advanced, /name="insecureSkipVerify"/);
 assert.doesNotMatch(source, /Proxy compatibility|Advanced upstream headers/);
 const plugin = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 const ids = { runtime: "r".repeat(32), publication: "p".repeat(32), stream: "s".repeat(32), ticket: "t".repeat(32) };

@@ -18,6 +18,13 @@
 .webapps-dialog .webapps-advanced-content { display: grid; gap: 10px; padding: 12px; }
 .webapps-dialog .webapps-toggle { display: flex; align-items: center; gap: 9px; min-height: 26px; }
 .webapps-dialog .webapps-toggle input { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: var(--rp-accent); }
+.webapps-dialog .webapps-tls-toggle { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.webapps-dialog .webapps-tls-toggle small { display: block; margin-top: 3px; line-height: 1.45; }
+.webapps-dialog .webapps-tls-toggle input { appearance: none; position: relative; width: 40px; height: 22px; margin: 0; border: 1px solid var(--rp-border); border-radius: 999px; background: var(--rp-surface); cursor: pointer; transition: background-color .15s ease, border-color .15s ease; }
+.webapps-dialog .webapps-tls-toggle input::before { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--rp-text-muted); transition: transform .15s ease, background-color .15s ease; }
+.webapps-dialog .webapps-tls-toggle input:checked { border-color: var(--rp-accent); background: var(--rp-accent); }
+.webapps-dialog .webapps-tls-toggle input:checked::before { background: #fff; transform: translateX(18px); }
+.webapps-dialog .webapps-tls-toggle input:focus-visible { outline: 2px solid var(--rp-accent); outline-offset: 2px; }
 .webapps-dialog label small { color: var(--rp-text-muted); font-size: 11px; font-weight: 400; }
 .webapps-dialog details summary { color: var(--rp-text-strong); cursor: pointer; }
 .webapps-dialog textarea { width: 100%; min-width: 0; color: var(--rp-text-strong); background: var(--rp-surface); border-color: var(--rp-border); }

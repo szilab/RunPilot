@@ -92,7 +92,7 @@ func (g *Gateway) acceptWebSocket(f Frame) error {
 			headers.Set("Cookie", strings.Join(values, "; "))
 		}
 		ctx, cancel := context.WithTimeout(g.ctx, 30*time.Second)
-		conn, response, err := websocket.Dial(ctx, u.String(), &websocket.DialOptions{HTTPHeader: headers, Subprotocols: open.Protocols, CompressionMode: websocket.CompressionDisabled})
+		conn, response, err := websocket.Dial(ctx, u.String(), &websocket.DialOptions{HTTPClient: g.wsClient, HTTPHeader: headers, Subprotocols: open.Protocols, CompressionMode: websocket.CompressionDisabled})
 		cancel()
 		if response != nil {
 			g.jar.SetCookies(&cookieURL, response.Cookies())

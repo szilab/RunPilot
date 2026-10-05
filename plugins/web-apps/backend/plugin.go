@@ -39,6 +39,7 @@ type target struct {
 	UpstreamBasePath    string            `json:"upstreamBasePath"`
 	BasePathHeader      string            `json:"basePathHeader,omitempty"`
 	BasePathHeaderValue string            `json:"basePathHeaderValue,omitempty"`
+	InsecureSkipVerify  bool              `json:"insecureSkipVerify,omitempty"`
 	ForwardHost         bool              `json:"forwardPublicHost,omitempty"`
 	ForwardScheme       bool              `json:"forwardPublicScheme,omitempty"`
 	CustomHeaders       map[string]string `json:"customHeaders,omitempty"`
@@ -433,7 +434,7 @@ func (p *plugin) handle(method string, raw json.RawMessage) (any, *rpcError) {
 					return nil, f
 				}
 				var s session
-				if err := callHost("http.gateway.open", map[string]any{"publicationId": p.publications[t.ID], "upstreamURL": t.UpstreamURL, "upstreamBasePath": t.UpstreamBasePath, "basePathHeader": t.BasePathHeader, "basePathHeaderValue": t.BasePathHeaderValue, "forwardPublicHost": t.ForwardHost, "forwardPublicScheme": t.ForwardScheme, "customHeaders": t.CustomHeaders, "publicHost": q.PublicHost, "publicScheme": q.PublicScheme}, &s); err != nil {
+				if err := callHost("http.gateway.open", map[string]any{"publicationId": p.publications[t.ID], "upstreamURL": t.UpstreamURL, "upstreamBasePath": t.UpstreamBasePath, "basePathHeader": t.BasePathHeader, "basePathHeaderValue": t.BasePathHeaderValue, "insecureSkipVerify": t.InsecureSkipVerify, "forwardPublicHost": t.ForwardHost, "forwardPublicScheme": t.ForwardScheme, "customHeaders": t.CustomHeaders, "publicHost": q.PublicHost, "publicScheme": q.PublicScheme}, &s); err != nil {
 					return nil, hostError(err)
 				}
 				if s.ID == "" {

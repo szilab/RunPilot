@@ -42,7 +42,7 @@ func webAppsController(t *testing.T, base string, dataDirs ...string) *core.Cont
 		dir = t.TempDir()
 	}
 	source := filepath.Join("..", "..", "plugins", "web-apps")
-	dest := filepath.Join(dir, "plugins", "web.apps", "0.3.0")
+	dest := filepath.Join(dir, "plugins", "web.apps", "0.4.0")
 	if err := filepath.WalkDir(source, func(filename string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err

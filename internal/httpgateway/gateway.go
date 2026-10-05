@@ -2,6 +2,7 @@ package httpgateway
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,7 @@ type Config struct {
 	PublicPrefix        string      `json:"publicPrefix"`
 	BasePathHeader      string      `json:"basePathHeader,omitempty"`
 	BasePathHeaderValue string      `json:"basePathHeaderValue,omitempty"`
+	InsecureSkipVerify  bool        `json:"insecureSkipVerify,omitempty"`
 	ForwardPublicHost   bool        `json:"forwardPublicHost,omitempty"`
 	ForwardPublicScheme bool        `json:"forwardPublicScheme,omitempty"`
 	PublicHost          string      `json:"publicHost,omitempty"`
@@ -67,6 +69,7 @@ type Gateway struct {
 	config    Config
 	upstream  *url.URL
 	client    *http.Client
+	wsClient  *http.Client
 	jar       *boundedCookieJar
 	transport *http.Transport
 	ctx       context.Context
@@ -114,13 +117,17 @@ func New(config Config, conn net.Conn) (*Gateway, error) {
 	}
 	jar := newCookieJar()
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if config.InsecureSkipVerify {
+		// This is an explicit per-target opt-in; certificate checks stay enabled by default.
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
+	}
 	transport.Proxy = nil // Always reach the configured host directly.
 	transport.DisableCompression = true
 	transport.MaxResponseHeaderBytes = MaxMetadata
 	transport.MaxConnsPerHost = MaxExchanges
 	transport.ResponseHeaderTimeout = 30 * time.Second
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Gateway{config: config, upstream: upstream, transport: transport, jar: jar, client: &http.Client{Transport: transport, Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, ctx: ctx, cancel: cancel, conn: conn, exchanges: map[uint32]*exchange{}, sockets: map[uint32]*upstreamSocket{}}, nil
+	return &Gateway{config: config, upstream: upstream, transport: transport, jar: jar, client: &http.Client{Transport: transport, Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, wsClient: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, ctx: ctx, cancel: cancel, conn: conn, exchanges: map[uint32]*exchange{}, sockets: map[uint32]*upstreamSocket{}}, nil
 }
 
 func validateCustomHeaders(headers http.Header) error {

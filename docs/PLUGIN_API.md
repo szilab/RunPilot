@@ -532,6 +532,11 @@ upstream Host is fixed, Origin is synthesized for unsafe methods or when supplie
 and in-prefix Referer URLs map to the upstream origin/base (others are removed). Application Authorization, Range, If-Range, status, content type and
 cache headers are retained. There is no body rewriting.
 
+HTTPS upstream certificate verification remains enabled by default. A gateway
+may explicitly opt into skipping certificate and hostname verification for a
+trusted self-signed upstream. This setting applies to both HTTP and WebSocket
+upstream connections and must be scoped to an individual target.
+
 Each gateway owns an ephemeral cookie jar: upstream Set-Cookie updates the jar,
 subsequent requests receive its cookies, and synthetic browser responses never
 receive Set-Cookie. Cookie state is bounded to 128 records / 64 KiB per session.
