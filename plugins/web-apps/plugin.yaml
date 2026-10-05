@@ -1,0 +1,15 @@
+apiVersion: runpilot.plugin/v1
+id: web.apps
+name: Web Apps
+description: Encrypted browser access to host-reachable web applications
+version: 0.4.1
+requires:
+  backend: ">=1.0.0 <2.0.0"
+  frontend: ">=1.0.0 <2.0.0"
+  runpilotApi: 2
+platforms: [linux, windows]
+backend:
+  module: backend/plugin.wasm
+frontend:
+  module: web/plugin.js
+  stylesheet: web/plugin.css

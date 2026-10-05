@@ -152,6 +152,7 @@ installed_version() {
 }
 
 binary_tmp="$tmp_dir/$asset"
+bundle_tmp="$tmp_dir/$asset.tar.gz"
 sum_tmp="$tmp_dir/$asset.sha256"
 version_tmp="$tmp_dir/$version_asset"
 
@@ -170,6 +171,7 @@ fi
 echo "Downloading RunPilot $release_tag from $repo..."
 download "$base_url/$asset" "$binary_tmp"
 download "$base_url/$asset.sha256" "$sum_tmp"
+download "$base_url/$asset.tar.gz" "$bundle_tmp"
 
 if command -v sha256sum >/dev/null 2>&1; then
 	expected_sum="$(awk '{print $1}' "$sum_tmp")"
@@ -196,8 +198,16 @@ if [ "$service_active" = "1" ]; then
 fi
 
 install -m 0755 "$binary_tmp" "$install_dir/runpilot"
+mkdir -p "$tmp_dir/bundle"
+tar -xzf "$bundle_tmp" -C "$tmp_dir/bundle"
+if [ ! -d "$tmp_dir/bundle/plugins" ]; then
+	echo "Release plugin bundle is invalid." >&2
+	exit 1
+fi
+rm -rf "$install_dir/plugins"
+cp -R "$tmp_dir/bundle/plugins" "$install_dir/plugins"
 
-echo "Installed $install_dir/runpilot"
+echo "Installed $install_dir/runpilot and first-party plugins"
 
 if [ "$skip_service" = "1" ]; then
 	echo "Skipping service installation because RUNPILOT_SKIP_SERVICE=1."

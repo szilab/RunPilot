@@ -1,10 +1,12 @@
 module github.com/szilab/RunPilot
 
-go 1.23
+go 1.24
 
 require (
+	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/aymanbagabas/go-pty v0.2.2
 	github.com/coder/websocket v1.8.15
+	github.com/tetratelabs/wazero v1.8.2
 	golang.org/x/crypto v0.17.0
 	golang.org/x/sys v0.30.0
 	gopkg.in/yaml.v3 v3.0.1

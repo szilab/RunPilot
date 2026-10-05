@@ -1,0 +1,15 @@
+apiVersion: runpilot.plugin/v1
+id: tasks
+name: Tasks
+description: Continuous and scheduled command tasks with execution history
+version: 0.1.3
+requires:
+  frontend: ">=1.0.0 <2.0.0"
+  backend: ">=1.0.0 <2.0.0"
+  runpilotApi: 2
+platforms: [linux, windows]
+backend:
+  module: backend/plugin.wasm
+frontend:
+  module: web/plugin.js
+  stylesheet: web/plugin.css

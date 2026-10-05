@@ -1,247 +1,280 @@
 # RunPilot architecture
 
-## Product direction
+## Direction
 
-RunPilot is a lightweight Windows/Linux host-management control plane with one native service per platform and an embedded web UI. Windows uses Windows Service Control Manager; Linux uses a systemd user service. Its purpose is to give users one coherent GUI for managing applications, scheduled operations, backup tools, storage access and software installation.
+RunPilot is a lightweight Windows/Linux host-management application that is
+being refactored into a small **plugin host and management framework**.
 
-RunPilot should integrate existing specialist tools instead of reimplementing them. The guiding rule is:
+> **RunPilot provides the framework; plugins provide the features.**
 
-> **RunPilot manages tools and workloads; it does not become those tools.**
+The target core owns infrastructure that multiple features need: plugin
+installation/runtime, versioned host capabilities, one authenticated application
+WebSocket, the web shell, shared UI/theme primitives, and framework settings.
+Tasks, Docker, Terminal, RDP and VNC are plugin-owned in the normal UI. Storage,
+Software and Backup remain transitional core implementations without normal
+navigation. Xpra is the temporary Remote exception described below.
 
-Examples:
+The migration is incremental. Legacy backends, APIs and configuration remain
+operational until plugin parity and any required state migration decision. New
+architecture work must not use that transitional state as a reason to add more
+feature semantics to core.
 
-- RunPilot supervises native processes; it does not replace the Windows process model.
-- RunPilot schedules and configures Robocopy, Restic or rdiff-backup; it does not implement its own backup format, deduplication engine or retention model.
-- RunPilot may expose Docker/Compose lifecycle operations in the future; it should not become a WSL or Docker orchestrator.
-- RunPilot exposes software installation through external providers; it should not become a package manager.
+## Core boundary
 
-The browser is only a management client. Operations run with the permissions of the account hosting RunPilot; RunPilot does not grant additional privileges.
+Target core responsibilities are:
 
-## Domain boundaries
+- immutable `.rpplugin` package validation, installation and lifecycle;
+- catalog-based plugin discovery/update handling;
+- wazero backend runtime with explicit raw WASM ABI versions;
+- narrow host capabilities for process, scheduler, storage, system and similar
+  generic operations;
+- one authenticated browser/server application WebSocket;
+- web shell, navigation host, Overview and Settings extension hosts;
+- shared frontend components, semantic design tokens and appearance handling;
+- framework configuration and plugin enablement.
 
-The product separates capabilities from tool integrations.
+Core must not permanently understand domain concepts such as Task, Docker
+container, backup repository, terminal session type, Xpra target or Scoop
+package. Xpra remains in core temporarily because its subprocess/display
+lifecycle and local HTTP/WebSocket browser publication do not map cleanly to
+current capabilities. Generic engines may remain in core when exposed as
+reusable host capabilities.
 
-### Core capabilities
+## Plugin model
 
-Core RunPilot capabilities provide the consistent user experience:
+First-party plugin source lives in this repository, normally below
+`plugins/<id>/`, but each plugin is a logically independent package with its
+own SemVer version and release lifecycle.
 
-1. **Tasks** — one view for continuous commands, scheduled commands and typed backup jobs.
-2. **Storage** — runtime-discovered Local filesystem and Docker-volume locations.
-3. **Software management** — GUI over external installation/package providers.
-4. **Health** — cross-cutting execution history, logs and host/workload status.
-
-These capabilities should share RunPilot infrastructure such as configuration, scheduling, execution history, authorization and the embedded GUI, but they should not collapse into one generic shell-command abstraction.
-
-### Integrations
-
-An integration encapsulates knowledge about an external tool or runtime. One integration may support multiple RunPilot capabilities.
-
-For example, the Restic integration currently provides backup jobs and can later add its distinct Storage/browser operations without duplicating repository configuration:
-
-```text
-                    Restic integration
-                     /            \
-                    /              \
-                   v                v
-             Backup jobs       Storage browser
-             restic backup     snapshots / ls /
-                               dump / restore
-```
-
-Repository configuration, executable discovery, password-file references and command construction stay with the typed Restic backup integration. Storage browsing and restore are not implemented yet and must not be implied by a backup definition.
-
-Tool-specific configuration should remain typed. Avoid a universal configuration model containing every feature offered by every possible backend. Capabilities unsupported by a selected tool should not be emulated inside RunPilot merely to make all integrations look identical.
-
-## Runtime
+A plugin may contain any combination of:
 
 ```text
-                         +----------------------------+
-                         |        runpilot            |
-                         | Windows SCM / systemd user|
-                         +-------------+--------------+
-                                       |
-                   +-------------------+--------------------+
-                   |                   |                    |
-          +--------v--------+  +-------v-------+   +--------v-------+
-          | Process Manager |  |   Scheduler   |   |   HTTP / GUI   |
-          +--------+--------+  +-------+-------+   +----------------+
-                   |                   |
-                   |           +-------v--------+
-                   |           | One-shot Runner|
-                   |           +-------+--------+
-                   |                   |
-                   |          +--------+---------+
-                   |          |                  |
-              executables  command jobs     integrations
-                                               |
-                                           Robocopy
+plugin.yaml
+backend/plugin.wasm   # optional
+web/plugin.js         # optional
+web/plugin.css        # optional
 ```
 
-External integrations should normally invoke the authoritative external tool through a typed adapter. RunPilot may parse structured output and present a richer GUI, but the external tool remains responsible for the underlying operation.
+Backend modules run in-process through wazero. First-party backends are compiled
+with TinyGo and shipped as prebuilt WASM; TinyGo is never a production runtime
+dependency. Frontend modules register pages, navigation, Overview contributions
+and Settings sections through the public frontend API.
 
-## Persistence
+Plugins may be platform-independent, Linux-only or Windows-only. Incompatible
+packages can remain installed but are not activated. Enablement is desired state;
+activation is intentionally restart-based rather than hot-loaded.
 
-Persistence is deliberately transparent:
+## Version domains
 
-- `runpilot.yaml` — configuration
-- `history.jsonl` — completed run records
-- `runs/<run-id>.log` — captured stdout/stderr
+These versions are independent and must not be collapsed into one number:
 
-Default location: `%ProgramData%\RunPilot` on Windows and `$XDG_DATA_HOME/runpilot` or `~/.local/share/runpilot` on Linux. `RUNPILOT_DATA_DIR` takes precedence. Linux service installation uses the current user's systemd unit directory and normal user permissions; `sudo loginctl enable-linger <user>` enables boot-time operation without an interactive login.
+| Domain | Current role |
+| --- | --- |
+| RunPilot version | Native application release |
+| Raw WASM ABI | Binary calling convention; v1 and v2 are currently supported |
+| Backend contract | Host capability/runtime compatibility; currently `1.0.0` |
+| Frontend contract | Public browser extension compatibility; currently `1.0.0` |
+| Plugin version | Independent SemVer release of one plugin |
 
-SQLite is a sensible next persistence step when query requirements, retention and migration needs justify it. REST/domain interfaces should remain stable when that migration happens.
+Plugin manifests use SemVer ranges for backend/frontend contracts and
+`requires.runpilotApi` only for the raw WASM ABI. Compatibility is therefore
+based on contracts, not on the RunPilot application version.
 
-Integration credentials and secrets require stronger storage than ordinary YAML configuration. Secret storage should use a Windows-appropriate protected mechanism such as DPAPI when implemented.
+ABI v1 remains for compatibility. ABI v2 is the preferred first-party path:
+lifecycle data and capability responses are host-owned and copied synchronously,
+so the host never retains pointers or slices backed by WASM linear memory after
+an ABI import returns. The nonpublic System fixture exercises ABI v2 and the
+TinyGo SDK.
 
-## Scheduling
+## Host capabilities
 
-The internal scheduler supports:
-
-- interval (`20 minutes`)
-- daily (`03:00`)
-- 5- or 6-field cron expressions
-- optional IANA timezone
-
-Cron syntax supports `*`, `*/N`, numeric values, lists and numeric ranges. Advanced Quartz/Vixie extensions such as `L`, `W`, `#` and named weekdays/months are intentionally out of scope.
-
-Overlap defaults to `skip`, which is especially important for backup jobs.
-
-## Backup capability
-
-Backup jobs are orchestration around specialist backup tools. RunPilot owns configuration, scheduling, execution, logs and history; the selected backup tool owns the backup semantics and data format.
-
-### Robocopy
-
-The first adapter uses `robocopy.exe`, present in modern supported Windows versions. RunPilot builds arguments itself instead of storing an opaque shell command.
-
-Current presets:
-
-- `copy` -> `/E`
-- `mirror` -> `/MIR`
-- `/COPY:DAT`
-- `/DCOPY:DAT`
-- `/XJ`
-- configurable `/R:n` and `/W:n`
-
-Robocopy exit codes 0-7 are success/non-fatal states; 8+ is failure.
-
-Robocopy should remain a copy/mirror integration. RunPilot must not build its own versioned-backup layer on top of Robocopy simply because Robocopy does not provide repository snapshots or version history.
-
-### Restic and rdiff-backup
-
-Restic provides repository snapshot backups, native `forget` retention (optionally pruning) and repository checks. rdiff-backup provides a directly browsable current destination mirror plus native historical increments, increment removal and verification. Their commands are emitted as sequential provider-owned execution plans, so a backup can be followed by retention and verification while remaining one RunPilot job run/history record.
-
-Restic repository browsing, historical-version browsing, download and restore, and rdiff-backup restore/version UI are intentionally separate Storage/follow-up work. Backup destinations are not automatically exposed on the Storage page.
-
-Each backup integration may expose a tool-specific editor and operations. A capability descriptor can be used for discovery and UI decisions, but it should not force unrelated tools into a lowest-common-denominator or artificial universal backup schema.
-
-## Storage capability
-
-Storage access is intentionally separate from backup execution.
-
-A **Storage location** exposes a browsable data source to the RunPilot GUI. Locations are runtime capabilities, not user-managed configuration records. Initial locations include:
-
-- **Local filesystem** — always available as `local`, browsing all roots accessible to the RunPilot service identity.
-- **Docker volumes** — one `docker-volumes` virtual location; its root dynamically lists volume directories. Contents are accessed through Docker-mounted helper containers, and running volumes are read-only.
-- **Restic repository** — browse snapshots, inspect historical file versions, download a selected version and restore through Restic.
-
-Conceptually, providers may offer capabilities such as:
+Plugins do not receive Go objects, raw handles or unrestricted access to
+RunPilot internals. Generic functionality is exposed through explicit host
+capabilities such as:
 
 ```text
-Browse
-Download
-Versions
-Restore
+host.process.*
+host.workspace.*
+host.scheduler.*
+host.storage.*
+host.history.*
+host.system.*
+host.config.*
+host.log.*
 ```
 
-Not every provider must implement every capability.
+`host.history.*` is a generic, owner-scoped execution record with captured
+output. Each plugin's SQLite history and run logs live in its mutable data
+directory. Plugins never supply filesystem paths.
 
-The Local Filesystem provider supports practical scoped browser operations: upload, create, rename, move and delete. Other providers, especially Restic, expose only their native read/version/restore capabilities rather than artificial writable operations.
+Additional families such as filesystem or network access should be added only
+when a real plugin needs a narrow, reusable operation. Do not add generic
+syscall/command escape hatches.
 
-### Local filesystem security
+There is intentionally no per-plugin permission matrix. Plugins are trusted
+packages and operate within the OS permissions of the RunPilot service account.
+Capability implementations still validate inputs, ownership and RunPilot
+invariants.
 
-The user-visible Local filesystem is host-scoped and enumerates available roots; OS permissions remain authoritative. The internal root-scoped Local adapter remains available to provider-backed locations such as Docker volumes, resolving symlinks and enforcing its root boundary.
+## Browser and frontend model
 
-### Version-oriented UX
+Application RPC and plugin events use the common authenticated WebSocket. A
+request identifies a plugin and method:
 
-For versioned providers such as Restic, the GUI should be able to present historical versions of a file without requiring the user to understand repository-internal snapshot identifiers. Snapshot browsing remains useful, but a file-oriented "previous versions" workflow is a first-class target.
+```json
+{"id":"42","plugin":"tasks","method":"tasks.list","params":{}}
+```
 
-Downloading a historical file should stream the provider/tool output where practical instead of first implementing a second restore/copy engine inside RunPilot. Restoring to the host filesystem should delegate restoration semantics to the provider tool.
+Responses use the same correlation ID; asynchronous events use the same
+connection. Static HTML/JS/CSS and plugin assets remain ordinary HTTP resources.
+Legacy feature REST endpoints may remain during migration, but new plugin
+features must not create feature-specific REST APIs or WebSockets.
 
-## Application capability
+The public frontend surface is built around:
 
-A managed process is currently the primary application type. It is expected to stay alive and has restart policy, status and logs.
+```text
+runpilot.ws
+runpilot.navigation
+runpilot.overview
+runpilot.settings
+runpilot.ui
+```
 
-A process definition contains:
+Core owns layout and visual primitives; plugins own feature pages and feature
+semantics. Plugin CSS should use public semantic design tokens rather than
+hard-code RunPilot's current colors or spacing.
 
-- command/script
-- interpreter selection (`auto`, direct, PowerShell, CMD, Python)
-- arguments
-- working directory
-- environment additions
-- autostart
-- restart policy
-- exponential restart backoff
+Overview currently presents a built-in, host-only monitoring dashboard with
+separate identity, CPU, memory, optional GPU and filesystem cards. Its metrics
+reuse the existing platform adapters. The generic frontend widget registration
+contract remains available, but widget contributions are dormant while the
+host-only dashboard is shown. Launcher shortcuts remain in framework
+configuration for future UI work. The current System package remains a
+technical fixture, not the user-facing System feature.
 
-RunPilot currently terminates Windows process trees through `taskkill /T /F`. This is intentionally an implementation seam. The production supervisor should move to native Windows Job Objects so descendants are owned and terminated deterministically.
+## Plugin publication and installation
 
-### External runtimes
+The main repository is also the source repository for first-party plugins, but
+plugin releases are independent from application releases.
 
-Future application integrations may expose workloads managed by an external runtime, for example Docker containers or Compose projects. Such integrations should attach to an already functional runtime and provide useful GUI operations such as status, start/stop/restart and logs.
+GitHub Releases store immutable
+`plugin-<id>-v<version>` artifacts. A generated `plugin-catalog` release
+publishes `catalog.json`. RunPilot reads that catalog, selects the newest
+platform/contract-compatible version, verifies SHA-256 and package metadata, and
+uses the existing atomic installer.
 
-Unless explicitly approved as a separate feature, RunPilot should **not**:
+Settings exposes installed/available/update/incompatible state plus explicit
+install, update, enable/disable and uninstall operations. New installations are
+not silently enabled, updates are not automatic, and activation remains pinned
+until restart. Mutable `plugins/<id>/data` is retained on uninstall.
 
-- provision or configure WSL distributions,
-- install or operate a Docker daemon,
-- implement container networking or port forwarding,
-- recreate Docker/Compose orchestration semantics,
-- require Docker Desktop specifically.
+Publication policy is repository-owned. The System fixture and incomplete Remote
+scaffolds are intentionally excluded from the public catalog.
 
-Docker/WSL integration is therefore deferred until its minimal product boundary is agreed. The architecture should preserve an integration seam without speculatively building an orchestrator.
+Operational details belong in [PLUGIN_REGISTRY.md](PLUGIN_REGISTRY.md); plugin
+authoring belongs in [PLUGINS.md](PLUGINS.md); raw ABI/protocol details belong
+in [PLUGIN_API.md](PLUGIN_API.md).
 
-## Software management
+## Migration direction
 
-Software Management is a RunPilot capability. Its first provider is a **RunPilot-owned isolated Scoop installation**, not a user's existing Scoop and not a machine PATH lookup. The configured provider has a stable ID, display name, typed Scoop settings and a configurable root. An empty root resolves from the active RunPilot data directory as `<data-dir>\software\scoop` (normally `%ProgramData%\RunPilot\software\scoop`).
+The next work is feature migration, not further expansion of the core plugin
+framework. Migrate one feature at a time and remove its legacy core/API code only
+after plugin parity and automated regression coverage.
 
-RunPilot lazily bootstraps the managed Scoop runtime from Scoop's official installer after downloading it to a controlled provider directory. Bootstrap failure is isolated to Software Management; it does not prevent the service or other capabilities from starting. All Scoop commands invoke the exact managed `apps\scoop\current\bin\scoop.ps1` entrypoint and pass a child-process-only Scoop environment rooted at that directory. RunPilot never permanently changes PATH or global/user `SCOOP`, `SCOOP_GLOBAL`, or `SCOOP_CACHE` settings.
+Tasks, Docker, Terminal, RDP and VNC have migrated in the normal UI. Storage is the
+next active feature migration. Software, Backup and Xpra follow as separate
+plugin work; see the [backlog](../BACKLOG.md).
 
-The initial policy uses Scoop's standard portable model and the normal main bucket. Scoop's managed Git prerequisite is automatically installed under the same managed root so provider commands never depend on Git from a user Scoop or host PATH. The UI exposes typed list/add/remove bucket operations rather than raw Scoop command execution; the required `main` bucket cannot be removed. Git and 7-Zip remain visible in package results but their individual install, upgrade and uninstall controls are disabled because they are Scoop-managed prerequisites. Global installs, the nonportable bucket, importing/reusing existing Scoop packages, and automatic Process creation are excluded. Changing the configured root selects another isolated instance; RunPilot does not migrate, copy, delete or modify the previous root. Package install remains separate from Process Management.
+### Docker status
 
-WinGet remains a possible future provider for conventional Windows software, behind the same Software capability boundary.
+Docker has a Linux-only first-party plugin (`plugins/docker`, source version `0.1.1`,
+ABI v2) for Compose projects, containers, volumes, networks and interactive
+container terminals. It owns the normal `docker` page and uses generic bounded
+`process.run`, owner-scoped `workspace.*`, and `process.session.*` capabilities.
+Existing `<dataDir>/compose` projects are copied into the Docker plugin workspace
+on startup without overwriting plugin-owned projects or deleting the source. The
+copy records its legacy origin so existing containers can be verified against
+their original Compose directory; external name collisions remain read only.
+External containers allow bounded log viewing but no lifecycle mutations or
+interactive terminal.
+The legacy Docker manager and HTTP handlers remain transitional because hidden
+Storage still uses Docker-volume integration. They are not used by the plugin UI.
 
-## Security
+### Remote status
 
-The service can execute configured programs with the permissions of its hosting account. Current defaults therefore:
+`remote.rdp` and `remote.vnc` are independently packaged, publishable ABI-v2
+plugins. The legacy RDP and VNC providers, browser transports, and combined
+Remote page have been removed from core. Xpra's legacy provider/runtime remains
+internal with no normal UI or navigation. Its plugin migration is deferred
+until reusable process, listener, and browser-publication lifecycle capabilities
+are designed; see the concise [backlog](../BACKLOG.md).
 
-- bind only to `127.0.0.1`
-- generate a random API token at first start
-- require Bearer authentication for every management API request
-- store config with restricted file permissions where supported
+### Tasks status
 
-Before remote management is added, introduce TLS/reverse-proxy guidance, explicit remote-bind opt-in and stronger auth/session handling.
+Tasks has a publishable first-party plugin (`plugins/tasks`, source version `0.1.3`,
+ABI v2, never auto-enabled). It covers continuous command tasks and
+scheduled command tasks, owns their definitions and semantics, and talks to the
+browser only through the common WebSocket. It runs on the generic storage,
+scheduler, process, history and event capabilities without adding a Task host
+capability.
 
-Environment variables may contain credentials but are currently ordinary configuration values. They are not encrypted secret storage. Secrets and integration credentials should move to DPAPI-backed or equivalently protected storage before RunPilot exposes workflows that encourage credential persistence.
+The plugin owns the normal `tasks` page. Legacy task definitions in
+`runpilot.yaml` and the legacy backend remain intact but are not shown in the
+normal UI. New legacy runs use `<dataDir>/legacy`; old local history is not
+imported. **Backup is not part of the Tasks
+plugin**: Backup jobs remain in the legacy job engine until their own migration.
 
-Storage/download endpoints require the same authentication boundary as other management APIs and must validate provider/root/path access server-side.
+The capability changes made for Tasks are generic framework infrastructure:
+interpreter-aware `process.start` (launcher semantics), process timeouts and
+captured output, `scheduler.validate`, the owner-scoped `history.*` family, and
+ordered/bounded event delivery. See [PLUGIN_API.md](PLUGIN_API.md).
 
-## GUI principles
+The async ABI-v2 process/scheduler/event path remains covered by real-WASM
+race/integration tests.
 
-The embedded GUI uses static HTML/CSS/JavaScript. There is no frontend runtime dependency and no separate web server. Assets compile into `runpilot.exe`.
+Tasks and Docker retain compact Overview widget registrations for future use;
+they are not mounted by the current host dashboard. Their business logic and
+backend RPCs remain plugin-owned.
 
-The long-term goal is a coherent Windows/Linux host-management GUI rather than a collection of unrelated tool pages. Integrations may expose tool-specific options, but navigation, status, execution feedback, history and common interactions should remain consistent.
+## Security and guardrails
 
-New GUI features should call backend/domain integrations and must not duplicate execution logic in browser JavaScript.
+- RunPilot normally runs without root/Administrator privileges; the service
+  account is the primary OS security boundary.
+- Keep host capabilities narrow and versioned.
+- Do not add per-plugin permissions without a concrete future requirement.
+- Do not add root/Admin escalation, native Go plugins or generic syscalls.
+- Keep browser application traffic on the common WebSocket.
+- Keep plugin frontend code on public extension APIs and design tokens.
+- Preserve Windows/Linux behavior and explicit platform compatibility.
+- Preserve existing legacy feature behavior while it is still the production
+  implementation.
+- Prefer incremental migrations over simultaneous rewrites.
+- Keep themes non-executable; a future theme package should be CSS/metadata, not
+  another WASM plugin.
 
-A future React/Vue/Svelte frontend can replace the static client while preserving the same REST/domain boundaries if frontend complexity eventually justifies it.
+### Web Apps
 
-## Architectural guardrails
-
-When adding a new capability or external tool:
-
-1. Decide whether it is a **RunPilot capability** or an **external integration**.
-2. Prefer delegating specialist behavior to the authoritative external tool.
-3. Keep tool-specific configuration typed instead of growing a universal catch-all schema.
-4. Allow one integration to serve multiple capabilities when that avoids duplicated configuration or execution logic.
-5. Do not implement unsupported tool features inside RunPilot merely for feature parity between adapters.
-6. Keep privileged filesystem, process and tool execution on the service side; the browser remains a management client.
-7. Avoid turning storage browsing into a general file manager, backup support into a backup engine, software management into a package manager, or external-runtime support into an orchestrator without an explicit product decision.
+The unpublished `web.apps` 0.2.0 ABI-v2 plugin is a working first-party
+capability. It owns target CRUD, persisted target configuration and its browser
+UI, and established reusable browser publication,
+restricted stream ticket and native Go HTTP gateway capabilities; core owns no
+application-specific target behavior. Restricted browser publications bootstrap
+from the RunPilot base URL using a fragment and transition to their virtual path
+only after a basePath-scoped worker has taken control. The generic root hook
+bypasses management authentication/initialization for these tabs. One owner-bound
+browser runtime shares that worker across explicitly bound client sessions;
+normal management clients retain ordinary networking. The plugin renders HTTP
+applications locally through synthetic streaming responses. Upstream application
+HTTP and WebSocket payload crosses the restricted, payload-encrypted common
+application WebSocket, including when normal RunPilot payload encryption is
+disabled. Root-fragment bootstrap supports deployment through URL-sensitive
+proxies and security gateways. HTTPS serves
+package bootstrap/worker assets only. Target tabs receive only a single gateway
+capability; normal RunPilot bearer credentials migrate from localStorage into
+tab-scoped sessionStorage and target tabs launch with `noopener`. Web Apps can
+avoid a dedicated integration when secure access to an application's existing
+GUI is sufficient; dedicated plugins remain appropriate for structured
+automation and control. RunPilot's own `basePath` remains supported. Arbitrary
+nested application base paths are best effort; relative URLs, native base URL
+settings and standard proxy headers are the intended compatibility model.
+Response-body URL rewriting is an intentional boundary.

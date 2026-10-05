@@ -149,26 +149,36 @@ type ServerConfig struct {
 }
 
 type Config struct {
-	Version       int                 `json:"version" yaml:"version"`
-	Server        ServerConfig        `json:"server" yaml:"server"`
-	Processes     []ProcessDefinition `json:"processes" yaml:"processes"`
-	Jobs          []JobDefinition     `json:"jobs" yaml:"jobs"`
-	Software      SoftwareConfig      `json:"software" yaml:"software"`
-	RemoteTargets []RemoteTarget      `json:"remoteTargets" yaml:"remoteTargets"`
-	Remote        RemoteConfig        `json:"remote,omitempty" yaml:"remote,omitempty"`
+	Version        int                  `json:"version" yaml:"version"`
+	Server         ServerConfig         `json:"server" yaml:"server"`
+	Processes      []ProcessDefinition  `json:"processes" yaml:"processes"`
+	Jobs           []JobDefinition      `json:"jobs" yaml:"jobs"`
+	Software       SoftwareConfig       `json:"software" yaml:"software"`
+	RemoteTargets  []RemoteTarget       `json:"remoteTargets" yaml:"remoteTargets"`
+	PluginRegistry PluginRegistryConfig `json:"pluginRegistry,omitempty" yaml:"pluginRegistry,omitempty"`
+	// Plugins contains mutable administrator choices. Plugin manifests are
+	// installation metadata and must never be rewritten when a user toggles a
+	// plugin.
+	Plugins  map[string]PluginSettings `json:"plugins,omitempty" yaml:"plugins,omitempty"`
+	Launcher []LauncherEntry           `json:"launcher,omitempty" yaml:"launcher,omitempty"`
 }
 
-// RemoteConfig contains provider-wide settings. Destinations remain provider
-// configuration and are deliberately not accepted from browser clients.
-type RemoteConfig struct {
-	Guacd GuacdConfig `json:"guacd,omitempty" yaml:"guacd,omitempty"`
+// LauncherEntry is framework configuration for an Overview shortcut.
+type LauncherEntry struct {
+	ID       string `json:"id" yaml:"id"`
+	Name     string `json:"name" yaml:"name"`
+	URL      string `json:"url" yaml:"url"`
+	Icon     string `json:"icon,omitempty" yaml:"icon,omitempty"`
+	OpenMode string `json:"openMode" yaml:"openMode"`
 }
 
-type GuacdConfig struct {
-	Host                  string `json:"host,omitempty" yaml:"host,omitempty"`
-	Port                  int    `json:"port,omitempty" yaml:"port,omitempty"`
-	TLS                   bool   `json:"tls,omitempty" yaml:"tls,omitempty"`
-	ConnectTimeoutSeconds int    `json:"connectTimeoutSeconds,omitempty" yaml:"connectTimeoutSeconds,omitempty"`
+type PluginRegistryConfig struct {
+	URL string `json:"url,omitempty" yaml:"url,omitempty"`
+}
+
+type PluginSettings struct {
+	// Enabled records an explicit administrator choice; absent means disabled.
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 
 // RemoteTarget is a reusable, administrator-configured graphical workload.
@@ -205,68 +215,6 @@ type RemoteTarget struct {
 	// Xpra contains typed provider-specific settings. It is nil in legacy
 	// targets; NormalizeXpraRemoteOptions supplies RunPilot defaults at runtime.
 	Xpra *XpraRemoteOptions `json:"xpra,omitempty" yaml:"xpra,omitempty"`
-	// RDP contains the configured, non-secret RDP endpoint settings. Passwords
-	// are intentionally never part of a RemoteTarget.
-	RDP *RDPRemoteOptions `json:"rdp,omitempty" yaml:"rdp,omitempty"`
-	// VNC contains the configured, non-secret VNC endpoint settings. VNC
-	// authentication is performed by the embedded noVNC client and is never
-	// persisted in a target.
-	VNC *VNCRemoteOptions `json:"vnc,omitempty" yaml:"vnc,omitempty"`
-}
-
-type RDPSecurityMode string
-
-const (
-	RDPSecurityAutomatic RDPSecurityMode = "automatic"
-	RDPSecurityNLA       RDPSecurityMode = "nla"
-	RDPSecurityNLAExt    RDPSecurityMode = "nla-ext"
-	RDPSecurityTLS       RDPSecurityMode = "tls"
-	RDPSecurityRDP       RDPSecurityMode = "rdp"
-)
-
-type RDPCertificatePolicy string
-
-const (
-	RDPCertificateValidate    RDPCertificatePolicy = "validate"
-	RDPCertificateTOFU        RDPCertificatePolicy = "tofu"
-	RDPCertificateIgnore      RDPCertificatePolicy = "ignore"
-	RDPCertificateFingerprint RDPCertificatePolicy = "fingerprint"
-)
-
-// RDPRemoteOptions is deliberately limited to desktop connection settings.
-// Credentials are supplied in-memory by the browser for each connection.
-type RDPRemoteOptions struct {
-	Host                   string               `json:"host" yaml:"host"`
-	Port                   int                  `json:"port,omitempty" yaml:"port,omitempty"`
-	Username               string               `json:"username,omitempty" yaml:"username,omitempty"`
-	Domain                 string               `json:"domain,omitempty" yaml:"domain,omitempty"`
-	SecurityMode           RDPSecurityMode      `json:"securityMode,omitempty" yaml:"securityMode,omitempty"`
-	Clipboard              *bool                `json:"clipboard,omitempty" yaml:"clipboard,omitempty"`
-	DynamicResize          *bool                `json:"dynamicResize,omitempty" yaml:"dynamicResize,omitempty"`
-	ServerLayout           string               `json:"serverLayout,omitempty" yaml:"serverLayout,omitempty"`
-	ResizeMethod           string               `json:"resizeMethod,omitempty" yaml:"resizeMethod,omitempty"`
-	DPIMode                string               `json:"dpiMode,omitempty" yaml:"dpiMode,omitempty"`
-	DPI                    int                  `json:"dpi,omitempty" yaml:"dpi,omitempty"`
-	ColorDepth             int                  `json:"colorDepth,omitempty" yaml:"colorDepth,omitempty"`
-	CertificatePolicy      RDPCertificatePolicy `json:"certificatePolicy,omitempty" yaml:"certificatePolicy,omitempty"`
-	CertificateFingerprint string               `json:"certificateFingerprint,omitempty" yaml:"certificateFingerprint,omitempty"`
-	Copy                   *bool                `json:"copy,omitempty" yaml:"copy,omitempty"`
-	Paste                  *bool                `json:"paste,omitempty" yaml:"paste,omitempty"`
-	ClipboardNormalization string               `json:"clipboardNormalization,omitempty" yaml:"clipboardNormalization,omitempty"`
-	PerformanceProfile     string               `json:"performanceProfile,omitempty" yaml:"performanceProfile,omitempty"`
-	TimeoutSeconds         int                  `json:"timeoutSeconds,omitempty" yaml:"timeoutSeconds,omitempty"`
-	TimeZone               string               `json:"timeZone,omitempty" yaml:"timeZone,omitempty"`
-}
-
-// VNCRemoteOptions is deliberately limited to the VNC server endpoint. It is
-// captured when a session begins, so a browser client can never choose where
-// its RFB WebSocket transport connects. Username is optional; most VNC
-// servers only require a password, but it is prefilled when a server does.
-type VNCRemoteOptions struct {
-	Host                  string `json:"host" yaml:"host"`
-	Port                  int    `json:"port,omitempty" yaml:"port,omitempty"`
-	Username              string `json:"username,omitempty" yaml:"username,omitempty"`
-	ConnectTimeoutSeconds int    `json:"connectTimeoutSeconds,omitempty" yaml:"connectTimeoutSeconds,omitempty"`
 }
 
 type XpraProfile string
@@ -364,12 +312,6 @@ type RemoteSession struct {
 	// Xpra is an effective, non-sensitive display configuration snapshot. It
 	// remains fixed for the lifetime of this running session.
 	Xpra *XpraRemoteOptions `json:"xpra,omitempty"`
-	// RDP is an effective, non-secret endpoint snapshot. It remains fixed for
-	// the session lifetime; in particular, it contains no password.
-	RDP *RDPRemoteOptions `json:"rdp,omitempty"`
-	// VNC is an effective, non-secret endpoint snapshot. It remains fixed for
-	// the session lifetime; VNC credentials are never included.
-	VNC *VNCRemoteOptions `json:"vnc,omitempty"`
 }
 
 // SoftwareConfig contains the external providers RunPilot manages for its
@@ -440,12 +382,20 @@ type DiskStatus struct {
 
 type HostStatus struct {
 	OS                string       `json:"os"`
+	Architecture      string       `json:"architecture"`
 	Hostname          string       `json:"hostname"`
+	CPUCount          int          `json:"cpuCount,omitempty"`
+	CPUModel          string       `json:"cpuModel,omitempty"`
+	LoadAverage       []float64    `json:"loadAverage,omitempty"`
+	CPUAvailable      bool         `json:"cpuAvailable"`
 	CPUPercent        float64      `json:"cpuPercent"`
 	CPUAveragePercent float64      `json:"cpuAveragePercent"`
 	GPUPercent        float64      `json:"gpuPercent"`
 	GPUAveragePercent float64      `json:"gpuAveragePercent"`
 	GPUAvailable      bool         `json:"gpuAvailable"`
+	GPUName           string       `json:"gpuName,omitempty"`
+	GPUMemoryUsed     uint64       `json:"gpuMemoryUsedBytes,omitempty"`
+	GPUMemoryTotal    uint64       `json:"gpuMemoryTotalBytes,omitempty"`
 	MemoryTotalBytes  uint64       `json:"memoryTotalBytes"`
 	MemoryFreeBytes   uint64       `json:"memoryFreeBytes"`
 	Disks             []DiskStatus `json:"disks"`

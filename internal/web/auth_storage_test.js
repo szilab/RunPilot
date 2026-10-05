@@ -1,0 +1,14 @@
+const assert = require("node:assert/strict"), fs = require("node:fs"), vm = require("node:vm");
+const context = {}; vm.runInNewContext(fs.readFileSync("internal/web/static/auth-storage.js", "utf8"), context);
+const storage = () => { const values = new Map(); return { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) }; };
+const tab = storage(), shared = storage(); shared.setItem("runpilot.token", "legacy");
+assert.equal(context.RunPilotAuthStorage.migrate(tab, shared), "legacy");
+assert.equal(tab.getItem("runpilot.token"), "legacy"); assert.equal(shared.getItem("runpilot.token"), null);
+shared.setItem("runpilot.token", "stale"); tab.setItem("runpilot.token", "newer");
+assert.equal(context.RunPilotAuthStorage.migrate(tab, shared), "newer"); assert.equal(shared.getItem("runpilot.token"), null);
+context.RunPilotAuthStorage.save(tab, shared, "updated"); assert.equal(context.RunPilotAuthStorage.migrate(tab, shared), "updated");
+const newNoopenerTab = storage(); assert.equal(context.RunPilotAuthStorage.migrate(newNoopenerTab, shared), "");
+context.RunPilotAuthStorage.save(tab, shared, ""); assert.equal(tab.getItem("runpilot.token"), null);
+const source = fs.readFileSync("internal/web/static/app.js", "utf8");
+assert.ok(source.includes("RunPilotAuthStorage.migrate(sessionStorage, localStorage)"));
+assert.ok(!source.includes('localStorage.setItem("runpilot.token"'));

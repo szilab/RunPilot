@@ -1,0 +1,15 @@
+apiVersion: runpilot.plugin/v1
+id: remote.rdp
+name: RDP / Guacamole
+description: RDP remote access provider
+version: 1.0.3
+requires:
+  backend: ">=1.0.0 <2.0.0"
+  frontend: ">=1.0.0 <2.0.0"
+  runpilotApi: 2
+platforms: [linux, windows]
+backend:
+  module: backend/plugin.wasm
+frontend:
+  module: web/plugin.js
+  stylesheet: web/plugin.css

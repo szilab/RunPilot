@@ -2,10 +2,17 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
+	"net"
 	"os"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/szilab/RunPilot/internal/backup"
 	"github.com/szilab/RunPilot/internal/config"
@@ -14,10 +21,9 @@ import (
 	"github.com/szilab/RunPilot/internal/jobs"
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/platform"
+	"github.com/szilab/RunPilot/internal/plugins"
 	"github.com/szilab/RunPilot/internal/processmgr"
 	"github.com/szilab/RunPilot/internal/remote"
-	"github.com/szilab/RunPilot/internal/remote/rdp"
-	"github.com/szilab/RunPilot/internal/remote/vnc"
 	"github.com/szilab/RunPilot/internal/remote/xpra"
 	"github.com/szilab/RunPilot/internal/scheduler"
 	"github.com/szilab/RunPilot/internal/software"
@@ -25,17 +31,45 @@ import (
 )
 
 type Controller struct {
-	dataDir   string
-	config    *config.Store
-	history   *history.Store
-	processes *processmgr.Manager
-	jobs      *jobs.Runner
-	scheduler *scheduler.Scheduler
-	software  *software.Manager
-	docker    *dockercompose.Manager
-	storage   *storage.Registry
-	remote    *remote.Service
+	dataDir              string
+	config               *config.Store
+	history              *history.Store
+	processes            *processmgr.Manager
+	jobs                 *jobs.Runner
+	scheduler            *scheduler.Scheduler
+	software             *software.Manager
+	docker               *dockercompose.Manager
+	storage              *storage.Registry
+	remote               *remote.Service
+	plugins              *plugins.Manager
+	pluginMu             sync.Mutex
+	runtimeMu            sync.RWMutex
+	runtimes             map[string]*plugins.Runtime
+	pluginProcesses      *pluginProcessManager
+	pluginSessions       *pluginSessionManager
+	pluginNetworkStreams *pluginNetworkStreamManager
+	browserPublications  *browserPublications
+	eventMu              sync.RWMutex
+	eventSubscribers     map[uint64]chan plugins.Event
+	nextEventSubscriber  uint64
+	// loading holds a channel per plugin whose backend is initializing; events
+	// for it wait for the load to finish instead of being lost.
+	loading     map[string]chan struct{}
+	queueMu     sync.Mutex
+	eventQueues map[string]chan queuedPluginEvent
+	stopEvents  chan struct{}
 }
+
+type queuedPluginEvent struct {
+	event string
+	data  any
+}
+
+const (
+	pluginEventQueueSize   = 256
+	pluginEventEnqueueWait = 10 * time.Second
+	pluginLoadEventWait    = 30 * time.Second
+)
 
 func Open(dataDir string) (*Controller, error) {
 	if dataDir == "" {
@@ -51,16 +85,67 @@ func Open(dataDir string) (*Controller, error) {
 	}
 	jr := jobs.New(h)
 	c := &Controller{
-		dataDir:   dataDir,
-		config:    cfg,
-		history:   h,
-		processes: processmgr.New(h),
-		jobs:      jr,
-		scheduler: scheduler.New(jr),
-		software:  software.NewManager(dataDir),
-		docker:    dockercompose.NewManager(dataDir),
+		dataDir:          dataDir,
+		config:           cfg,
+		history:          h,
+		processes:        processmgr.New(h),
+		jobs:             jr,
+		scheduler:        scheduler.New(jr),
+		eventSubscribers: map[uint64]chan plugins.Event{},
+		loading:          map[string]chan struct{}{},
+		eventQueues:      map[string]chan queuedPluginEvent{},
+		stopEvents:       make(chan struct{}),
+		software:         software.NewManager(dataDir),
+		docker:           dockercompose.NewManager(dataDir),
 	}
-	c.remote = remote.New(dataDir, xpra.New(), rdp.New(func() model.GuacdConfig { return c.Snapshot().Remote.Guacd }), vnc.New())
+	c.pluginProcesses = newPluginProcessManager(func(owner, event string, data any) { c.deliverPluginEvent(owner, event, data) })
+	c.pluginSessions = newPluginSessionManager(c.deliverPluginEvent)
+	c.pluginNetworkStreams = newPluginNetworkStreamManager(func(owner, id string) {
+		c.deliverPluginEvent(owner, "network.stream.closed", map[string]string{"id": id})
+	})
+	c.browserPublications = newBrowserPublications(func(owner, id string) {
+		c.deliverPluginEvent(owner, "http.gateway.closed", map[string]string{"id": id})
+	})
+	c.browserPublications.basePath = c.Snapshot().Server.BasePath
+	c.pluginProcesses.history = h
+	c.pluginProcesses.publish = func(owner, event string, data any) {
+		if raw, err := json.Marshal(data); err == nil {
+			c.publishPluginEvent(owner, event, raw)
+		}
+	}
+	if err := migrateLegacyDockerProjects(dataDir); err != nil {
+		log.Printf("legacy Docker project migration: %v", err)
+	}
+	c.plugins = plugins.New(dataDir, func(id string) (bool, bool) {
+		setting, ok := c.config.Snapshot().Plugins[id]
+		return boolValue(setting.Enabled), ok && setting.Enabled != nil
+	})
+	removedSystemFixture, err := plugins.CleanupObsoleteSystemFixture(c.plugins.Root())
+	if err != nil {
+		return nil, err
+	}
+	if removedSystemFixture {
+		if err := c.config.Update(func(cfg *model.Config) error {
+			if setting, ok := cfg.Plugins["system"]; ok && boolValue(setting.Enabled) {
+				disabled := false
+				setting.Enabled = &disabled
+				cfg.Plugins["system"] = setting
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		log.Printf("removed obsolete automatically installed System fixture")
+	}
+	for _, pluginErr := range c.plugins.Reload() {
+		log.Printf("plugin discovery: %v", pluginErr)
+	}
+	// Xpra remains the temporary legacy Remote runtime; its user interface has been removed.
+	c.remote = remote.New(dataDir, xpra.New())
+	if err := c.loadPluginRuntimes(); err != nil {
+		return nil, err
+	}
+	c.plugins.FreezeActivation()
 	if platform.CurrentCapabilities().DockerCompose {
 		c.storage = storage.NewRegistry(c.docker)
 	} else {
@@ -79,6 +164,21 @@ func (c *Controller) Start() {
 }
 
 func (c *Controller) Close() {
+	// Plugins shut down first so they can stop and record their own work; the
+	// host then terminates anything they left behind and flushes captured logs
+	// before the history store closes.
+	c.runtimeMu.Lock()
+	runtimes := c.runtimes
+	c.runtimes = nil
+	c.runtimeMu.Unlock()
+	for _, runtime := range runtimes {
+		_ = runtime.Close(context.Background())
+	}
+	c.pluginProcesses.close()
+	c.pluginSessions.close()
+	c.pluginNetworkStreams.close()
+	c.browserPublications.stop("")
+	close(c.stopEvents)
 	c.remote.Close()
 	c.scheduler.Stop()
 	snap := c.config.Snapshot()
@@ -88,179 +188,454 @@ func (c *Controller) Close() {
 	_ = c.history.Close()
 }
 
-func (c *Controller) Remote() *remote.Service { return c.remote }
-
-func (c *Controller) GuacdConfig() model.GuacdConfig {
-	value, err := model.NormalizeGuacdConfig(c.config.Snapshot().Remote.Guacd)
-	if err != nil {
-		return c.config.Snapshot().Remote.Guacd
+// SubscribePluginEvents is the shared browser transport's bounded fanout.
+// Subscribers receive no replay; disconnected and slow clients never retain
+// an unbounded plugin event backlog.
+func (c *Controller) SubscribePluginEvents() (<-chan plugins.Event, func()) {
+	c.eventMu.Lock()
+	id := c.nextEventSubscriber
+	c.nextEventSubscriber++
+	ch := make(chan plugins.Event, 64)
+	c.eventSubscribers[id] = ch
+	c.eventMu.Unlock()
+	return ch, func() {
+		c.eventMu.Lock()
+		if current := c.eventSubscribers[id]; current != nil {
+			delete(c.eventSubscribers, id)
+			close(current)
+		}
+		c.eventMu.Unlock()
 	}
-	return value
+}
+func (c *Controller) publishPluginEvent(plugin, event string, data json.RawMessage) bool {
+	item := plugins.Event{Plugin: plugin, Event: event, Data: append(json.RawMessage(nil), data...)}
+	c.eventMu.RLock()
+	defer c.eventMu.RUnlock()
+	strict := strings.HasPrefix(event, "process.session.")
+	if strict && len(c.eventSubscribers) == 0 {
+		return false
+	}
+	delivered := true
+	for _, ch := range c.eventSubscribers {
+		select {
+		case ch <- item:
+		default:
+			if strict {
+				delivered = false
+			}
+		}
+	}
+	return delivered
+}
+func (c *Controller) deliverPluginEvent(plugin, event string, data any) bool {
+	item := queuedPluginEvent{event: event, data: data}
+	queue := c.pluginEventQueue(plugin)
+	if isPluginOutputEvent(event) {
+		select {
+		case queue <- item:
+			return true
+		default: // ordinary process output is lossy; session output treats this as fatal.
+			return false
+		}
+	}
+	timer := time.NewTimer(pluginEventEnqueueWait)
+	defer timer.Stop()
+	select {
+	case queue <- item:
+		return true
+	case <-timer.C:
+		log.Printf("plugin %s event %s dropped: delivery queue full", plugin, event)
+		return false
+	case <-c.stopEvents:
+		return false
+	}
 }
 
-func (c *Controller) UpdateGuacdConfig(value model.GuacdConfig) (model.GuacdConfig, error) {
-	if strings.TrimSpace(value.Host) == "" {
-		return value, fmt.Errorf("guacd host is required")
-	}
-	value, err := model.NormalizeGuacdConfig(value)
-	if err != nil {
-		return value, err
-	}
-	err = c.config.Update(func(cfg *model.Config) error { cfg.Remote.Guacd = value; return nil })
-	return value, err
+func isPluginOutputEvent(event string) bool {
+	return strings.HasPrefix(event, "process.stdout") || strings.HasPrefix(event, "process.stderr") || event == "process.session.output"
 }
 
-func (c *Controller) TestGuacdConfig(ctx context.Context, value model.GuacdConfig) (model.RemoteProviderStatus, error) {
-	if strings.TrimSpace(value.Host) == "" {
-		return model.RemoteProviderStatus{}, fmt.Errorf("guacd host is required")
+// pluginEventQueue returns the plugin's bounded, ordered delivery queue. One
+// worker per plugin keeps events (for example last output before exit) in the
+// order the host produced them without a goroutine per event.
+func (c *Controller) pluginEventQueue(plugin string) chan queuedPluginEvent {
+	c.queueMu.Lock()
+	defer c.queueMu.Unlock()
+	if queue := c.eventQueues[plugin]; queue != nil {
+		return queue
 	}
-	value, err := model.NormalizeGuacdConfig(value)
-	if err != nil {
-		return model.RemoteProviderStatus{}, err
-	}
-	return rdp.ProbeGuacd(ctx, value), nil
+	queue := make(chan queuedPluginEvent, pluginEventQueueSize)
+	c.eventQueues[plugin] = queue
+	go func() {
+		for {
+			select {
+			case item := <-queue:
+				c.runPluginEvent(plugin, item)
+			case <-c.stopEvents:
+				return
+			}
+		}
+	}()
+	return queue
 }
 
+func (c *Controller) runPluginEvent(plugin string, item queuedPluginEvent) {
+	runtime := c.awaitPluginRuntime(plugin)
+	if runtime == nil {
+		return
+	}
+	timeout := plugins.DefaultCallTimeout
+	if isPluginOutputEvent(item.event) {
+		timeout = 250 * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := runtime.Event(ctx, item.event, item.data); err != nil {
+		log.Printf("plugin %s event %s: %v", plugin, item.event, err)
+		if item.event == "process.session.output" {
+			if data, ok := item.data.(map[string]any); ok {
+				if id, ok := data["id"].(string); ok {
+					c.pluginSessions.deliveryFailed(plugin, id)
+				}
+			}
+		}
+	}
+}
+
+// awaitPluginRuntime returns the loaded runtime, waiting for a backend that is
+// still initializing (it may already have started processes or schedules).
+func (c *Controller) awaitPluginRuntime(plugin string) *plugins.Runtime {
+	c.runtimeMu.RLock()
+	runtime, ready := c.runtimes[plugin], c.loading[plugin]
+	c.runtimeMu.RUnlock()
+	if runtime != nil || ready == nil {
+		return runtime
+	}
+	timer := time.NewTimer(pluginLoadEventWait)
+	defer timer.Stop()
+	select {
+	case <-ready:
+	case <-timer.C:
+	case <-c.stopEvents:
+		return nil
+	}
+	c.runtimeMu.RLock()
+	defer c.runtimeMu.RUnlock()
+	return c.runtimes[plugin]
+}
+
+func (c *Controller) Remote() *remote.Service   { return c.remote }
+func (c *Controller) Plugins() *plugins.Manager { return c.plugins }
+
+// RemoteTargets retains only legacy Xpra configuration for the internal
+// runtime. RDP and VNC definitions are owned by their plugins.
 func (c *Controller) RemoteTargets() []model.RemoteTarget {
 	targets := c.config.Snapshot().RemoteTargets
 	for i := range targets {
-		switch targets[i].Provider {
-		case "xpra":
-			options, err := model.NormalizeXpraRemoteOptions(targets[i].Xpra)
-			if err != nil {
-				// A manually edited invalid legacy YAML value must not make all Remote
-				// pages unusable. API writes still reject invalid values below.
-				options = model.DefaultXpraRemoteOptions()
-			}
-			targets[i].Xpra = &options
-		case "rdp":
-			options, err := model.NormalizeRDPRemoteOptions(targets[i].RDP)
-			if err == nil {
-				targets[i].RDP = &options
-			}
-		case "vnc":
-			options, err := model.NormalizeVNCRemoteOptions(targets[i].VNC)
-			if err == nil {
-				targets[i].VNC = &options
-			}
+		if targets[i].Provider != "xpra" {
+			continue
 		}
+		options, err := model.NormalizeXpraRemoteOptions(targets[i].Xpra)
+		if err != nil {
+			options = model.DefaultXpraRemoteOptions()
+		}
+		targets[i].Xpra = &options
 	}
 	return targets
 }
 
-func (c *Controller) RemoteTarget(id string) (model.RemoteTarget, error) {
-	for _, target := range c.RemoteTargets() {
-		if target.ID == id {
-			return target, nil
+func boolValue(value *bool) bool { return value != nil && *value }
+
+// SetPluginEnabled persists the desired state. Plugin activation is deliberately
+// restart-only so a running process never changes its loaded module set.
+func (c *Controller) SetPluginEnabled(id string, enabled bool) error {
+	c.pluginMu.Lock()
+	defer c.pluginMu.Unlock()
+	manifest, ok := c.plugins.Manifest(id)
+	if !ok {
+		return fmt.Errorf("unknown plugin %q", id)
+	}
+	if enabled {
+		if err := manifest.CompatibilityError(runtime.GOOS); err != nil {
+			return err
 		}
 	}
-	return model.RemoteTarget{}, fmt.Errorf("unknown remote target %q", id)
+	value := enabled
+	if err := c.config.Update(func(cfg *model.Config) error {
+		if cfg.Plugins == nil {
+			cfg.Plugins = map[string]model.PluginSettings{}
+		}
+		cfg.Plugins[id] = model.PluginSettings{Enabled: &value}
+		return nil
+	}); err != nil {
+		return err
+	}
+	c.plugins.SetRestartRequired(true)
+	return nil
 }
 
-func (c *Controller) UpsertRemoteTarget(target model.RemoteTarget) (model.RemoteTarget, error) {
-	if strings.TrimSpace(target.Name) == "" {
-		return target, fmt.Errorf("remote target name is required")
-	}
-	if target.Provider == "" {
-		target.Provider = "xpra"
-	}
-	if target.Type != model.RemoteTargetApplication && target.Type != model.RemoteTargetDesktop {
-		return target, fmt.Errorf("remote target type must be application or desktop")
-	}
-	switch target.Provider {
-	case "xpra":
-		if strings.TrimSpace(target.Command.Path) == "" {
-			return target, fmt.Errorf("remote target command path is required")
-		}
-		if target.Command.Interpreter != "" && target.Command.Interpreter != "direct" && target.Command.Interpreter != "auto" {
-			return target, fmt.Errorf("remote targets require a direct executable command")
-		}
-		target.Command.Interpreter = "direct"
-		if target.DBusMode == "" {
-			if target.ForwardDBus {
-				target.DBusMode = model.RemoteDBusHost
-			} else {
-				target.DBusMode = model.RemoteDBusIsolated
-			}
-		}
-		if target.DBusMode != model.RemoteDBusIsolated && target.DBusMode != model.RemoteDBusHost {
-			return target, fmt.Errorf("remote target D-Bus mode must be isolated or host-session")
-		}
-		target.ForwardDBus = false
-		options, err := model.NormalizeXpraRemoteOptions(target.Xpra)
-		if err != nil {
-			return target, err
-		}
-		target.Xpra = &options
-		target.RDP = nil
-		target.VNC = nil
-		if err := model.ValidateCommand(target.Command); err != nil {
-			return target, err
-		}
-	case "rdp":
-		if target.Type != model.RemoteTargetDesktop {
-			return target, fmt.Errorf("RDP supports desktop sessions only")
-		}
-		options, err := model.NormalizeRDPRemoteOptions(target.RDP)
-		if err != nil {
-			return target, err
-		}
-		target.RDP = &options
-		target.Xpra = nil
-		target.VNC = nil
-		target.Command = model.CommandSpec{}
-		target.DBusMode = ""
-		target.ForwardDBus = false
-	case "vnc":
-		if target.Type != model.RemoteTargetDesktop {
-			return target, fmt.Errorf("VNC supports desktop sessions only")
-		}
-		options, err := model.NormalizeVNCRemoteOptions(target.VNC)
-		if err != nil {
-			return target, err
-		}
-		target.VNC = &options
-		target.Xpra = nil
-		target.RDP = nil
-		target.Command = model.CommandSpec{}
-		target.DBusMode = ""
-		target.ForwardDBus = false
-	default:
-		return target, fmt.Errorf("unknown remote provider %q", target.Provider)
-	}
-	if target.ID == "" {
-		target.ID = config.NewID("remote-target")
-	}
-	err := c.config.Update(func(cfg *model.Config) error {
-		for i := range cfg.RemoteTargets {
-			if cfg.RemoteTargets[i].ID == target.ID {
-				cfg.RemoteTargets[i] = target
-				return nil
-			}
-		}
-		cfg.RemoteTargets = append(cfg.RemoteTargets, target)
-		return nil
-	})
-	return target, err
+// RescanPlugins refreshes installed packages without changing active runtimes.
+func (c *Controller) RescanPlugins() []error {
+	c.pluginMu.Lock()
+	defer c.pluginMu.Unlock()
+	errs := c.plugins.Reload()
+	c.plugins.SetRestartRequired(true)
+	return errs
 }
 
-func (c *Controller) DeleteRemoteTarget(id string) error {
-	return c.config.Update(func(cfg *model.Config) error {
-		out := cfg.RemoteTargets[:0]
-		found := false
-		for _, target := range cfg.RemoteTargets {
-			if target.ID == id {
-				found = true
-				continue
-			}
-			out = append(out, target)
+// PluginCall is the transport-independent route into an enabled WASM plugin.
+func (c *Controller) PluginCall(ctx context.Context, id, method string, params json.RawMessage) (json.RawMessage, *plugins.ProtocolError) {
+	c.runtimeMu.RLock()
+	runtime := c.runtimes[id]
+	c.runtimeMu.RUnlock()
+	if runtime == nil {
+		return nil, &plugins.ProtocolError{Code: "unknown_plugin", Message: "plugin is not loaded"}
+	}
+	var result json.RawMessage
+	if err := runtime.Call(ctx, method, params, &result); err != nil {
+		return nil, &plugins.ProtocolError{Code: "plugin_failure", Message: err.Error()}
+	}
+	return result, nil
+}
+
+func (c *Controller) loadPluginRuntimes() error {
+	loaded := map[string]*plugins.Runtime{}
+	attempted := map[string]chan struct{}{}
+	for _, status := range c.plugins.Statuses() {
+		if !status.Enabled || status.State == plugins.StateIncompatible || status.Manifest.Backend == nil {
+			continue
 		}
-		if !found {
-			return fmt.Errorf("unknown remote target %q", id)
+		dir, ok := c.plugins.PackageDir(status.Manifest.ID)
+		if !ok {
+			continue
 		}
-		cfg.RemoteTargets = out
-		return nil
+		ready := make(chan struct{})
+		attempted[status.Manifest.ID] = ready
+		c.runtimeMu.Lock()
+		c.loading[status.Manifest.ID] = ready
+		c.runtimeMu.Unlock()
+		runtime, err := plugins.LoadRuntime(context.Background(), dir, status.Manifest, controllerPluginHost{controller: c})
+		if err != nil {
+			c.plugins.SetFailure(status.Manifest.ID, err)
+			log.Printf("load plugin %q: %v", status.Manifest.ID, err)
+			continue
+		}
+		loaded[status.Manifest.ID] = runtime
+	}
+	c.runtimeMu.Lock()
+	old := c.runtimes
+	c.runtimes = loaded
+	for id, ready := range attempted {
+		delete(c.loading, id)
+		close(ready)
+	}
+	c.runtimeMu.Unlock()
+	for _, runtime := range old {
+		_ = runtime.Close(context.Background())
+	}
+	return nil
+}
+
+type controllerPluginHost struct{ controller *Controller }
+
+func (h controllerPluginHost) Log(_ context.Context, message string) error {
+	log.Printf("plugin: %s", message)
+	return nil
+}
+func (h controllerPluginHost) ConfigGet(context.Context, string) (json.RawMessage, error) {
+	return nil, fmt.Errorf("plugin configuration is not implemented")
+}
+func (h controllerPluginHost) ConfigSet(context.Context, string, json.RawMessage) error {
+	return fmt.Errorf("plugin configuration is not implemented")
+}
+func (h controllerPluginHost) SystemStatus(context.Context) (json.RawMessage, error) {
+	return json.Marshal(platform.HostStatus())
+}
+func (h controllerPluginHost) SystemIdentity(context.Context) (json.RawMessage, error) {
+	current, err := user.Current()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]string{"username": current.Username, "uid": current.Uid})
+}
+func (h controllerPluginHost) StorageGet(_ context.Context, pluginID, key string) (json.RawMessage, error) {
+	return h.controller.pluginStorageGet(pluginID, key)
+}
+func (h controllerPluginHost) StorageSet(_ context.Context, pluginID, key string, value json.RawMessage) error {
+	return h.controller.pluginStorageSet(pluginID, key, value)
+}
+func (h controllerPluginHost) PublishEvent(_ context.Context, pluginID, event string, data json.RawMessage) error {
+	if !h.controller.publishPluginEvent(pluginID, event, data) && strings.HasPrefix(event, "process.session.") {
+		return &plugins.HostFailure{Code: "io_error", Message: "interactive process output delivery queue is full"}
+	}
+	return nil
+}
+func (h controllerPluginHost) PluginStopped(pluginID string) {
+	h.controller.scheduler.RemovePluginOwner(pluginID)
+	h.controller.pluginProcesses.stopOwner(pluginID)
+	h.controller.pluginSessions.stopOwner(pluginID)
+	h.controller.pluginNetworkStreams.stopOwner(pluginID)
+	h.controller.browserPublications.stop(pluginID)
+}
+
+func (h controllerPluginHost) NetworkStreamOpen(ctx context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginNetworkStreams.open(ctx, owner, raw)
+}
+func (h controllerPluginHost) NetworkStreamRead(ctx context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginNetworkStreams.read(ctx, owner, raw)
+}
+func (h controllerPluginHost) NetworkStreamWrite(ctx context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginNetworkStreams.write(ctx, owner, raw)
+}
+func (h controllerPluginHost) NetworkStreamClose(ctx context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginNetworkStreams.closeStream(owner, raw)
+}
+
+// AttachPluginNetworkStream claims an owned stream for one browser WebSocket.
+func (c *Controller) AttachPluginNetworkStream(owner, id string) (net.Conn, func(), error) {
+	return c.pluginNetworkStreams.attach(owner, id)
+}
+
+// OpenPluginNetworkStream is the controller-side equivalent of the generic
+// network.stream.open capability, used by trusted host integrations.
+func (c *Controller) OpenPluginNetworkStream(ctx context.Context, owner string, params json.RawMessage) (json.RawMessage, error) {
+	return c.pluginNetworkStreams.open(ctx, owner, params)
+}
+func (h controllerPluginHost) ScheduleRegister(_ context.Context, pluginID string, raw json.RawMessage) (json.RawMessage, error) {
+	var value struct {
+		ID       string             `json:"id"`
+		Schedule model.ScheduleSpec `json:"schedule"`
+		Callback string             `json:"callback"`
+		Data     json.RawMessage    `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &value); err != nil || strings.TrimSpace(value.ID) == "" || strings.TrimSpace(value.Callback) == "" || (len(value.Data) > 0 && !json.Valid(value.Data)) {
+		return nil, fmt.Errorf("invalid schedule registration")
+	}
+	if len(value.Data) == 0 {
+		value.Data = json.RawMessage("{}")
+	}
+	err := h.controller.scheduler.RegisterPlugin(scheduler.PluginSchedule{Owner: pluginID, ID: value.ID, Callback: value.Callback, Schedule: value.Schedule, Data: value.Data}, func(item scheduler.PluginSchedule) {
+		h.controller.deliverPluginEvent(pluginID, "scheduler.fired", map[string]any{"id": item.ID, "callback": item.Callback, "data": json.RawMessage(item.Data)})
 	})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]string{"id": value.ID})
+}
+func (h controllerPluginHost) ScheduleRemove(_ context.Context, pluginID, id string) error {
+	if !h.controller.scheduler.RemovePlugin(pluginID, id) {
+		return fmt.Errorf("unknown schedule")
+	}
+	return nil
+}
+func (h controllerPluginHost) ScheduleList(_ context.Context, pluginID string) (json.RawMessage, error) {
+	return json.Marshal(h.controller.scheduler.ListPlugin(pluginID))
+}
+func (h controllerPluginHost) ProcessStart(_ context.Context, pluginID string, raw json.RawMessage) (json.RawMessage, error) {
+	var input pluginProcessStart
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return nil, err
+	}
+	result, err := h.controller.pluginProcesses.start(pluginID, input)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
+}
+func (h controllerPluginHost) ProcessStatus(_ context.Context, pluginID, id string) (json.RawMessage, error) {
+	result, err := h.controller.pluginProcesses.status(pluginID, id)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
+}
+func (h controllerPluginHost) ProcessTerminate(_ context.Context, pluginID, id string) (json.RawMessage, error) {
+	result, err := h.controller.pluginProcesses.terminate(pluginID, id)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
+}
+func (h controllerPluginHost) ProcessSessionCreate(_ context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginSessions.create(owner, raw)
+}
+func (h controllerPluginHost) ProcessSessionWrite(_ context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginSessions.write(owner, raw)
+}
+func (h controllerPluginHost) ProcessSessionResize(_ context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginSessions.resize(owner, raw)
+}
+func (h controllerPluginHost) ProcessSessionStatus(_ context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginSessions.status(owner, raw)
+}
+func (h controllerPluginHost) ProcessSessionTerminate(_ context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
+	return h.controller.pluginSessions.terminate(owner, raw)
+}
+
+func (c *Controller) pluginStoragePath(pluginID string) (string, error) {
+	if !safePluginStorageID(pluginID) {
+		return "", fmt.Errorf("invalid plugin ID")
+	}
+	return filepath.Join(c.dataDir, "plugins", pluginID, "data", "storage.json"), nil
+}
+func safePluginStorageID(id string) bool {
+	if id == "" || id != filepath.Base(id) {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+func (c *Controller) pluginStorageGet(pluginID, key string) (json.RawMessage, error) {
+	path, err := c.pluginStoragePath(pluginID)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return json.RawMessage("null"), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	values := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &values); err != nil {
+		return nil, fmt.Errorf("read plugin storage: %w", err)
+	}
+	if value, ok := values[key]; ok {
+		return append(json.RawMessage(nil), value...), nil
+	}
+	return json.RawMessage("null"), nil
+}
+func (c *Controller) pluginStorageSet(pluginID, key string, value json.RawMessage) error {
+	path, err := c.pluginStoragePath(pluginID)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	values := map[string]json.RawMessage{}
+	if existing, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(existing, &values); err != nil {
+			return fmt.Errorf("read plugin storage: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	values[key] = append(json.RawMessage(nil), value...)
+	data, err := json.Marshal(values)
+	if err != nil {
+		return err
+	}
+	temporary := path + ".tmp"
+	if err := os.WriteFile(temporary, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(temporary, path)
 }
 
 func (c *Controller) DataDir() string        { return c.dataDir }

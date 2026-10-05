@@ -24,6 +24,23 @@ func TestMaximumPercent(t *testing.T) {
 	}
 }
 
+func TestLinuxHostCPUDetailsAndGPUParser(t *testing.T) {
+	status := HostStatus()
+	if status.CPUCount < 1 || !status.CPUAvailable {
+		t.Fatalf("CPU metadata unavailable: %+v", status)
+	}
+	if len(status.LoadAverage) != 3 {
+		t.Fatalf("Linux load average = %v", status.LoadAverage)
+	}
+	gpu, ok := parseNvidiaGPU([]byte("\"NVIDIA, Model\", 18, 2048, 8192\nOther GPU, 42, 1024, 4096\n"))
+	if !ok || gpu.Name != "Other GPU" || gpu.Percent != 42 || gpu.MemoryUsed != 1024*1024*1024 || gpu.MemoryTotal != 4096*1024*1024 {
+		t.Fatalf("GPU data = %+v, available = %v", gpu, ok)
+	}
+	if _, ok := parseNvidiaGPU([]byte("broken, n/a, n/a, n/a\n")); ok {
+		t.Fatal("invalid GPU telemetry reported as available")
+	}
+}
+
 func TestLinuxDisksContainOnlyBlockDevices(t *testing.T) {
 	disks, err := linuxDisks()
 	if err != nil {

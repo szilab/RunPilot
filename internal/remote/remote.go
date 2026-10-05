@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 	"sync"
 	"time"
@@ -30,8 +29,6 @@ type ClientKind string
 
 const (
 	ClientXpraHTML5 ClientKind = "xpra-html5"
-	ClientGuacamole ClientKind = "guacamole"
-	ClientNoVNC     ClientKind = "novnc"
 )
 
 // ClientDescriptor tells the web layer how to render a provider client. It
@@ -42,7 +39,7 @@ type ClientDescriptor struct {
 }
 
 // Runtime belongs solely to a Provider. Endpoint is local-only and used by
-// Xpra's HTTP bridge; Dial is used by transport-oriented clients such as RDP.
+// Xpra's HTTP bridge.
 type Runtime struct {
 	Client   ClientDescriptor
 	Endpoint string
@@ -53,7 +50,6 @@ type Runtime struct {
 	Done         <-chan error
 	Probe        func(context.Context) (SessionProbe, error)
 	Log          func() string
-	Dial         func(context.Context) (net.Conn, error)
 	Message      string
 }
 
@@ -81,7 +77,6 @@ type Service struct {
 type session struct {
 	view        model.RemoteSession
 	runtime     Runtime
-	connections map[net.Conn]struct{}
 	diagnostics []string
 }
 
@@ -97,10 +92,78 @@ func New(dataDir string, providers ...Provider) *Service {
 	return &Service{dataDir: dataDir, providers: p, providerOrder: order, sessions: map[string]*session{}}
 }
 
+// RegisterProvider makes a provider available without restarting RunPilot.
+// Replacing an existing ID is intentionally rejected to avoid moving active
+// sessions to a different runtime underneath the user.
+func (s *Service) RegisterProvider(provider Provider) error {
+	if provider == nil || strings.TrimSpace(provider.ID()) == "" {
+		return fmt.Errorf("invalid remote provider")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.providers[provider.ID()]; exists {
+		return fmt.Errorf("remote provider %q is already registered", provider.ID())
+	}
+	s.providers[provider.ID()] = provider
+	s.providerOrder = append(s.providerOrder, provider.ID())
+	return nil
+}
+
+// UnregisterProvider leaves configured targets untouched. Active sessions are
+// deliberately an explicit conflict rather than an implicit forced stop.
+func (s *Service) UnregisterProvider(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, item := range s.sessions {
+		if item.view.Provider == id && (item.view.State == model.RemoteSessionStarting || item.view.State == model.RemoteSessionRunning || item.view.State == model.RemoteSessionStopping) {
+			return fmt.Errorf("remote provider %q has active sessions; stop them before disabling the plugin", id)
+		}
+	}
+	if _, ok := s.providers[id]; !ok {
+		return nil
+	}
+	delete(s.providers, id)
+	order := s.providerOrder[:0]
+	for _, current := range s.providerOrder {
+		if current != id {
+			order = append(order, current)
+		}
+	}
+	s.providerOrder = order
+	return nil
+}
+
+func (s *Service) HasActiveSessions(provider string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, item := range s.sessions {
+		if item.view.Provider == provider && (item.view.State == model.RemoteSessionStarting || item.view.State == model.RemoteSessionRunning || item.view.State == model.RemoteSessionStopping) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasProvider reports whether a provider is presently registered. Configured
+// targets are intentionally independent of this live capability set.
+func (s *Service) HasProvider(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.providers[id] != nil
+}
+
 func (s *Service) ProviderStatuses(ctx context.Context) []model.RemoteProviderStatus {
-	statuses := make([]model.RemoteProviderStatus, 0, len(s.providerOrder))
+	s.mu.RLock()
+	providers := make([]Provider, 0, len(s.providerOrder))
 	for _, id := range s.providerOrder {
-		statuses = append(statuses, s.providers[id].Status(ctx))
+		if provider := s.providers[id]; provider != nil {
+			providers = append(providers, provider)
+		}
+	}
+	s.mu.RUnlock()
+	statuses := make([]model.RemoteProviderStatus, 0, len(providers))
+	for _, provider := range providers {
+		statuses = append(statuses, provider.Status(ctx))
 	}
 	return statuses
 }
@@ -185,51 +248,10 @@ func (s *Service) Client(id string) (ClientDescriptor, error) {
 	return client, nil
 }
 
-// Dial opens the provider-controlled transport bound to a session snapshot.
-// Callers never supply a destination and cannot repurpose RunPilot as a TCP proxy.
-func (s *Service) Dial(ctx context.Context, id string) (net.Conn, error) {
-	s.mu.RLock()
-	item := s.sessions[id]
-	if item == nil {
-		s.mu.RUnlock()
-		return nil, ErrUnknownSession
-	}
-	if item.view.State != model.RemoteSessionRunning || item.runtime.Dial == nil {
-		s.mu.RUnlock()
-		return nil, fmt.Errorf("remote session has no transport")
-	}
-	dial := item.runtime.Dial
-	s.mu.RUnlock()
-	conn, err := dial(ctx)
-	if err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	item = s.sessions[id]
-	if item == nil || item.view.State != model.RemoteSessionRunning {
-		s.mu.Unlock()
-		_ = conn.Close()
-		return nil, fmt.Errorf("remote session is not running")
-	}
-	item.connections[conn] = struct{}{}
-	s.mu.Unlock()
-	return conn, nil
-}
-
-func (s *Service) ReleaseDial(id string, conn net.Conn) {
-	if conn == nil {
-		return
-	}
-	s.mu.Lock()
-	if item := s.sessions[id]; item != nil {
-		delete(item.connections, conn)
-	}
-	s.mu.Unlock()
-	_ = conn.Close()
-}
-
 func (s *Service) Start(ctx context.Context, target model.RemoteTarget) (model.RemoteSession, error) {
+	s.mu.RLock()
 	provider := s.providers[target.Provider]
+	s.mu.RUnlock()
 	if provider == nil {
 		return model.RemoteSession{}, fmt.Errorf("%w: %s", ErrUnknownProvider, target.Provider)
 	}
@@ -244,23 +266,9 @@ func (s *Service) Start(ctx context.Context, target model.RemoteTarget) (model.R
 		}
 		target.Xpra = &options
 	}
-	if target.Provider == "rdp" {
-		options, err := model.NormalizeRDPRemoteOptions(target.RDP)
-		if err != nil {
-			return model.RemoteSession{}, err
-		}
-		target.RDP = &options
-	}
-	if target.Provider == "vnc" {
-		options, err := model.NormalizeVNCRemoteOptions(target.VNC)
-		if err != nil {
-			return model.RemoteSession{}, err
-		}
-		target.VNC = &options
-	}
 	id := config.NewID("remote")
 	now := time.Now().UTC()
-	item := &session{view: model.RemoteSession{ID: id, Provider: target.Provider, TargetID: target.ID, TargetName: target.Name, Type: target.Type, State: model.RemoteSessionStarting, CreatedAt: now, Xpra: target.Xpra, RDP: target.RDP, VNC: target.VNC}, connections: map[net.Conn]struct{}{}}
+	item := &session{view: model.RemoteSession{ID: id, Provider: target.Provider, TargetID: target.ID, TargetName: target.Name, Type: target.Type, State: model.RemoteSessionStarting, CreatedAt: now, Xpra: target.Xpra}}
 	s.mu.Lock()
 	s.sessions[id] = item
 	s.mu.Unlock()
@@ -349,14 +357,7 @@ func (s *Service) Stop(ctx context.Context, id string) error {
 	}
 	item.view.State = model.RemoteSessionStopping
 	stop := item.runtime.Stop
-	connections := make([]net.Conn, 0, len(item.connections))
-	for conn := range item.connections {
-		connections = append(connections, conn)
-	}
 	s.mu.Unlock()
-	for _, conn := range connections {
-		_ = conn.Close()
-	}
 	if stop == nil {
 		s.finishStopped(id)
 		return nil

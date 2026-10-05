@@ -1,0 +1,15 @@
+apiVersion: runpilot.plugin/v1
+id: terminal
+name: Terminal
+description: Interactive terminal using host process sessions
+version: 0.1.6
+requires:
+  frontend: ">=1.0.0 <2.0.0"
+  backend: ">=1.0.0 <2.0.0"
+  runpilotApi: 2
+platforms: [linux, windows]
+backend:
+  module: backend/plugin.wasm
+frontend:
+  module: web/plugin.js
+  stylesheet: web/plugin.css

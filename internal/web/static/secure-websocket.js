@@ -12,7 +12,7 @@
 
   class SecureWebSocket {
     constructor(url, mode="disabled", protocols) {
-      this.url=url; this.mode=mode; this.protocols=protocols; this.socket=null; this._binaryType="arraybuffer"; this.sendSequence=0n; this.receiveSequence=0n; this.sendChain=Promise.resolve(); this.receiveChain=Promise.resolve(); this._failed=false; this._ready=false; this._stateOverride=null;
+      this.url=url; this.mode=mode; this.protocols=protocols; this.socket=null; this._binaryType="arraybuffer"; this.sendSequence=0n; this.receiveSequence=0n; this.pendingBytes=0; this.sendChain=Promise.resolve(); this.receiveChain=Promise.resolve(); this._failed=false; this._ready=false; this._stateOverride=null;
       this.onopen=null; this.onmessage=null; this.onerror=null; this.onclose=null;
       this._start();
     }
@@ -65,6 +65,8 @@
       if(this.readyState!==WebSocket.OPEN) throw new Error("secure WebSocket is not open");
       if (this.mode === "disabled") { this.socket.send(data); return; }
       const bytes=typeof data === "string" ? textEncoder.encode(data) : new Uint8Array(data), kind=typeof data === "string" ? 1 : 2;
+      if(bytes.length>1048576 || this.pendingBytes+bytes.length>2097152) {this._fail(new Error("secure WebSocket send queue exceeded")); throw new Error("secure WebSocket send queue exceeded");}
+      this.pendingBytes+=bytes.length;
       this.sendChain=this.sendChain.then(async()=>{
         if(this.readyState!==WebSocket.OPEN) throw new Error("secure WebSocket is not open");
         const sequence=this.sendSequence, header=concat(TAG,new Uint8Array([VERSION,kind]),u64(sequence));
@@ -72,7 +74,9 @@
         if(this.readyState!==WebSocket.OPEN) throw new Error("secure WebSocket is not open");
         this.socket.send(concat(header,new Uint8Array(cipher)));
         this.sendSequence++;
-      }).catch(error=>this._reportError(error));
+      }).catch(error=>{this._fail(error);throw error;}).finally(()=>{this.pendingBytes-=bytes.length;});
+      this.sendChain.catch(()=>{});
+      return this.sendChain;
     }
     close(code, reason) { this.socket?.close(code,reason); }
     _receive(event) {
@@ -88,5 +92,6 @@
     _reportError(error) { this.onerror?.(error); }
     _fail(error) { if(this._failed)return; this._failed=true; this._stateOverride=WebSocket.CLOSED; this._reportError(error); this.socket?.close(1008,"secure WebSocket negotiation failed"); }
   }
-  window.RunPilotSecureWebSocket=SecureWebSocket;
+  globalThis.RunPilotSecureWebSocket=SecureWebSocket;
+  if(typeof window!=="undefined") window.RunPilotSecureWebSocket=SecureWebSocket;
 })();

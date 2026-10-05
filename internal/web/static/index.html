@@ -6,9 +6,6 @@
   <title>RunPilot</title>
   <link rel="icon" type="image/png" href="runpilot-logo.png">
   <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="vendor/xterm/xterm.css">
-	<script src="vendor/guacamole/guacamole-common-js-1.6.0.min.js"></script>
-	<script type="module" src="novnc.js"></script>
 </head>
 <body>
   <div class="shell">
@@ -21,14 +18,9 @@
       </div>
       <nav>
         <button class="nav active" type="button" data-page="overview" title="Overview"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><rect x="14" y="14" width="6" height="6"/></svg><span class="nav-label">Overview</span></button>
-        <button id="dockerNav" class="nav hidden" type="button" data-page="docker" title="Docker"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9h7v7H4zM13 9h7v7h-7zM8.5 3v4M16.5 3v4M12 17h4v4h-4z"/></svg><span class="nav-label">Docker</span></button>
-        <button class="nav" type="button" data-page="storage" title="Storage"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3zM3 7V5h7l2 2"/></svg><span class="nav-label">Storage</span></button>
-        <button class="nav" type="button" data-page="tasks" title="Tasks"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="m8.5 12 2.3 2.3 4.7-5"/></svg><span class="nav-label">Tasks</span></button>
-        <button class="nav" type="button" data-page="software" title="Software"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 5h14v14H5zM8 9h8M8 13h5"/></svg><span class="nav-label">Software</span></button>
-        <button class="nav" type="button" data-page="remote" title="Remote"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="1"/><path d="M8 21h8M12 17v4"/></svg><span class="nav-label">Remote</span></button>
-        <button id="terminalNav" class="nav hidden" type="button" data-page="terminal" title="Terminal"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg><span class="nav-label">Terminal</span></button>
       </nav>
       <div class="sidebar-bottom">
+        <button class="nav sidebar-settings-nav" type="button" data-page="settings" title="Settings"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.4 1A7 7 0 0 0 14.5 6L14.2 3h-4.4L9.5 6a7 7 0 0 0-2 .9l-2.4-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.4-1a7 7 0 0 0 2 .9l.3 3h4.4l.3-3a7 7 0 0 0 2-.9l2.4 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg><span class="nav-label">Settings</span></button>
         <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-controls="sidebar" aria-expanded="true" aria-label="Collapse sidebar" title="Collapse sidebar">
           <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16m6-11-3 3 3 3"/></svg><span>Collapse sidebar</span>
         </button>
@@ -46,32 +38,22 @@
         <h1 id="pageTitle">Overview</h1>
         <div class="header-actions">
           <button id="themeToggle" class="button secondary theme-toggle" type="button" aria-pressed="false" title="Switch to dark theme">☾ <span>Dark theme</span></button>
-          <button id="dockerNetworkAction" class="button secondary hidden" type="button">Create network</button>
-          <button id="dockerVolumeAction" class="button secondary hidden" type="button">Create volume</button>
-          <button id="rdpSettingsAction" class="button secondary hidden" type="button">RDP settings</button>
+          <div id="pluginHeaderActions" class="plugin-header-actions hidden"></div>
           <button id="primaryAction" class="button primary hidden">Add task</button>
         </div>
       </header>
 
       <section id="overviewPage" class="page active">
-        <div id="overviewMetrics" class="overview-metrics"></div>
-        <section class="overview-section">
-          <div class="section-head"><h2>Disk usage</h2></div>
-          <div id="diskDetails" class="row-list"></div>
-        </section>
-        <section class="overview-section">
-          <div class="section-head"><h2>Current issues</h2><span id="issueCount" class="meta"></span></div>
-          <div id="issueDetails" class="row-list"></div>
-        </section>
+        <div id="hostDashboard" class="host-dashboard"></div>
       </section>
 
-      <section id="tasksPage" class="page">
+      <section id="legacyTasksPage" class="page">
         <div class="section-head"><div class="task-filters" role="group" aria-label="Task type"><button class="button secondary small active" data-task-filter="all">All</button><button class="button secondary small" data-task-filter="continuous">Continuous</button><button class="button secondary small" data-task-filter="scheduled">Scheduled</button><button class="button secondary small" data-task-filter="backup">Backup</button></div></div>
         <div id="taskGrid" class="row-list"></div>
         <div id="taskEmpty" class="empty hidden"><h2>No tasks yet</h2><p>Add a continuous command, scheduled command, or backup.</p></div>
       </section>
 
-      <section id="storagePage" class="page">
+      <section id="legacyStoragePage" class="page">
         <div id="storageBrowser">
           <div id="storageStateNotice" class="notice hidden"></div>
           <div class="section-head storage-toolbar"><div><label for="storageProvider" class="storage-provider-label">Location</label><select id="storageProvider" aria-label="Storage location"></select></div><div class="row-actions"><label class="check compact-check"><input id="storageShowHidden" type="checkbox"> Hidden files</label><label class="button secondary small">Upload<input id="storageUpload" type="file" multiple hidden></label><button id="storageNewFile" class="button secondary small">New file</button><button id="storageCreate" class="button secondary small">New folder</button></div></div>
@@ -80,7 +62,7 @@
         <div id="storageEmpty" class="empty hidden"><h2>Storage unavailable</h2><p>RunPilot could not initialize the local filesystem location.</p></div>
       </section>
 
-      <section id="softwarePage" class="page">
+      <section id="legacySoftwarePage" class="page">
         <div class="software-controller"><label for="softwareProviderSelect">Provider</label><select id="softwareProviderSelect" aria-label="Software provider"></select></div>
         <div id="softwareProviderCard" class="row-list software-card"></div>
         <div id="softwareTabs" class="software-tabs hidden">
@@ -95,30 +77,8 @@
         <div id="softwarePackages" class="row-list"></div>
       </section>
 
-      <section id="terminalPage" class="page">
-        <div class="terminal-toolbar">
-          <select id="terminalShell" aria-label="Terminal shell"></select>
-          <button id="newTerminal" class="button primary" type="button">+ New terminal</button>
-        </div>
-        <div id="terminalUnavailable" class="empty hidden"><h2>Terminal unavailable</h2><p id="terminalUnavailableMessage">Terminal is not supported on this host.</p></div>
-        <div id="terminalWorkspace" class="terminal-workspace hidden"><div id="terminalTabs" class="terminal-tabs"></div><div id="terminalPanes" class="terminal-panes"></div></div>
-      </section>
-
-      <section id="remotePage" class="page">
-        <div id="remoteOverview" class="remote-overview">
-          <section class="docker-section"><div class="section-head"><h2>Providers</h2></div><div id="remoteProviders" class="docker-grid"></div></section>
-          <section class="docker-section"><div class="section-head"><h2>Configured targets</h2></div><div id="remoteTargets" class="docker-grid"></div><div id="remoteTargetsEmpty" class="empty hidden"><h2>No remote targets yet</h2><p>Add an application or desktop target to launch through an available provider.</p></div></section>
-        </div>
-        <div id="remoteSessionView" class="remote-session-view hidden"><div class="remote-session-toolbar"><div><strong id="remoteSessionName">Remote session</strong><span id="remoteSessionMeta" class="meta"></span></div><div class="row-actions"><button id="remoteFullscreen" class="button secondary small">Fullscreen</button><button id="remoteStop" class="button danger small">Stop</button><button id="remoteBack" class="button secondary small">Back</button></div></div><div id="remoteSessionError" class="form-error hidden"></div><div id="remoteSessionNotice" class="notice hidden"></div><div id="remoteFrameShell" class="remote-frame-shell"><div id="remoteLoading" class="remote-loading"><span class="spinner"></span><strong>Connecting to remote session…</strong><span id="remoteLoadingDetail">Preparing the remote client.</span></div><iframe id="remoteFrame" class="remote-frame" title="Remote Xpra session" tabindex="0" allow="clipboard-read; clipboard-write; fullscreen"></iframe><div id="remoteRDP" class="remote-rdp hidden" tabindex="0"></div><div id="remoteVNC" class="remote-vnc hidden" tabindex="0"></div></div></div>
-      </section>
-
-      <section id="dockerPage" class="page">
-        <div id="dockerNotice" class="notice hidden"></div>
-        <section class="docker-section"><div class="section-head"><h2>Compose projects</h2></div><div id="dockerProjectGrid" class="docker-grid docker-project-grid"></div><div id="dockerProjectEmpty" class="empty hidden"><h2>No Compose projects found</h2><p>Create a RunPilot-managed project, or start an existing Compose project to see it here.</p></div></section>
-        <div class="docker-resources-grid">
-          <section class="docker-section"><div class="section-head"><h2>Volumes</h2></div><div id="dockerVolumeList" class="docker-volume-list"></div><div id="dockerVolumeEmpty" class="empty hidden"><h2>No Docker volumes found</h2><p>Create a named local volume, or refresh after Docker discovers one.</p></div></section>
-          <section class="docker-section"><div class="section-head"><h2>Networks</h2></div><div id="dockerNetworkList" class="docker-volume-list"></div><div id="dockerNetworkEmpty" class="empty hidden"><h2>No Docker networks found</h2><p>Create a named bridge network, or refresh after Docker discovers one.</p></div></section>
-        </div>
+      <section id="settingsPage" class="page">
+        <section class="overview-section"><div class="section-head"><h2>Plugins</h2><div class="header-actions"><button id="restartApplicationButton" class="button danger" type="button">Restart RunPilot</button><button class="button secondary" type="button" onclick="refreshPluginCatalog()">Check for updates</button></div></div><div id="pluginSettings" class="plugin-settings-grid rp-masonry"></div></section>
       </section>
     </main>
   </div>
@@ -136,7 +96,6 @@
     </form>
   </dialog>
 
-  <dialog id="guacdSettingsDialog" class="dialog"><form method="dialog" id="guacdSettingsForm"><div class="dialog-head"><div><h2>RDP / guacd settings</h2><p>Connect RunPilot to a trusted guacd endpoint. guacd itself has no authentication.</p></div><button class="icon-btn" type="button" data-dismiss="guacdSettingsDialog" aria-label="Close">×</button></div><div id="guacdSettingsError" class="form-error hidden"></div><div id="guacdSettingsStatus" class="notice hidden"></div><div class="form-grid"><label>Host<input id="guacdHost" required value="127.0.0.1"></label><label>Port<input id="guacdPort" type="number" min="1" max="65535" value="4822"></label><label>Connect timeout (seconds)<input id="guacdTimeout" type="number" min="1" max="60" value="5"></label><label class="check"><input id="guacdTLS" type="checkbox"> TLS</label></div><div class="dialog-actions"><button class="button secondary" type="button" id="guacdTest">Test connection</button><button class="button secondary" type="button" data-dismiss="guacdSettingsDialog">Cancel</button><button class="button primary" type="submit">Save</button></div></form></dialog>
 
   <dialog id="processDialog" class="dialog">
     <form method="dialog" id="processForm">
@@ -186,45 +145,6 @@
       </div>
     </form>
   </dialog>
-
-  <dialog id="remoteTargetDialog" class="dialog">
-    <form method="dialog" id="remoteTargetForm">
-      <div class="dialog-head"><div><h2 id="remoteTargetDialogTitle">Add Xpra target</h2><p id="remoteTargetDialogDescription">Launch an application or desktop in an isolated Xpra session.</p></div><button class="icon-btn" type="button" data-dismiss="remoteTargetDialog" aria-label="Close">×</button></div>
-      <input type="hidden" id="remoteTargetId">
-      <div class="form-grid">
-        <label>Name<input id="remoteTargetName" required></label>
-        <label>Provider<select id="remoteTargetProvider" aria-label="Remote provider"></select></label>
-        <section id="remoteXpraSettings" class="remote-xpra-settings span-2 remote-xpra-only"><div class="section-head"><div><h3>Xpra</h3><p class="muted">Runs in an isolated session; sound, printing, and file transfer stay disabled.</p></div></div><div class="form-grid remote-xpra-grid"><label class="span-2">Executable<input id="remotePath" placeholder="firefox or startxfce4"></label><label class="span-2">Arguments<input id="remoteArgs" placeholder="--private-window"></label></div><details class="remote-xpra-advanced">
-          <summary>Advanced settings</summary>
-          <div class="form-grid remote-xpra-grid">
-            <label>Session type<select id="remoteTargetType"><option value="application">Application</option><option value="desktop">Desktop</option></select></label>
-            <label class="hidden">Interpreter<select id="remoteInterpreter"><option value="direct">Direct executable</option></select></label>
-            <label>Rendering profile<select id="remoteXpraProfile"><option value="recommended">Recommended</option><option value="automatic">Automatic</option><option value="compatibility">Compatibility / Lossless</option><option value="custom">Custom</option></select></label>
-            <label>DPI<select id="remoteXpraDPIMode"><option value="auto">Auto</option><option value="96">96</option><option value="custom">Custom</option></select></label>
-            <label id="remoteXpraDPIWrap" class="hidden">Custom DPI<input id="remoteXpraDPI" type="number" min="72" max="240" step="1" value="96"></label>
-            <label class="check"><input id="remoteXpraClipboard" type="checkbox" checked> Enable clipboard</label>
-            <label>Picture encoding<select id="remoteXpraEncoding"><option value="webp">WebP</option><option value="auto">Auto</option><option value="rgb">RGB (lossless)</option></select></label>
-            <label class="check"><input id="remoteXpraVideo" type="checkbox"> Enable video codecs</label>
-            <label class="check"><input id="remoteXpraLaunchAfterConnect" type="checkbox" checked> Start application after browser connects</label>
-            <label class="check"><input id="remoteXpraDynamicResize" type="checkbox" checked> Resize virtual display with browser</label>
-            <label>Xpra menu<select id="remoteXpraMenu"><option value="autohide">Auto-hide</option><option value="visible">Always visible</option><option value="hidden">Hidden</option></select></label>
-            <label>Toolbar position<select id="remoteXpraToolbarPosition"><option value="top-left">Top left</option><option value="top-right">Top right</option></select></label>
-            <label class="span-2">Working directory<input id="remoteCwd" placeholder="Optional"></label>
-            <div class="environment-editor span-2" data-command-prefix="remote"><div class="environment-head"><div><strong>Environment variables</strong><span>Optional values passed only to this remote target.</span></div><button class="button secondary small env-add" type="button">+ Add variable</button></div><div id="remoteEnvRows" class="environment-rows"></div><p id="remoteEnvEmpty" class="environment-empty">No custom variables configured.</p><p id="remoteCommandError" class="form-error hidden" role="alert"></p></div>
-            <label class="span-2">D-Bus session<select id="remoteDBusMode"><option value="isolated">Isolated (recommended)</option><option value="host-session">Host session — advanced compatibility</option></select></label>
-            <p class="muted span-2">Isolated creates a private session bus for the remote application. Host session lets it contact desktop services, but single-instance applications can open on the physical desktop instead.</p>
-          </div>
-          <p class="muted">Sound, printing, and Xpra file transfer stay disabled; use RunPilot Storage for files.</p>
-        </details></section>
-        <section id="remoteRDPSettings" class="remote-xpra-settings span-2 hidden"><div class="section-head"><div><h3>RDP / Guacamole</h3><p class="muted">Credentials are requested for each connection and never saved.</p></div></div><div class="form-grid remote-xpra-grid"><label>Host<input id="remoteRDPHost" required placeholder="rdp.example" inputmode="url"></label><label>Port<input id="remoteRDPPort" type="number" min="1" max="65535" value="3389"></label><label class="span-2">Username<input id="remoteRDPUsername" autocomplete="username" placeholder="DOMAIN\username"></label></div><details class="remote-xpra-advanced"><summary>Advanced settings</summary><div class="form-grid remote-xpra-grid"><label class="span-2">Server keyboard layout<select id="remoteRDPLayout"><option value="">Server default / US English</option><option value="en-us-qwerty">English US</option><option value="en-gb-qwerty">English UK</option><option value="de-de-qwertz">German</option><option value="de-ch-qwertz">German Swiss</option><option value="fr-fr-azerty">French</option><option value="fr-be-azerty">French Belgian</option><option value="fr-ch-qwertz">French Swiss</option><option value="hu-hu-qwertz">Hungarian</option><option value="it-it-qwerty">Italian</option><option value="es-es-qwerty">Spanish</option><option value="es-latam-qwerty">Latin American</option><option value="sv-se-qwerty">Swedish</option><option value="no-no-qwerty">Norwegian</option><option value="tr-tr-qwerty">Turkish Q</option><option value="pt-br-qwerty">Brazilian PT</option><option value="ja-jp-qwerty">Japanese</option><option value="failsafe">Failsafe Unicode</option></select></label><label>Security<select id="remoteRDPSecurity"><option value="automatic">Automatic</option><option value="nla">NLA</option><option value="nla-ext">NLA Extended</option><option value="tls">TLS</option><option value="rdp">Legacy RDP</option></select></label><label>Resize<select id="remoteRDPResize"><option value="display-update">Dynamic / Display Update</option><option value="reconnect">Reconnect on resize</option><option value="fixed">Fixed</option></select></label><label>Certificate<select id="remoteRDPCertificate"><option value="validate">Validate certificate</option><option value="tofu">Trust on first use</option><option value="ignore">Ignore certificate</option></select></label><label>Connection timeout<input id="remoteRDPTimeout" type="number" min="1" max="120" value="10"></label><label>Clipboard<select id="remoteRDPClipboard"><option value="preserve">Enabled — preserve line endings</option><option value="unix">Enabled — Unix line endings</option><option value="windows">Enabled — Windows line endings</option></select></label><label>Performance<select id="remoteRDPPerformance"><option value="balanced">Balanced</option><option value="quality">Quality</option><option value="low-bandwidth">Low bandwidth</option></select></label></div></details></section>
-        <section id="remoteVNCSettings" class="remote-xpra-settings span-2 hidden"><div class="section-head"><div><h3>VNC / noVNC</h3><p class="muted">The embedded noVNC client requests VNC credentials when the server requires them; they are never saved.</p></div></div><div class="form-grid remote-xpra-grid"><label>Host<input id="remoteVNCHost" required placeholder="vnc.example" inputmode="url"></label><label>Port<input id="remoteVNCPort" type="number" min="1" max="65535" value="5900"></label></div><details class="remote-xpra-advanced"><summary>Advanced settings</summary><div class="form-grid remote-xpra-grid"><label class="span-2">Username (most VNC servers don't need this)<input id="remoteVNCConfigUsername" autocomplete="username"></label><label>Connection timeout<input id="remoteVNCTimeout" type="number" min="1" max="120" value="10"></label></div></details></section>
-      </div>
-      <div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="remoteTargetDialog">Cancel</button><button class="button primary" value="default">Save target</button></div>
-    </form>
-  </dialog>
-
-  <dialog id="remoteRDPConnectDialog" class="dialog"><form method="dialog" id="remoteRDPConnectForm"><div class="dialog-head"><div><h2 id="remoteRDPConnectTitle">Connect to RDP target</h2><p>Credentials are optional and stay in this browser session only. Leave the password blank for the remote server's interactive login screen.</p></div><button class="icon-btn" type="button" data-dismiss="remoteRDPConnectDialog" aria-label="Close">×</button></div><div class="form-grid"><label class="span-2">Username<input id="remoteRDPConnectUsername" autocomplete="username" placeholder="DOMAIN\username"></label><label class="span-2">Password (optional)<input id="remoteRDPConnectPassword" type="password" autocomplete="current-password"></label></div><div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="remoteRDPConnectDialog">Cancel</button><button class="button primary" value="default">Connect</button></div></form></dialog>
-  <dialog id="remoteVNCCredentialsDialog" class="dialog small"><form method="dialog" id="remoteVNCCredentialsForm"><div class="dialog-head"><div><h2 id="remoteVNCCredentialsTitle">VNC credentials</h2><p>Required by this VNC server. They are passed to the server through this session only and are never saved.</p></div><button class="icon-btn" type="button" data-dismiss="remoteVNCCredentialsDialog" aria-label="Close">×</button></div><div class="form-grid"><input type="hidden" id="remoteVNCUsername"><label class="span-2">Password<input id="remoteVNCPassword" type="password" autocomplete="current-password"></label></div><div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="remoteVNCCredentialsDialog">Cancel</button><button class="button primary" value="default">Connect</button></div></form></dialog>
 
   <dialog id="jobDialog" class="dialog">
     <form method="dialog" id="jobForm">
@@ -338,13 +258,6 @@
   <dialog id="runHistoryDialog" class="dialog run-history-dialog"><div class="dialog-head"><div><h2 id="runHistoryTitle">Run history</h2><p>Captured output from previous runs.</p></div><button class="icon-btn" id="closeRunHistory" type="button" aria-label="Close">×</button></div><div class="run-history-layout"><div id="runHistoryList" class="row-list"></div><section class="run-history-log"><pre id="runHistoryLogOutput">No run selected.</pre></section></div></dialog>
   <dialog id="textEditorDialog" class="dialog log-dialog"><div class="dialog-head"><div><h2 id="textEditorTitle">Fájl szerkesztése</h2><p id="textEditorPath"></p></div><button class="icon-btn" id="closeTextEditor" type="button">×</button></div><div class="editor-shell"><pre id="textHighlight" aria-hidden="true"><code></code></pre><textarea id="textEditorContent" class="text-editor" spellcheck="false"></textarea></div><div class="dialog-actions"><button class="button secondary" id="cancelTextEditor" type="button">Mégse</button><button class="button primary" id="saveTextEditor" type="button">Mentés</button></div></dialog>
 
-  <dialog id="dockerCreateDialog" class="dialog small"><form method="dialog" id="dockerCreateForm"><div class="dialog-head"><div><h2>Create Compose project</h2><p>The project directory is created under RunPilot's data directory.</p></div><button class="icon-btn" type="button" data-dismiss="dockerCreateDialog">×</button></div><label>Project name<input id="dockerProjectName" pattern="[a-z0-9][a-z0-9_-]*" required placeholder="jellyfin"></label><p id="dockerCreateError" class="form-error hidden"></p><div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="dockerCreateDialog">Cancel</button><button class="button primary">Create project</button></div></form></dialog>
-  <dialog id="dockerFileDialog" class="dialog log-dialog"><div class="dialog-head"><div><h2 id="dockerFileTitle">Edit compose.yaml</h2><p id="dockerFilePath">Managed project file</p></div><button class="icon-btn" id="closeDockerFile" type="button">×</button></div><div class="editor-shell"><pre id="dockerFileHighlight" aria-hidden="true"><code></code></pre><textarea id="dockerFileContent" class="text-editor" spellcheck="false"></textarea></div><div class="dialog-actions"><button class="button secondary" id="cancelDockerFile" type="button">Cancel</button><button class="button primary" id="saveDockerFile" type="button">Save</button></div></dialog>
-  <dialog id="dockerVolumeDialog" class="dialog small"><form method="dialog" id="dockerVolumeForm"><div class="dialog-head"><div><h2>Create Docker volume</h2><p>Creates a named local-driver volume managed by RunPilot.</p></div><button class="icon-btn" type="button" data-dismiss="dockerVolumeDialog">×</button></div><label>Volume name<input id="dockerVolumeName" required placeholder="myapp_data"></label><p id="dockerVolumeError" class="form-error hidden"></p><div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="dockerVolumeDialog">Cancel</button><button class="button primary">Create volume</button></div></form></dialog>
-  <dialog id="dockerNetworkDialog" class="dialog small"><form method="dialog" id="dockerNetworkForm"><div class="dialog-head"><div><h2>Create Docker network</h2><p>Creates a named bridge network managed by RunPilot.</p></div><button class="icon-btn" type="button" data-dismiss="dockerNetworkDialog">×</button></div><label>Network name<input id="dockerNetworkName" required placeholder="myapp_network"></label><p id="dockerNetworkError" class="form-error hidden"></p><div class="dialog-actions"><button class="button secondary" type="button" data-dismiss="dockerNetworkDialog">Cancel</button><button class="button primary">Create network</button></div></form></dialog>
-  <dialog id="dockerAttachDialog" class="dialog terminal-dialog"><div class="dialog-head"><div><h2>Container terminal</h2><p>Interactive /bin/sh session in the running container.</p></div><button class="icon-btn" id="closeDockerAttach" type="button" aria-label="Close terminal">×</button></div><div id="dockerAttachPane" class="docker-attach-pane"></div></dialog>
-
-
   <dialog id="logDialog" class="dialog log-dialog">
     <div class="dialog-head">
       <div><h2 id="logTitle">Log</h2><p id="logSubtitle">Latest output</p></div>
@@ -354,10 +267,8 @@
   </dialog>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="vendor/xterm/xterm.js"></script>
-  <script src="vendor/xterm/addon-fit.js"></script>
-  <script src="rdp-sizing.js"></script>
   <script src="secure-websocket.js"></script>
-  <script src="app.js"></script>
+  <script src="auth-storage.js"></script>
+  <script src="browser-launch.js"></script>
 </body>
 </html>

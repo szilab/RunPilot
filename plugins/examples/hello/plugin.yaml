@@ -1,0 +1,9 @@
+apiVersion: runpilot.plugin/v1
+id: hello
+name: Hello extension
+description: Minimal frontend contract example
+version: 0.1.0
+requires:
+  frontend: ">=1.0.0 <2.0.0"
+frontend:
+  module: web/plugin.js

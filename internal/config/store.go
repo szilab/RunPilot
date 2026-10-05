@@ -146,7 +146,7 @@ func defaultConfig() model.Config {
 		},
 		Processes: []model.ProcessDefinition{},
 		Jobs:      []model.JobDefinition{},
-		Remote:    model.RemoteConfig{Guacd: model.DefaultGuacdConfig()},
+		Plugins:   map[string]model.PluginSettings{},
 	}
 	if runtime.GOOS == "windows" {
 		config.Software.Providers = []model.SoftwareProviderDefinition{{
@@ -170,6 +170,9 @@ func normalize(c *model.Config) {
 	if c.Server.Token == "" {
 		c.Server.Token = randomToken()
 	}
+	if c.Plugins == nil {
+		c.Plugins = map[string]model.PluginSettings{}
+	}
 	if runtime.GOOS == "windows" {
 		hasScoop := false
 		for _, provider := range c.Software.Providers {
@@ -191,6 +194,16 @@ func normalize(c *model.Config) {
 	for i := range c.Jobs {
 		model.NormalizeJob(&c.Jobs[i])
 	}
+	// RDP and VNC targets now belong to their plugin-owned storage. Remove
+	// obsolete combined-core targets once when opening an older configuration.
+	targets := c.RemoteTargets[:0]
+	for _, target := range c.RemoteTargets {
+		if target.Provider == "rdp" || target.Provider == "vnc" {
+			continue
+		}
+		targets = append(targets, target)
+	}
+	c.RemoteTargets = targets
 	for i := range c.RemoteTargets {
 		target := &c.RemoteTargets[i]
 		if target.DBusMode != model.RemoteDBusIsolated && target.DBusMode != model.RemoteDBusHost {

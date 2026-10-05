@@ -43,7 +43,7 @@ func (p *Provider) Status(ctx context.Context) model.RemoteProviderStatus {
 	if runtime.GOOS != "linux" {
 		status.State = "unsupported"
 		status.Message = "Xpra remote-session server support is currently Linux-only"
-		status.InstallHint = "Xpra server sessions are Linux-only. Use the built-in RDP provider for Windows desktop sessions."
+		status.InstallHint = "Xpra server sessions are Linux-only. Use the remote.rdp plugin for Windows desktop sessions."
 		return status
 	}
 	path, err := p.lookPath("xpra")

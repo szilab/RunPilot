@@ -44,6 +44,40 @@ func TestStorePersists(t *testing.T) {
 	}
 }
 
+func TestLegacyRDPAndVNCTargetsMoveOutOfCoreConfiguration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runpilot.yaml")
+	legacy := `version: 1
+server: { bind: 127.0.0.1:9070, token: existing-token }
+remote:
+  guacd: { host: guacd, port: 4822 }
+remoteTargets:
+  - { id: old-rdp, name: Old RDP, provider: rdp, type: desktop, rdp: { host: rdp.example, port: 3389 } }
+  - { id: old-vnc, name: Old VNC, provider: vnc, type: desktop, vnc: { host: vnc.example, port: 5900 } }
+  - { id: old-xpra, name: Internal Xpra, provider: xpra, type: application, command: { path: xterm } }
+`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := store.Snapshot().RemoteTargets
+	if len(targets) != 1 || targets[0].ID != "old-xpra" {
+		t.Fatalf("legacy provider targets were not cleaned up: %#v", targets)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, obsolete := range []string{"old-rdp", "old-vnc", "guacd:", "provider: rdp", "provider: vnc"} {
+		if strings.Contains(string(contents), obsolete) {
+			t.Fatalf("obsolete RDP/VNC core configuration remained (%q): %s", obsolete, contents)
+		}
+	}
+}
+
 func TestDefaultDataDirHonorsEnvironmentAndLinuxDefaults(t *testing.T) {
 	t.Setenv("RUNPILOT_DATA_DIR", "/custom/runpilot")
 	if got := DefaultDataDir(); got != "/custom/runpilot" {

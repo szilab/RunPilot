@@ -9,13 +9,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
-	pty "github.com/aymanbagabas/go-pty"
+	"github.com/szilab/RunPilot/internal/processsession"
 )
 
 const DefaultMaxSessions = 8
@@ -23,22 +22,12 @@ const DefaultMaxSessions = 8
 var (
 	ErrUnsupported  = errors.New("terminal is not supported on this platform")
 	ErrSessionLimit = errors.New("maximum number of terminal sessions reached")
-	ErrUnknownShell = errors.New("requested shell is not available")
 )
-
-// Shell describes an executable that can be started as an interactive shell.
-type Shell struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Path      string `json:"path"`
-	Available bool   `json:"available"`
-}
 
 // Manager tracks in-memory terminal sessions. Sessions are never persisted.
 type Manager struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
-	shells   []Shell
 	cwd      string
 	max      int
 }
@@ -47,49 +36,19 @@ func NewManager(dataDir string, maxSessions int) *Manager {
 	if maxSessions <= 0 {
 		maxSessions = DefaultMaxSessions
 	}
-	return &Manager{
-		sessions: map[string]*Session{},
-		shells:   DiscoverShells(),
-		cwd:      workingDirectory(dataDir),
-		max:      maxSessions,
-	}
+	return &Manager{sessions: map[string]*Session{}, cwd: workingDirectory(dataDir), max: maxSessions}
 }
 
 func Supported() bool { return runtime.GOOS == "linux" || runtime.GOOS == "windows" }
-
-func (m *Manager) Available() bool { return Supported() && len(m.shells) > 0 }
-
-func (m *Manager) Shells() []Shell {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return append([]Shell(nil), m.shells...)
-}
-
-func (m *Manager) DefaultShell() string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if len(m.shells) == 0 {
-		return ""
-	}
-	return m.shells[0].ID
-}
-
-func (m *Manager) Start(shellID string, cols, rows uint16) (*Session, error) {
-	shell, ok := m.shell(shellID)
-	if !ok {
-		return nil, ErrUnknownShell
-	}
-	return m.startCommand(shell, shell.Path, nil, cols, rows)
-}
 
 // StartCommand starts a named, prevalidated interactive command in a PTY.
 // It is intentionally used only by narrow typed integrations such as Docker
 // container terminals, never as a generic command execution surface.
 func (m *Manager) StartCommand(name, path string, args []string, cols, rows uint16) (*Session, error) {
-	return m.startCommand(Shell{ID: "command", Name: name, Path: path, Available: true}, path, args, cols, rows)
+	return m.startCommand(name, path, args, cols, rows)
 }
 
-func (m *Manager) startCommand(shell Shell, path string, args []string, cols, rows uint16) (*Session, error) {
+func (m *Manager) startCommand(name, path string, args []string, cols, rows uint16) (*Session, error) {
 	if !Supported() {
 		return nil, ErrUnsupported
 	}
@@ -104,54 +63,23 @@ func (m *Manager) startCommand(shell Shell, path string, args []string, cols, ro
 	if len(m.sessions) >= m.max {
 		return nil, ErrSessionLimit
 	}
-	p, err := pty.New()
+	process, err := processsession.Start(path, args, m.cwd, terminalEnvironment(os.Environ()), rows, cols)
 	if err != nil {
-		return nil, fmt.Errorf("initialize PTY: %w", err)
-	}
-	if err := p.Resize(int(cols), int(rows)); err != nil {
-		_ = p.Close()
-		return nil, fmt.Errorf("resize PTY: %w", err)
-	}
-	cmd := p.Command(path, args...)
-	cmd.Dir = m.cwd
-	cmd.Env = terminalEnvironment(os.Environ())
-	if err := cmd.Start(); err != nil {
-		_ = p.Close()
-		return nil, fmt.Errorf("start %s: %w", shell.Name, err)
-	}
-	cleanup, err := attachProcessTree(cmd.Process)
-	if err != nil {
-		_ = cmd.Process.Kill()
-		_ = p.Close()
-		return nil, fmt.Errorf("contain shell process: %w", err)
+		return nil, fmt.Errorf("start %s: %w", name, err)
 	}
 	s := &Session{
 		id:        randomID(),
-		shell:     shell,
+		name:      name,
 		createdAt: time.Now().UTC(),
 		cols:      cols,
 		rows:      rows,
-		pty:       p,
-		cmd:       cmd,
-		cleanup:   cleanup,
+		process:   process,
 		waitDone:  make(chan struct{}),
 	}
 	s.onClose = func() { m.remove(s.id) }
 	m.sessions[s.id] = s
 	go func() { _ = s.Wait() }()
 	return s, nil
-}
-
-func (m *Manager) shell(id string) (Shell, bool) {
-	if id == "" && len(m.shells) > 0 {
-		return m.shells[0], true
-	}
-	for _, shell := range m.shells {
-		if shell.ID == id {
-			return shell, true
-		}
-	}
-	return Shell{}, false
 }
 
 func (m *Manager) remove(id string) {
@@ -227,11 +155,6 @@ func randomID() string {
 		panic("crypto/rand unavailable: " + err.Error())
 	}
 	return base64.RawURLEncoding.EncodeToString(bytes)
-}
-
-func shellFromPath(path string) string {
-	name := strings.TrimSuffix(strings.ToLower(filepath.Base(path)), ".exe")
-	return strings.ReplaceAll(name, " ", "-")
 }
 
 var _ io.ReadWriteCloser = (*Session)(nil)

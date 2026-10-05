@@ -11,17 +11,7 @@ import (
 func TestWindowsConPTYSmoke(t *testing.T) {
 	manager := NewManager(t.TempDir(), 1)
 	defer manager.Close()
-	var shellID string
-	for _, shell := range manager.Shells() {
-		if shell.ID == "cmd" {
-			shellID = shell.ID
-			break
-		}
-	}
-	if shellID == "" {
-		t.Fatal("cmd.exe was not discovered")
-	}
-	session, err := manager.Start(shellID, 100, 30)
+	session, err := manager.StartCommand("Command Prompt", "cmd.exe", nil, 100, 30)
 	if err != nil {
 		t.Fatal(err)
 	}
