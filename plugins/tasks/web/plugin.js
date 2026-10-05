@@ -168,7 +168,7 @@ export function activate(runpilot) {
     page.innerHTML = `<div class="tasks-plugin">
       <div class="section-head tasks-plugin-toolbar"><div class="task-filters" role="group" aria-label="Task type">${filters}</div>
         <div class="row-actions"><button class="button primary small" data-action="add" data-type="continuous" ${readOnly ? "disabled" : ""}>Add continuous</button><button class="button primary small" data-action="add" data-type="scheduled" ${readOnly ? "disabled" : ""}>Add scheduled</button></div></div>
-      ${state.loadError ? `<div class="notice" role="alert"><strong>Task configuration is unavailable</strong><span>${esc(state.loadError)}</span><span>The stored configuration was left untouched. Repair or remove plugin-data/${PLUGIN}/storage.json and restart RunPilot.</span></div>` : ""}
+      ${state.loadError ? `<div class="notice" role="alert"><strong>Task configuration is unavailable</strong><span>${esc(state.loadError)}</span><span>The stored configuration was left untouched. Repair or remove plugins/${PLUGIN}/data/storage.json and restart RunPilot.</span></div>` : ""}
       ${state.error ? `<div class="notice" role="alert"><span>${esc(state.error)}</span></div>` : ""}
       <div class="row-list">${visible.map(row).join("")}</div>
       ${state.loaded && !visible.length && !state.loadError ? `<div class="empty"><h2>No tasks yet</h2><p>Add a continuous command or a scheduled command.</p></div>` : ""}

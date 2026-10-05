@@ -28,6 +28,13 @@ func TestExecutionLifecycleAndOwnerIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(filepath.Join(store.dataDir, "plugins", "tasks", "data", "history.db")); err != nil {
+		t.Fatalf("task history database is missing: %v", err)
+	}
+	var legacyCount int
+	if err := store.db.QueryRow(`SELECT count(*) FROM runs`).Scan(&legacyCount); err != nil || legacyCount != 0 {
+		t.Fatalf("plugin execution leaked into legacy history: %d, %v", legacyCount, err)
+	}
 	if _, err := store.GetExecution("other", e.ID); !errors.Is(err, ErrExecutionNotFound) {
 		t.Fatalf("other owner read = %v", err)
 	}
@@ -126,7 +133,7 @@ func TestExecutionLogCaptureCapAndTail(t *testing.T) {
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(filepath.Join(store.dataDir, "runs", "plugins", "tasks", e.ID+".log"))
+	info, err := os.Stat(store.executionLogPath("tasks", e.ID))
 	if err != nil || info.Size() > MaxExecutionLogBytes+int64(len(truncationMarker)) {
 		t.Fatalf("log size = %v, %v", info, err)
 	}

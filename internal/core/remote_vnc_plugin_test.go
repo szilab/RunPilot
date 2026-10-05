@@ -171,7 +171,7 @@ func TestRemoteVNCPluginWASMOwnsTargetsAndTCPSessionLifecycle(t *testing.T) {
 	}
 	shutdownPeer.Close()
 
-	stored, err := os.ReadFile(filepath.Join(dataDir, "plugin-data", remoteVNCPluginID, "storage.json"))
+	stored, err := os.ReadFile(filepath.Join(dataDir, "plugins", remoteVNCPluginID, "data", "storage.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func pluginResponseHasError(raw json.RawMessage) bool {
 func copyRemoteVNCPlugin(t *testing.T, dataDir string) {
 	t.Helper()
 	source := filepath.Join("..", "..", "plugins", "remote-vnc")
-	destination := filepath.Join(dataDir, "plugins", remoteVNCPluginID, "1.0.0")
+	destination := filepath.Join(dataDir, "plugins", remoteVNCPluginID, "releases", "1.0.0")
 	err := filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err

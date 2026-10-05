@@ -19,7 +19,7 @@ import (
 const MaxPackageSize = 64 << 20
 
 // InstallPackage validates an immutable plugin archive and atomically installs
-// it below root/id/version. Existing installations are never overwritten.
+// it below root/id/releases/version. Existing installations are never overwritten.
 func InstallPackage(root, packagePath, expectedSHA256 string) (Manifest, error) {
 	return installPackage(root, packagePath, expectedSHA256, nil, nil)
 }
@@ -114,10 +114,13 @@ func installPackage(root, packagePath, expectedSHA256 string, expected *Manifest
 			return Manifest{}, err
 		}
 	}
-	if err := os.MkdirAll(filepath.Join(root, manifest.ID), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, manifest.ID, "releases"), 0o755); err != nil {
 		return Manifest{}, err
 	}
-	finalRoot := filepath.Join(root, manifest.ID, manifest.Version)
+	if err := os.MkdirAll(filepath.Join(root, manifest.ID, "data"), 0o700); err != nil {
+		return Manifest{}, err
+	}
+	finalRoot := filepath.Join(root, manifest.ID, "releases", manifest.Version)
 	if _, err := os.Stat(finalRoot); err == nil {
 		return manifest, nil
 	} else if !os.IsNotExist(err) {

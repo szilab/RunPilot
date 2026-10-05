@@ -300,7 +300,7 @@ func TestHistoryCapabilityIsOwnerScopedAndBounded(t *testing.T) {
 	if _, err := call("../etc", "begin", `{"kind":"x","subject":"s"}`); !isHostFailure(err, "invalid_argument") {
 		t.Fatalf("hostile owner = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(c.dataDir, "runs", "plugins", "tasks", id+".log")); err != nil {
+	if _, err := os.Stat(filepath.Join(c.dataDir, "plugins", "tasks", "data", "runs", id+".log")); err != nil {
 		t.Fatalf("log not in owner directory: %v", err)
 	}
 }

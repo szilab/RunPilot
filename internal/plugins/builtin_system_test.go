@@ -41,7 +41,7 @@ func TestReferenceSystemWASMMatchesSourceArtifact(t *testing.T) {
 	if err := EnsureReferenceSystem(installRoot); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := loadManifest(filepath.Join(installRoot, sourceManifest.ID, sourceManifest.Version, "plugin.yaml"))
+	manifest, err := loadManifest(filepath.Join(installRoot, sourceManifest.ID, "releases", sourceManifest.Version, "plugin.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestEnsureReferenceSystemUpgradesExistingABIV1Package(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := filepath.Join(root, sourceManifest.ID, "1.0.0")
+	legacy := filepath.Join(root, sourceManifest.ID, "releases", "1.0.0")
 	if err := os.MkdirAll(legacy, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestEnsureReferenceSystemUpgradesExistingABIV1Package(t *testing.T) {
 	if err := EnsureReferenceSystem(root); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := loadManifest(filepath.Join(root, sourceManifest.ID, sourceManifest.Version, "plugin.yaml"))
+	manifest, err := loadManifest(filepath.Join(root, sourceManifest.ID, "releases", sourceManifest.Version, "plugin.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,14 +89,14 @@ func TestEnsureReferenceSystemUpgradesExistingABIV1Package(t *testing.T) {
 
 func TestCleanupObsoleteSystemFixture(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "plugins")
-	legacy := filepath.Join(root, "system", "1.0.0")
+	legacy := filepath.Join(root, "system", "releases", "1.0.0")
 	if err := os.MkdirAll(filepath.Join(legacy, "backend"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(legacy, "plugin.yaml"), []byte("apiVersion: runpilot.plugin/v1\nid: system\nname: System\ndescription: Host status and resource usage\nversion: 1.0.0\nrequires:\n  runpilotApi: 1\nplatforms: [linux, windows]\nbackend:\n  module: backend/plugin.wasm\nfrontend:\n  module: web/plugin.js\n  stylesheet: web/plugin.css\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "system", "1.1.0"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "system", "releases", "1.1.0"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	removed, err := CleanupObsoleteSystemFixture(root)
@@ -106,7 +106,7 @@ func TestCleanupObsoleteSystemFixture(t *testing.T) {
 	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
 		t.Fatalf("obsolete package remains: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "system", "1.1.0")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "system", "releases", "1.1.0")); err != nil {
 		t.Fatalf("newer System version was removed: %v", err)
 	}
 	removed, err = CleanupObsoleteSystemFixture(root)
@@ -117,7 +117,7 @@ func TestCleanupObsoleteSystemFixture(t *testing.T) {
 
 func TestCleanupObsoleteSystemFixtureLeavesOtherPackagesAlone(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "plugins")
-	legacy := filepath.Join(root, "system", "1.0.0")
+	legacy := filepath.Join(root, "system", "releases", "1.0.0")
 	if err := os.MkdirAll(legacy, 0o755); err != nil {
 		t.Fatal(err)
 	}

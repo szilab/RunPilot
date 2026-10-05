@@ -1,15 +1,11 @@
 package history
 
 import (
-	"bufio"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -24,47 +20,36 @@ type Store struct {
 	mu      sync.Mutex
 	dataDir string
 	db      *sql.DB
-}
-
-type legacyRunRecord struct {
-	ID         string  `json:"id"`
-	Kind       string  `json:"kind"`
-	TargetID   string  `json:"targetId"`
-	TargetName string  `json:"targetName"`
-	StartedAt  string  `json:"startedAt"`
-	FinishedAt *string `json:"finishedAt,omitempty"`
-	ExitCode   *int    `json:"exitCode,omitempty"`
-	Success    *bool   `json:"success,omitempty"`
-	LogPath    string  `json:"logPath"`
-	Message    string  `json:"message,omitempty"`
+	owners  map[string]*sql.DB
 }
 
 func Open(dataDir string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Join(dataDir, "runs"), 0o755); err != nil {
+	legacyDir := filepath.Join(dataDir, "legacy")
+	if err := os.MkdirAll(filepath.Join(legacyDir, "runs"), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dataDir, "history.db"))
+	db, err := sql.Open("sqlite", filepath.Join(legacyDir, "history.db"))
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{dataDir: dataDir, db: db}
+	store := &Store{dataDir: dataDir, db: db, owners: map[string]*sql.DB{}}
 	if err := store.initialize(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := store.migrateLegacy(); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("migrate legacy run history: %w", err)
-	}
 	if err := store.AbandonExecutions(); err != nil {
-		_ = db.Close()
+		_ = store.Close()
 		return nil, fmt.Errorf("finish interrupted plugin executions: %w", err)
 	}
 	return store, nil
 }
 
 func (s *Store) initialize() error {
-	_, err := s.db.Exec(`
+	return initializeDB(s.db)
+}
+
+func initializeDB(db *sql.DB) error {
+	_, err := db.Exec(`
 CREATE TABLE IF NOT EXISTS runs (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -75,111 +60,17 @@ CREATE TABLE IF NOT EXISTS runs (
   exit_code INTEGER,
   success INTEGER,
   log_path TEXT NOT NULL,
-  message TEXT NOT NULL DEFAULT ''
+  message TEXT NOT NULL DEFAULT '',
+  owner TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS runs_target_started ON runs(target_id, started_at DESC);
-CREATE INDEX IF NOT EXISTS runs_started ON runs(started_at DESC);`)
-	if err != nil {
-		return err
-	}
-	return s.migrateOwner()
-}
-
-// migrateOwner adds the plugin-owner column. Legacy rows have an empty owner and
-// legacy queries only ever see those rows.
-func (s *Store) migrateOwner() error {
-	rows, err := s.db.Query(`PRAGMA table_info(runs)`)
-	if err != nil {
-		return err
-	}
-	hasOwner := false
-	for rows.Next() {
-		var cid, notNull, pk int
-		var name, kind string
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &pk); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		if name == "owner" {
-			hasOwner = true
-		}
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	if !hasOwner {
-		if _, err := s.db.Exec(`ALTER TABLE runs ADD COLUMN owner TEXT NOT NULL DEFAULT ''`); err != nil {
-			return err
-		}
-	}
-	_, err = s.db.Exec(`CREATE INDEX IF NOT EXISTS runs_owner_subject ON runs(owner, target_id, started_at DESC)`)
+CREATE INDEX IF NOT EXISTS runs_started ON runs(started_at DESC);
+CREATE INDEX IF NOT EXISTS runs_owner_subject ON runs(owner, target_id, started_at DESC);`)
 	return err
 }
 
-func (s *Store) migrateLegacy() error {
-	f, err := os.Open(filepath.Join(s.dataDir, "history.jsonl"))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO runs (id, kind, target_id, target_name, started_at, finished_at, exit_code, success, log_path, message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	line := 0
-	for scanner.Scan() {
-		line++
-		var legacy legacyRunRecord
-		if err := json.Unmarshal(scanner.Bytes(), &legacy); err != nil {
-			log.Printf("warning: ignoring malformed history.jsonl record at line %d: %v", line, err)
-			continue
-		}
-		started, err := time.Parse(time.RFC3339Nano, legacy.StartedAt)
-		if err != nil || strings.TrimSpace(legacy.ID) == "" {
-			log.Printf("warning: ignoring incomplete history.jsonl record at line %d", line)
-			continue
-		}
-		var finished any
-		if legacy.FinishedAt != nil {
-			value, parseErr := time.Parse(time.RFC3339Nano, *legacy.FinishedAt)
-			if parseErr != nil {
-				log.Printf("warning: ignoring history.jsonl record at line %d with invalid finishedAt: %v", line, parseErr)
-				continue
-			}
-			finished = value.UnixNano()
-		}
-		var success any
-		if legacy.Success != nil {
-			if *legacy.Success {
-				success = 1
-			} else {
-				success = 0
-			}
-		}
-		if _, err := stmt.Exec(legacy.ID, legacy.Kind, legacy.TargetID, legacy.TargetName, started.UnixNano(), finished, legacy.ExitCode, success, legacy.LogPath, legacy.Message); err != nil {
-			return err
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
 func (s *Store) RunLogPath(runID string) string {
-	return filepath.Join(s.dataDir, "runs", runID+".log")
+	return filepath.Join(s.dataDir, "legacy", "runs", runID+".log")
 }
 
 func (s *Store) Append(rec model.RunRecord) error {
@@ -246,4 +137,35 @@ func (s *Store) Recent(targetID string, limit int) ([]model.RunRecord, error) {
 	return result, rows.Err()
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) ownerDB(owner string) (*sql.DB, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if db := s.owners[owner]; db != nil {
+		return db, nil
+	}
+	dir := filepath.Join(s.dataDir, "plugins", owner, "data")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, "history.db"))
+	if err != nil {
+		return nil, err
+	}
+	if err := initializeDB(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	s.owners[owner] = db
+	return db, nil
+}
+
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var errs []error
+	for _, db := range s.owners {
+		errs = append(errs, db.Close())
+	}
+	errs = append(errs, s.db.Close())
+	return errors.Join(errs...)
+}

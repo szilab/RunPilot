@@ -16,7 +16,7 @@ import (
 )
 
 // Owner-scoped executions are a generic record of "something a plugin ran".
-// They share the runs table and log directory with legacy history, but every
+// Each owner has its own database and log directory, but every
 // operation is namespaced by the owner and log paths are always derived here:
 // callers never supply a filesystem path.
 const (
@@ -89,7 +89,7 @@ func newExecutionID() (string, error) {
 }
 
 func (s *Store) executionLogPath(owner, id string) string {
-	return filepath.Join(s.dataDir, "runs", "plugins", owner, id+".log")
+	return filepath.Join(s.dataDir, "plugins", owner, "data", "runs", id+".log")
 }
 
 // BeginExecution creates an unfinished execution and its empty log.
@@ -99,6 +99,10 @@ func (s *Store) BeginExecution(owner, kind, subject, label string) (Execution, e
 	}
 	label = truncateText(strings.TrimSpace(label), maxLabelLength)
 	id, err := newExecutionID()
+	if err != nil {
+		return Execution{}, err
+	}
+	db, err := s.ownerDB(owner)
 	if err != nil {
 		return Execution{}, err
 	}
@@ -113,7 +117,7 @@ func (s *Store) BeginExecution(owner, kind, subject, label string) (Execution, e
 	_ = file.Close()
 	started := time.Now()
 	s.mu.Lock()
-	_, err = s.db.Exec(`INSERT INTO runs (id, kind, target_id, target_name, started_at, log_path, owner) VALUES (?, ?, ?, ?, ?, ?, ?)`, id, kind, subject, label, started.UnixNano(), filepath.ToSlash(filepath.Join("plugins", owner, id+".log")), owner)
+	_, err = db.Exec(`INSERT INTO runs (id, kind, target_id, target_name, started_at, log_path, owner) VALUES (?, ?, ?, ?, ?, ?, ?)`, id, kind, subject, label, started.UnixNano(), filepath.ToSlash(filepath.Join("runs", id+".log")), owner)
 	s.mu.Unlock()
 	if err != nil {
 		_ = os.Remove(path)
@@ -154,13 +158,17 @@ func (s *Store) GetExecution(owner, id string) (Execution, error) {
 	if !validOwner(owner) || !validName(id, 128) {
 		return Execution{}, ErrExecutionNotFound
 	}
+	db, err := s.ownerDB(owner)
+	if err != nil {
+		return Execution{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.getExecutionLocked(owner, id)
+	return s.getExecutionLocked(db, owner, id)
 }
 
-func (s *Store) getExecutionLocked(owner, id string) (Execution, error) {
-	e, err := scanExecution(s.db.QueryRow(`SELECT `+executionColumns+` FROM runs WHERE owner = ? AND id = ?`, owner, id))
+func (s *Store) getExecutionLocked(db *sql.DB, owner, id string) (Execution, error) {
+	e, err := scanExecution(db.QueryRow(`SELECT `+executionColumns+` FROM runs WHERE owner = ? AND id = ?`, owner, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Execution{}, ErrExecutionNotFound
 	}
@@ -172,6 +180,10 @@ func (s *Store) getExecutionLocked(owner, id string) (Execution, error) {
 func (s *Store) FinishExecution(owner, id string, exitCode *int, success *bool, message string) (Execution, error) {
 	if !validOwner(owner) || !validName(id, 128) {
 		return Execution{}, ErrExecutionNotFound
+	}
+	db, err := s.ownerDB(owner)
+	if err != nil {
+		return Execution{}, err
 	}
 	message = truncateText(message, maxMessageLength)
 	var code, ok any
@@ -186,13 +198,13 @@ func (s *Store) FinishExecution(owner, id string, exitCode *int, success *bool, 
 		}
 	}
 	s.mu.Lock()
-	result, err := s.db.Exec(`UPDATE runs SET finished_at = ?, exit_code = ?, success = ?, message = ? WHERE owner = ? AND id = ? AND finished_at IS NULL`, time.Now().UnixNano(), code, ok, message, owner, id)
+	result, err := db.Exec(`UPDATE runs SET finished_at = ?, exit_code = ?, success = ?, message = ? WHERE owner = ? AND id = ? AND finished_at IS NULL`, time.Now().UnixNano(), code, ok, message, owner, id)
 	if err != nil {
 		s.mu.Unlock()
 		return Execution{}, err
 	}
 	changed, _ := result.RowsAffected()
-	execution, err := s.getExecutionLocked(owner, id)
+	execution, err := s.getExecutionLocked(db, owner, id)
 	s.mu.Unlock()
 	if err != nil {
 		return Execution{}, err
@@ -214,6 +226,10 @@ func (s *Store) ListExecutions(owner, subject string, limit int) ([]Execution, e
 	if limit > MaxExecutionLimit {
 		limit = MaxExecutionLimit
 	}
+	db, err := s.ownerDB(owner)
+	if err != nil {
+		return nil, err
+	}
 	query := `SELECT ` + executionColumns + ` FROM runs WHERE owner = ?`
 	args := []any{owner}
 	if subject != "" {
@@ -224,7 +240,7 @@ func (s *Store) ListExecutions(owner, subject string, limit int) ([]Execution, e
 	args = append(args, limit)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(query, args...)
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -241,8 +257,12 @@ func (s *Store) ListExecutions(owner, subject string, limit int) ([]Execution, e
 }
 
 func (s *Store) pruneExecutions(owner, subject string) {
+	db, err := s.ownerDB(owner)
+	if err != nil {
+		return
+	}
 	s.mu.Lock()
-	rows, err := s.db.Query(`SELECT id FROM runs WHERE owner = ? AND target_id = ? AND finished_at IS NOT NULL ORDER BY started_at DESC, rowid DESC LIMIT -1 OFFSET ?`, owner, subject, ExecutionRetention)
+	rows, err := db.Query(`SELECT id FROM runs WHERE owner = ? AND target_id = ? AND finished_at IS NOT NULL ORDER BY started_at DESC, rowid DESC LIMIT -1 OFFSET ?`, owner, subject, ExecutionRetention)
 	if err != nil {
 		s.mu.Unlock()
 		return
@@ -256,7 +276,7 @@ func (s *Store) pruneExecutions(owner, subject string) {
 	}
 	_ = rows.Close()
 	for _, id := range stale {
-		_, _ = s.db.Exec(`DELETE FROM runs WHERE owner = ? AND id = ?`, owner, id)
+		_, _ = db.Exec(`DELETE FROM runs WHERE owner = ? AND id = ?`, owner, id)
 	}
 	s.mu.Unlock()
 	for _, id := range stale {
@@ -267,10 +287,34 @@ func (s *Store) pruneExecutions(owner, subject string) {
 // AbandonExecutions finishes plugin executions left unfinished by a previous
 // RunPilot process. It must only run before any plugin can start work.
 func (s *Store) AbandonExecutions() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, err := s.db.Exec(`UPDATE runs SET finished_at = ?, success = 0, message = 'interrupted by RunPilot restart' WHERE owner != '' AND finished_at IS NULL`, time.Now().UnixNano())
-	return err
+	entries, err := os.ReadDir(filepath.Join(s.dataDir, "plugins"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !validOwner(entry.Name()) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(s.dataDir, "plugins", entry.Name(), "data", "history.db")); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		db, err := s.ownerDB(entry.Name())
+		if err != nil {
+			return err
+		}
+		s.mu.Lock()
+		_, err = db.Exec(`UPDATE runs SET finished_at = ?, success = 0, message = 'interrupted by RunPilot restart' WHERE owner = ? AND finished_at IS NULL`, time.Now().UnixNano(), entry.Name())
+		s.mu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ExecutionLog is a size-capped, concurrency-safe writer for one execution.

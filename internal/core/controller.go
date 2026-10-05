@@ -565,7 +565,7 @@ func (c *Controller) pluginStoragePath(pluginID string) (string, error) {
 	if !safePluginStorageID(pluginID) {
 		return "", fmt.Errorf("invalid plugin ID")
 	}
-	return filepath.Join(c.dataDir, "plugin-data", pluginID, "storage.json"), nil
+	return filepath.Join(c.dataDir, "plugins", pluginID, "data", "storage.json"), nil
 }
 func safePluginStorageID(id string) bool {
 	if id == "" || id != filepath.Base(id) {

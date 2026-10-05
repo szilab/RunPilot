@@ -1,6 +1,6 @@
 # RunPilot plugins
 
-RunPilot plugins are immutable `.rpplugin` packages installed below `<dataDir>/plugins/<id>/<version>`. Mutable data belongs below `<dataDir>/plugin-data/<id>`. Plugin enablement is framework configuration.
+RunPilot plugins are immutable `.rpplugin` packages installed below `<dataDir>/plugins/<id>/releases/<version>`. Mutable data belongs below `<dataDir>/plugins/<id>/data`. Plugin enablement is framework configuration.
 
 A package may contain:
 

@@ -356,9 +356,9 @@ runpilot.exe
 └── Embedded HTTP API + web UI
 ```
 
-Run history metadata is stored in a small embedded SQLite database while stdout
-and stderr remain in per-run log files. Existing `history.jsonl` records are
-migrated on startup without deleting the legacy file.
+Plugin execution history and logs live in each plugin's `data` directory under
+`<data-dir>/plugins/<id>/`. Legacy core run history and logs live under
+`<data-dir>/legacy/`.
 
 ## Docker Compose (Linux)
 

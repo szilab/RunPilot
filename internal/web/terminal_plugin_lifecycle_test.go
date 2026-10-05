@@ -96,14 +96,14 @@ func TestTerminalPluginUserLifecycleHTTP(t *testing.T) {
 	if err := store.Update(func(cfg *model.Config) error { cfg.PluginRegistry.URL = registry.URL + "/catalog.json"; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	otherState := filepath.Join(dataDir, "plugin-data", "tasks", "storage.json")
+	otherState := filepath.Join(dataDir, "plugins", "tasks", "data", "storage.json")
 	if err := os.MkdirAll(filepath.Dir(otherState), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(otherState, []byte(`{"retained":true}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	terminalData := filepath.Join(dataDir, "plugin-data", "terminal", "value")
+	terminalData := filepath.Join(dataDir, "plugins", "terminal", "data", "value")
 	if err := os.MkdirAll(filepath.Dir(terminalData), 0o755); err != nil {
 		t.Fatal(err)
 	}

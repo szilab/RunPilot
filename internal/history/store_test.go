@@ -10,40 +10,28 @@ import (
 	"github.com/szilab/RunPilot/internal/model"
 )
 
-func TestStoreMigratesLegacyHistoryIdempotently(t *testing.T) {
+func TestStoreUsesSeparateLegacyDirectory(t *testing.T) {
 	dataDir := t.TempDir()
-	started := time.Date(2026, 9, 18, 1, 2, 3, 0, time.UTC)
-	legacy := `{"id":"run-old","kind":"command","targetId":"job-one","targetName":"One","startedAt":"` + started.Format(time.RFC3339Nano) + `","finishedAt":"` + started.Add(time.Minute).Format(time.RFC3339Nano) + `","exitCode":0,"success":true,"logPath":"/old/path.log"}` + "\n" +
-		"not json\n" +
-		`{"id":"run-old","kind":"command","targetId":"job-one","targetName":"One","startedAt":"` + started.Format(time.RFC3339Nano) + `"}` + "\n"
-	if err := os.WriteFile(filepath.Join(dataDir, "history.jsonl"), []byte(legacy), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dataDir, "history.db"), []byte("old database"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := Open(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	runs, err := store.Recent("job-one", 20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(runs) != 1 || runs[0].ID != "run-old" {
-		t.Fatalf("migrated runs = %#v", runs)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	store, err = Open(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer store.Close()
-	runs, err = store.Recent("job-one", 20)
+	runs, err := store.Recent("", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(runs) != 1 {
-		t.Fatalf("re-migrated runs = %d", len(runs))
+	if len(runs) != 0 {
+		t.Fatalf("old database was imported: %#v", runs)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "legacy", "history.db")); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.RunLogPath("run-one"); got != filepath.Join(dataDir, "legacy", "runs", "run-one.log") {
+		t.Fatalf("legacy log path = %s", got)
 	}
 }
 

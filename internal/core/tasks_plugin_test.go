@@ -26,7 +26,7 @@ const tasksID = "tasks"
 func copyTasksPlugin(t *testing.T, dataDir string) {
 	t.Helper()
 	source := filepath.Join("..", "..", "plugins", tasksID)
-	destination := filepath.Join(dataDir, "plugins", tasksID, "0.1.0")
+	destination := filepath.Join(dataDir, "plugins", tasksID, "releases", "0.1.0")
 	for _, name := range []string{"plugin.yaml", "backend/plugin.wasm", "web/plugin.js", "web/plugin.css"} {
 		data, err := os.ReadFile(filepath.Join(source, filepath.FromSlash(name)))
 		if err != nil {
@@ -481,7 +481,7 @@ func TestTasksPluginShutdownStopsRunningProcessesAndAutostartsAgain(t *testing.T
 func TestTasksPluginMalformedStoredStateIsNotDestroyed(t *testing.T) {
 	dataDir := t.TempDir()
 	stored := `{"version":1,"tasks":[{"id":"task-1","name":`
-	path := filepath.Join(dataDir, "plugin-data", tasksID, "storage.json")
+	path := filepath.Join(dataDir, "plugins", tasksID, "data", "storage.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}

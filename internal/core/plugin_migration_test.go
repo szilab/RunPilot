@@ -23,14 +23,14 @@ func TestOpenCleansObsoleteSystemFixtureAndPreservesPluginData(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	legacy := filepath.Join(dataDir, "plugins", "system", "1.0.0")
+	legacy := filepath.Join(dataDir, "plugins", "system", "releases", "1.0.0")
 	if err := os.MkdirAll(filepath.Join(legacy, "backend"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(legacy, "plugin.yaml"), []byte("apiVersion: runpilot.plugin/v1\nid: system\nname: System\ndescription: Host status and resource usage\nversion: 1.0.0\nrequires:\n  runpilotApi: 1\nplatforms: [linux, windows]\nbackend:\n  module: backend/plugin.wasm\nfrontend:\n  module: web/plugin.js\n  stylesheet: web/plugin.css\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	data := filepath.Join(dataDir, "plugin-data", "system", "settings.json")
+	data := filepath.Join(dataDir, "plugins", "system", "data", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(data), 0o755); err != nil {
 		t.Fatal(err)
 	}

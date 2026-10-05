@@ -216,8 +216,10 @@ child process or growing memory without bound.
 
 `history.*` records executions per owner. The owner is always the calling plugin;
 IDs and log locations are host-generated and never accept paths. Execution
-metadata lives in the existing SQLite `runs` table (legacy history never lists
-plugin executions) and output in `runs/plugins/<owner>/<id>.log`.
+metadata and output live in the calling plugin's
+`<dataDir>/plugins/<owner>/data/history.db` and `data/runs/<id>.log`.
+Legacy core runs remain in `<dataDir>/legacy/history.db` and never list plugin
+executions.
 
 ```text
 history.begin   {kind, subject, label}            -> execution

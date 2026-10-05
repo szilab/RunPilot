@@ -208,7 +208,7 @@ Enable/disable persists desired state. Runtimes and frontend assets remain pinne
 to startup activation until restart, including after rescan or update. A failed
 backend is reported without preventing the application from starting.
 
-Uninstall disables desired activation, removes packages from discovery and retains `<dataDir>/plugin-data/<id>`.
+Uninstall disables desired activation, removes packages from discovery and retains `<dataDir>/plugins/<id>/data`.
 To keep active frontend assets usable until restart, package directories move to
 a private retired directory, which the next startup removes. No mutable plugin
 data is silently removed. Uninstall is restart-required.

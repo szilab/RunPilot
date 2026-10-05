@@ -82,9 +82,12 @@ func TestInstallPackageVerifiesChecksumAndInstallsAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InstallPackage() error = %v", err)
 	}
-	installed := filepath.Join(root, manifest.ID, manifest.Version, "backend", "plugin.wasm")
+	installed := filepath.Join(root, manifest.ID, "releases", manifest.Version, "backend", "plugin.wasm")
 	if _, err := os.Stat(installed); err != nil {
 		t.Fatalf("installed artifact missing: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(root, manifest.ID, "data")); err != nil || !info.IsDir() {
+		t.Fatalf("plugin data directory missing: %v", err)
 	}
 	if _, err := InstallPackage(root, packagePath, "bad"); err == nil {
 		t.Fatal("checksum mismatch was accepted")
@@ -108,7 +111,7 @@ func TestInstallPackageAddsVersionBesideExistingPluginVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, version := range []string{"1.0.0", "1.1.0"} {
-		if _, err := os.Stat(filepath.Join(root, "remote.xpra", version, "plugin.yaml")); err != nil {
+		if _, err := os.Stat(filepath.Join(root, "remote.xpra", "releases", version, "plugin.yaml")); err != nil {
 			t.Fatalf("version %s not installed: %v", version, err)
 		}
 	}

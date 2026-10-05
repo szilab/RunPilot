@@ -14,9 +14,9 @@ import (
 // System fixture used by older develop builds. The fixture predates backend
 // and frontend contract requirements, so it cannot be discovered by current
 // releases. Only its immutable package directory is removed; plugin data is
-// stored elsewhere and remains untouched.
+// stored in the sibling data directory and remains untouched.
 func CleanupObsoleteSystemFixture(root string) (bool, error) {
-	dir := filepath.Join(root, "system", "1.0.0")
+	dir := filepath.Join(root, "system", "releases", "1.0.0")
 	info, err := os.Lstat(dir)
 	if os.IsNotExist(err) {
 		return false, nil
@@ -76,7 +76,7 @@ func EnsureReferenceSystem(root string) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
-	if _, err := os.Stat(filepath.Join(root, manifest.ID, manifest.Version, "plugin.yaml")); err == nil {
+	if _, err := os.Stat(filepath.Join(root, manifest.ID, "releases", manifest.Version, "plugin.yaml")); err == nil {
 		return nil
 	}
 	file, err := os.CreateTemp(root, ".system-reference-*.rpplugin")

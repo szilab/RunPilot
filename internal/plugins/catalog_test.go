@@ -186,7 +186,7 @@ func TestDownloadAndInstall(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := os.Stat(filepath.Join(root, "remote.xpra", "1.0.0", ".runpilot-source.json")); err != nil {
+				if _, err := os.Stat(filepath.Join(root, "remote.xpra", "releases", "1.0.0", ".runpilot-source.json")); err != nil {
 					t.Fatal(err)
 				}
 				manager := New(filepath.Dir(root))

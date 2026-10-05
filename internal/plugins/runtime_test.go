@@ -242,7 +242,7 @@ func TestSystemRPPluginInstallsAndLoadsThroughNormalPath(t *testing.T) {
 	if manifest.Requires.RunPilotAPI != PluginABIVersion2 {
 		t.Fatalf("installed System ABI = %d", manifest.Requires.RunPilotAPI)
 	}
-	installedDir := filepath.Join(installRoot, manifest.ID, manifest.Version)
+	installedDir := filepath.Join(installRoot, manifest.ID, "releases", manifest.Version)
 	runtime, err := LoadRuntime(context.Background(), installedDir, manifest, systemStatusHost{})
 	if err != nil {
 		t.Fatalf("load installed System package: %v", err)
@@ -270,7 +270,7 @@ func TestBuiltSystemPackageArtifact(t *testing.T) {
 	if manifest.ID != "system" || manifest.Requires.RunPilotAPI != PluginABIVersion2 {
 		t.Fatalf("built package manifest = %#v", manifest)
 	}
-	runtime, err := LoadRuntime(context.Background(), filepath.Join(installRoot, manifest.ID, manifest.Version), manifest, systemStatusHost{})
+	runtime, err := LoadRuntime(context.Background(), filepath.Join(installRoot, manifest.ID, "releases", manifest.Version), manifest, systemStatusHost{})
 	if err != nil {
 		t.Fatalf("load built System package: %v", err)
 	}

@@ -91,7 +91,7 @@ func TestManagerSemverAndRetiredAssets(t *testing.T) {
 	root := filepath.Join(dataDir, "plugins")
 	for _, version := range []string{"1.9.0", "1.10.0"} {
 		manifest := Manifest{APIVersion: PluginAPIVersion, ID: "test", Name: "Test", Version: version, Requires: Requires{Frontend: ">=1.0.0 <2.0.0"}, Frontend: &FrontendManifest{Module: "web/plugin.js"}}
-		path := filepath.Join(root, "test", version)
+		path := filepath.Join(root, "test", "releases", version)
 		if err := os.MkdirAll(filepath.Join(path, "web"), 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -116,7 +116,7 @@ func TestManagerSemverAndRetiredAssets(t *testing.T) {
 	if len(manager.FrontendExtensions()) != 1 {
 		t.Fatal("disable hot unloaded frontend")
 	}
-	storage := filepath.Join(dataDir, "plugin-data", "test")
+	storage := filepath.Join(dataDir, "plugins", "test", "data")
 	if err := os.MkdirAll(storage, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -137,9 +137,8 @@ func TestManagerSemverAndRetiredAssets(t *testing.T) {
 	if errs := next.Reload(); len(errs) > 0 {
 		t.Fatal(errs)
 	}
-	entries, _ := os.ReadDir(root)
-	if len(entries) != 0 {
-		t.Fatal("retired packages not cleaned on restart")
+	if _, err := os.Stat(filepath.Join(root, "test", "releases", "1.10.0")); !os.IsNotExist(err) {
+		t.Fatal("retired package remains after restart", err)
 	}
 	if _, err := os.Stat(storage); err != nil {
 		t.Fatal("plugin data deleted")

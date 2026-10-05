@@ -226,7 +226,7 @@ func TestRemoteRDPPluginWASMNegotiatesThroughController(t *testing.T) {
 	if _, err := peer.Read(fromBrowser); err != nil || string(fromBrowser) != "browser-ready" {
 		t.Fatalf("post-handshake stream write=%q err=%v", fromBrowser, err)
 	}
-	stored, err := os.ReadFile(filepath.Join(dataDir, "plugin-data", remoteRDPPluginID, "storage.json"))
+	stored, err := os.ReadFile(filepath.Join(dataDir, "plugins", remoteRDPPluginID, "data", "storage.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestRemoteRDPPluginWASMNegotiatesThroughController(t *testing.T) {
 func copyRemoteRDPPlugin(t *testing.T, dataDir string) {
 	t.Helper()
 	source := filepath.Join("..", "..", "plugins", "remote-rdp")
-	destination := filepath.Join(dataDir, "plugins", remoteRDPPluginID, "1.0.2")
+	destination := filepath.Join(dataDir, "plugins", remoteRDPPluginID, "releases", "1.0.2")
 	for _, name := range []string{"plugin.yaml", "backend/plugin.wasm", "web/plugin.js", "web/plugin.css"} {
 		data, err := os.ReadFile(filepath.Join(source, filepath.FromSlash(name)))
 		if err != nil {

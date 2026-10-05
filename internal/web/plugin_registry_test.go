@@ -157,7 +157,7 @@ func TestPluginRegistryLifecycleHTTP(t *testing.T) {
 		t.Fatal("update replaced active frontend")
 	}
 	request("POST", "/api/v1/plugins/example/install", `{"version":"1.0.0"}`, 409)
-	storage := filepath.Join(dataDir, "plugin-data", "example", "value")
+	storage := filepath.Join(dataDir, "plugins", "example", "data", "value")
 	if err := os.MkdirAll(filepath.Dir(storage), 0755); err != nil {
 		t.Fatal(err)
 	}

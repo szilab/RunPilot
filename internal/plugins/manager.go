@@ -76,8 +76,11 @@ func (m *Manager) Reload() []error {
 			continue
 		}
 		idRoot := filepath.Join(m.root, entry.Name())
-		versions, readErr := os.ReadDir(idRoot)
+		versions, readErr := os.ReadDir(filepath.Join(idRoot, "releases"))
 		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				continue
+			}
 			errs = append(errs, readErr)
 			continue
 		}
@@ -97,7 +100,7 @@ func (m *Manager) Reload() []error {
 			if !versions[i].IsDir() {
 				continue
 			}
-			manifest, manifestErr := loadManifest(filepath.Join(idRoot, versions[i].Name(), "plugin.yaml"))
+			manifest, manifestErr := loadManifest(filepath.Join(idRoot, "releases", versions[i].Name(), "plugin.yaml"))
 			if manifestErr != nil {
 				errs = append(errs, fmt.Errorf("%s: %w", entry.Name(), manifestErr))
 				continue
@@ -106,7 +109,7 @@ func (m *Manager) Reload() []error {
 				errs = append(errs, fmt.Errorf("package directory does not match manifest: %s/%s", entry.Name(), versions[i].Name()))
 				continue
 			}
-			discovered[manifest.ID] = &installedPlugin{manifest: manifest, dir: filepath.Join(idRoot, versions[i].Name())}
+			discovered[manifest.ID] = &installedPlugin{manifest: manifest, dir: filepath.Join(idRoot, "releases", versions[i].Name())}
 			break
 		}
 	}
@@ -327,7 +330,7 @@ func (m *Manager) SetFailure(id string, err error) {
 }
 
 // Uninstall removes the package from discovery. Active assets stay pinned in a
-// private retired directory until the next startup; plugin-data is untouched.
+// private retired directory until the next startup; mutable data is untouched.
 func (m *Manager) Uninstall(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -339,12 +342,19 @@ func (m *Manager) Uninstall(id string) error {
 		return err
 	}
 	target := filepath.Join(retired, id)
-	if err := os.Rename(filepath.Join(m.root, id), target); err != nil {
+	if err := os.MkdirAll(target, 0o755); err != nil {
 		_ = os.RemoveAll(retired)
 		return err
 	}
+	if err := os.Rename(filepath.Join(m.root, id, "releases"), filepath.Join(target, "releases")); err != nil {
+		_ = os.RemoveAll(retired)
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(m.root, id, "releases"), 0o755); err != nil {
+		return err
+	}
 	if p := m.active[id]; p != nil {
-		p.dir = filepath.Join(target, p.manifest.Version)
+		p.dir = filepath.Join(target, "releases", p.manifest.Version)
 	}
 	delete(m.plugins, id)
 	m.restartRequired = true

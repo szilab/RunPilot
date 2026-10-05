@@ -103,8 +103,8 @@ host.log.*
 ```
 
 `host.history.*` is a generic, owner-scoped execution record with captured
-output, backed by RunPilot's existing SQLite history and run-log files. Plugins
-never supply filesystem paths and never store growing logs in `plugin-data`.
+output. Each plugin's SQLite history and run logs live in its mutable data
+directory. Plugins never supply filesystem paths.
 
 Additional families such as filesystem or network access should be added only
 when a real plugin needs a narrow, reusable operation. Do not add generic
@@ -162,7 +162,7 @@ uses the existing atomic installer.
 Settings exposes installed/available/update/incompatible state plus explicit
 install, update, enable/disable and uninstall operations. New installations are
 not silently enabled, updates are not automatic, and activation remains pinned
-until restart. Mutable `plugin-data/<id>` is retained on uninstall.
+until restart. Mutable `plugins/<id>/data` is retained on uninstall.
 
 Publication policy is repository-owned. The System fixture and incomplete Remote
 scaffolds are intentionally excluded from the public catalog.
@@ -200,9 +200,9 @@ scheduler, process, history and event capabilities without adding a Task host
 capability.
 
 The plugin owns the normal `tasks` page. Legacy task definitions in
-`runpilot.yaml`, their Run history and the legacy backend remain intact but are
-not shown in the normal UI. No automatic conversion is performed; migration or
-cleanup requires a separate decision. **Backup is not part of the Tasks
+`runpilot.yaml` and the legacy backend remain intact but are not shown in the
+normal UI. New legacy runs use `<dataDir>/legacy`; old local history is not
+imported. **Backup is not part of the Tasks
 plugin**: Backup jobs remain in the legacy job engine until their own migration.
 
 The capability changes made for Tasks are generic framework infrastructure:

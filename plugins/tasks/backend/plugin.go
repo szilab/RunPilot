@@ -126,7 +126,7 @@ func (pl *plugin) publish(event string, data any) {
 
 // load reads persisted definitions. Unreadable state is never overwritten:
 // the plugin stays read-only and reports loadError until an administrator
-// repairs or removes plugin-data/tasks/storage.json.
+// repairs or removes plugins/tasks/data/storage.json.
 func (pl *plugin) load() {
 	var raw json.RawMessage
 	if err := callHost("storage.get", map[string]any{"key": storageKey}, &raw); err != nil {
