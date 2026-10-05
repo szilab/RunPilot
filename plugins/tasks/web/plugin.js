@@ -302,32 +302,40 @@ export function activate(runpilot) {
     const schedule = task?.schedule || { type: "interval" };
     const restart = task?.restart || { mode: "on-failure", initialDelaySeconds: 2, maxDelaySeconds: 60, maxRetries: 0 };
     const continuousFields = `
+      <label class="check span-2"><input name="autostart" type="checkbox" ${task?.autostart ? "checked" : ""}> Start automatically with RunPilot</label>`;
+    const continuousAdvancedFields = `
       <label>Restart policy<select name="restartMode">${optionList([["on-failure", "On failure"], ["always", "Always"], ["never", "Never"]], restart.mode)}</select></label>
       <label>Initial restart delay (s)<input name="restartInitial" type="number" min="1" value="${esc(restart.initialDelaySeconds)}"></label>
       <label>Maximum restart delay (s)<input name="restartMax" type="number" min="1" value="${esc(restart.maxDelaySeconds)}"></label>
-      <label>Maximum retries (0 = unlimited)<input name="restartRetries" type="number" min="0" value="${esc(restart.maxRetries)}"></label>
-      <label class="check span-2"><input name="autostart" type="checkbox" ${task?.autostart ? "checked" : ""}> Start automatically with RunPilot</label>`;
+      <label>Maximum retries (0 = unlimited)<input name="restartRetries" type="number" min="0" value="${esc(restart.maxRetries)}"></label>`;
     const scheduledFields = `
       <label>Schedule<select name="scheduleType">${optionList([["interval", "Interval"], ["daily", "Daily"], ["cron", "Cron"]], schedule.type)}</select></label>
       <label data-schedule="interval">Every<span class="tasks-plugin-inline"><input name="intervalValue" type="number" min="1" value="${esc(amount)}"><select name="intervalUnit" aria-label="Interval unit">${optionList([["seconds", "seconds"], ["minutes", "minutes"], ["hours", "hours"]], unit)}</select></span></label>
       <label data-schedule="daily" class="hidden">Time<input name="time" type="time" value="${esc(schedule.timeOfDay || "03:00")}"></label>
       <label data-schedule="cron" class="hidden">Cron (5 or 6 fields)<input name="cron" placeholder="0 */20 * * * *" value="${esc(schedule.cron || "")}"></label>
+      <label class="check span-2"><input name="enabled" type="checkbox" ${!task || task.enabled ? "checked" : ""}> Schedule enabled</label>`;
+    const scheduledAdvancedFields = `
       <label>Time zone (optional)<input name="timeZone" placeholder="Europe/Budapest" value="${esc(schedule.timeZone || "")}"></label>
       <label>If still running<select name="overlap">${optionList([["skip", "Skip the new run"], ["allow", "Run in parallel"]], task?.overlapPolicy || "skip")}</select></label>
-      <label>Timeout (s, 0 = none)<input name="timeout" type="number" min="0" value="${esc(task?.timeoutSeconds || 0)}"></label>
-      <label class="check span-2"><input name="enabled" type="checkbox" ${!task || task.enabled ? "checked" : ""}> Schedule enabled</label>`;
+      <label>Timeout (s, 0 = none)<input name="timeout" type="number" min="0" value="${esc(task?.timeoutSeconds || 0)}"></label>`;
     dialog.innerHTML = `<form method="dialog">
       <div class="dialog-head"><div><h2>${task ? "Edit" : "Add"} ${type === "continuous" ? "continuous" : "scheduled"} task</h2><p>${type === "continuous" ? "Run continuously and supervise its lifecycle." : "Run a command according to a schedule."}</p></div><button class="icon-btn" type="button" data-editor="close" aria-label="Close">×</button></div>
       <input type="hidden" name="id" value="${esc(task?.id || "")}"><input type="hidden" name="type" value="${esc(type)}">
       <div class="form-grid">
-        <label>Name<input name="name" required maxlength="200" value="${esc(task?.name || "")}"></label>
-        <label>Interpreter<select name="interpreter">${optionList(INTERPRETERS, command.interpreter || "auto")}</select></label>
-        <label class="span-2">Description<input name="description" maxlength="2000" placeholder="Optional" value="${esc(task?.description || "")}"></label>
+        <label class="span-2">Name<input name="name" required maxlength="200" value="${esc(task?.name || "")}"></label>
         <label class="span-2">Executable, script, or inline command<input name="path" required placeholder="/opt/runpilot/myapp, C:\\Tools\\task.ps1, or ls -la /" value="${esc(command.path || "")}"></label>
         <label class="span-2">Arguments<input name="args" placeholder="--port 8080 --mode service" value="${esc(formatArgs(command.args))}"></label>
-        <label class="span-2">Working directory<input name="cwd" placeholder="Optional" value="${esc(command.workingDirectory || "")}"></label>
-        <div class="environment-editor span-2"><div class="environment-head"><div><strong>Environment variables</strong><span>Optional values passed only to this task.</span></div><button class="button secondary small" type="button" data-editor="add-env">+ Add variable</button></div><div class="environment-rows" data-env-rows></div></div>
         ${type === "continuous" ? continuousFields : scheduledFields}
+        <details class="tasks-plugin-advanced span-2">
+          <summary>Advanced parameters</summary>
+          <div class="form-grid tasks-plugin-advanced-fields">
+            <label class="span-2">Description<input name="description" maxlength="2000" placeholder="Optional" value="${esc(task?.description || "")}"></label>
+            <label>Interpreter<select name="interpreter">${optionList(INTERPRETERS, command.interpreter || "auto")}</select></label>
+            <label>Working directory<input name="cwd" placeholder="Optional" value="${esc(command.workingDirectory || "")}"></label>
+            <div class="environment-editor span-2"><div class="environment-head"><div><strong>Environment variables</strong><span>Optional values passed only to this task.</span></div><button class="button secondary small" type="button" data-editor="add-env">+ Add variable</button></div><div class="environment-rows" data-env-rows></div></div>
+            ${type === "continuous" ? continuousAdvancedFields : scheduledAdvancedFields}
+          </div>
+        </details>
       </div>
       <p class="form-error hidden" role="alert" data-editor-error></p>
       <div class="dialog-actions"><button class="button secondary" type="button" data-editor="close">Cancel</button><button class="button primary" value="default">Save task</button></div>

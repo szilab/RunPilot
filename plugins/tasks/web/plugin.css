@@ -2,6 +2,13 @@
 .tasks-plugin-toolbar { display: flex; justify-content: space-between; align-items: center; gap: var(--rp-space-2); flex-wrap: wrap; }
 .tasks-plugin-inline { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--rp-space-1); }
 .tasks-plugin-dialog { max-height: calc(100vh - 32px); overflow: auto; }
+.tasks-plugin-advanced { min-width: 0; border: 1px solid var(--rp-border); border-radius: var(--rp-radius-card); background: var(--rp-surface-elevated); }
+.tasks-plugin-advanced > summary { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; color: var(--rp-text-strong); font-size: 13px; font-weight: 600; cursor: pointer; list-style: none; }
+.tasks-plugin-advanced > summary::-webkit-details-marker { display: none; }
+.tasks-plugin-advanced > summary::after { content: ""; width: 7px; height: 7px; border: solid currentColor; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.tasks-plugin-advanced[open] > summary::after { transform: rotate(225deg); }
+.tasks-plugin-advanced > summary:focus-visible { outline: 2px solid var(--rp-accent); outline-offset: -3px; border-radius: var(--rp-radius-card); }
+.tasks-plugin-advanced-fields { padding: 2px 14px 14px; }
 .tasks-plugin-output { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
 .tasks-plugin .row[data-task] > .row-head { grid-column: 1; grid-row: 1; }
 .tasks-plugin .row[data-task] > .row-details { grid-column: 2; grid-row: 1; }

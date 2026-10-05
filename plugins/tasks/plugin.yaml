@@ -2,7 +2,7 @@ apiVersion: runpilot.plugin/v1
 id: tasks
 name: Tasks
 description: Continuous and scheduled command tasks with execution history
-version: 0.1.1
+version: 0.1.2
 requires:
   frontend: ">=1.0.0 <2.0.0"
   backend: ">=1.0.0 <2.0.0"
