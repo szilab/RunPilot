@@ -144,7 +144,10 @@ Style selection is framework-owned. System/Light/Dark color scheme is separate f
 
 ## Overview and Settings
 
-Overview is an extension surface: cards are registered by plugins and core does not know their feature semantics.
+Overview is a widget extension surface: plugins register stable IDs, titles,
+size hints and mount/refresh/dispose hooks. Core owns the card shell and widget
+lifecycle, without knowing feature semantics. See the frontend contract in
+[PLUGIN_API.md](PLUGIN_API.md).
 
 Settings is a core shell. Framework sections cover RunPilot, Appearance and plugin management; plugins register their own settings sections and own their schema/meaning/editor.
 

@@ -2,7 +2,7 @@ apiVersion: runpilot.plugin/v1
 id: docker
 name: Docker
 description: Docker Compose projects, containers, volumes and networks
-version: 0.1.0
+version: 0.1.1
 requires:
   frontend: ">=1.0.0 <2.0.0"
   backend: ">=1.0.0 <2.0.0"

@@ -97,13 +97,22 @@ export function taskFromForm(v) {
   return task;
 }
 
+export function taskOverviewSummary(views = []) {
+  const enabled = views.filter(v => v.task.type === "continuous" || v.task.enabled).length;
+  const running = views.reduce((count, v) => count + (v.status.runningCount || (v.status.state === "running" ? 1 : 0)), 0);
+  const failed = views.filter(v => v.status.state === "failure" || v.status.lastSuccess === false || !!v.status.error).length;
+  const recent = views.filter(v => v.status.lastRunAt).sort((a,b) => Date.parse(b.status.lastRunAt) - Date.parse(a.status.lastRunAt)).slice(0, 2);
+  const scheduled = views.filter(v => v.task.type === "scheduled" && v.task.enabled).slice(0, 2);
+  return {enabled,running,failed,recent,scheduled};
+}
+
 // ---- activation ----------------------------------------------------------
 
 export function activate(runpilot) {
   const { ui } = runpilot;
   const esc = ui.escape;
   const state = { tasks: [], loadError: "", error: "", filter: "all", loaded: false, busy: new Set() };
-  let page = null;
+  let page = null, widgetBody = null;
   const wired = new WeakSet();
 
   // Plugin-level failures arrive as {error:{code,message}} results.
@@ -189,7 +198,7 @@ export function activate(runpilot) {
       state.error = error.message;
     }
     state.loaded = true;
-    render();
+    render(); renderWidget();
   }
 
   async function act(id, method) {
@@ -202,7 +211,7 @@ export function activate(runpilot) {
       else if (view?.task?.id) upsert(view);
     } catch (error) { fail(error); }
     state.busy.delete(id);
-    render();
+    render(); renderWidget();
   }
 
   function upsert(view) {
@@ -428,14 +437,29 @@ export function activate(runpilot) {
     loadRuns(true);
   }
 
+  function renderWidget() {
+    if (!widgetBody?.isConnected) return;
+    widgetBody.replaceChildren();
+    if (state.error || state.loadError) { const note=document.createElement("p");note.setAttribute("role","alert");note.textContent=state.error||state.loadError;widgetBody.append(note);return; }
+    const summary=taskOverviewSummary(state.tasks);
+    const stats=document.createElement("div");stats.className="overview-stat-row";
+    for(const [label,value] of [["Enabled",summary.enabled],["Running",summary.running],["Failed",summary.failed]]) {const cell=document.createElement("div");cell.className="overview-stat";const strong=document.createElement("strong");strong.textContent=value;const small=document.createElement("span");small.textContent=label;cell.append(strong,small);stats.append(cell);}
+    widgetBody.append(stats);
+    for(const view of summary.scheduled) {const row=document.createElement("div");row.className="overview-fact";const name=document.createElement("span");name.textContent=view.task.name;const schedule=document.createElement("strong");schedule.textContent=scheduleText(view.task.schedule);row.append(name,schedule);widgetBody.append(row);}
+    if (summary.recent[0]) {const view=summary.recent[0];const note=document.createElement("p");note.className="overview-widget-note";note.textContent=`Last run: ${view.task.name} · ${view.status.lastSuccess === false ? "Failed" : view.status.lastSuccess === true ? "Success" : "Unknown"}`;widgetBody.append(note);}
+    const open=document.createElement("button");open.type="button";open.className="button secondary small";open.textContent="Open Tasks";open.onclick=()=>runpilot.navigation.open("tasks");widgetBody.append(open);
+  }
+  runpilot.overview.register({id:"tasks.summary",title:"Tasks",size:"medium",order:30,mount(body){widgetBody=body;renderWidget();return load();},refresh(){renderWidget();},dispose(){widgetBody=null;}});
+
   // ---- events: the only refresh mechanism (no polling)
 
   const unsubscribers = [
     runpilot.ws.on(PLUGIN, "tasks.changed", () => load()),
-    runpilot.ws.on(PLUGIN, "tasks.status", view => { if (view?.task?.id) { upsert(view); render(); } }),
+    runpilot.ws.on(PLUGIN, "tasks.status", view => { if (view?.task?.id) { upsert(view); render(); renderWidget(); } }),
     runpilot.ws.on(PLUGIN, "tasks.run.completed", data => {
       if (data && data.success === false && data.message !== "stopped") ui.toast(`${data.name || "Task"} failed: ${data.message || "unknown error"}`, "error");
       if (history.dialog?.open && history.task?.task.id === data?.id) loadRuns(false);
+      load();
     }),
     runpilot.ws.on(PLUGIN, "history.output", data => {
       if (history.dialog?.open && data?.id === history.selected) loadOutput();

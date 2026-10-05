@@ -40,7 +40,7 @@ for (const invalid of ["#runpilot-publication=bad-json", "#runpilot-publication=
   assert.equal(test.scripts.length, 0); assert.equal(test.tab.credential, null); assert.match(test.status.textContent, /Invalid/);
 }
 const normal = rootContext("#ordinary-page"); await vm.runInNewContext(rootEntry, normal.context);
-assert.deepEqual(normal.scripts, ["https://host/p/app.js"]); assert.equal(normal.tab.credential, "copied");
+assert.deepEqual(normal.scripts, ["https://host/p/overview-widgets.js", "https://host/p/dashboard.js", "https://host/p/app.js"]); assert.equal(normal.tab.credential, "copied");
 const stale = rootContext("", "runpilot.browser:" + JSON.stringify({ runtime: ids.runtime, publication: ids.publication, handle: "h".repeat(32) }));
 await vm.runInNewContext(rootEntry, stale.context); assert.equal(stale.scripts.length, 1); assert.ok(!stale.scripts[0].endsWith("app.js"));
 

@@ -402,6 +402,32 @@ instead of opening their own application WebSocket. Navigation/pages, Overview
 cards and Settings sections are registered through the corresponding extension
 hosts.
 
+Overview widgets use the compatible frontend 1.x surface:
+
+```javascript
+const unregister = runpilot.overview.register({
+  id: "example.summary", title: "Example", size: "medium", order: 30,
+  async mount(body) { /* create content, load initial data; may return cleanup */ },
+  async refresh(body) { /* update while Overview is visible */ },
+  dispose() { /* release listeners, timers and references */ },
+});
+```
+
+IDs are global and stable. Re-registering the same ID for the same plugin is
+idempotent; another plugin cannot claim it. `size` is `small`, `medium` or
+`wide`; `order` is numeric, with IDs breaking ties. The host creates a themed
+card, shows loading/errors per widget, and catches failures so other cards keep
+working. `mount` runs each time Overview opens and may return a cleanup
+function. `dispose` runs when it closes or the plugin unloads. `refresh` runs
+while Overview is open, at a moderate interval or from the Refresh button.
+`unregister()` removes the widget immediately; plugin unload also removes all
+its widgets. Plugins should stop their own event listeners on deactivation.
+Use the shared `overview-stat-row`, `overview-stat`, `overview-fact` and
+`overview-widget-note` classes or plugin CSS with semantic `--rp-*` tokens.
+Navigation shortcuts use `runpilot.navigation.open("page-id")`.
+Legacy `register({id, render})` cards and `runpilot.overview.render()` remain
+available in frontend 1.x; new widgets should use lifecycle hooks.
+
 Navigation entries may use a plugin-packaged image, for example
 `icon: { src: new URL("./icon.svg", import.meta.url).href }`. The shell displays
 it at 20 × 20 pixels with the same spacing as core navigation icons. The

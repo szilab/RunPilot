@@ -47,6 +47,11 @@
         <div id="overviewMetrics" class="overview-metrics"></div>
       </section>
 
+      <section id="embeddedPage" class="page">
+        <div class="overview-embedded-bar"><button id="embeddedBack" class="button secondary small" type="button">← Overview</button><a id="embeddedExternal" class="button secondary small" target="_blank" rel="noopener noreferrer">Open in new tab</a></div>
+        <iframe id="embeddedFrame" title="Embedded application" sandbox="allow-forms allow-scripts allow-popups allow-downloads" referrerpolicy="no-referrer"></iframe>
+      </section>
+
       <section id="legacyTasksPage" class="page">
         <div class="section-head"><div class="task-filters" role="group" aria-label="Task type"><button class="button secondary small active" data-task-filter="all">All</button><button class="button secondary small" data-task-filter="continuous">Continuous</button><button class="button secondary small" data-task-filter="scheduled">Scheduled</button><button class="button secondary small" data-task-filter="backup">Backup</button></div></div>
         <div id="taskGrid" class="row-list"></div>

@@ -36,6 +36,7 @@ var staticFS embed.FS
 
 type Server struct {
 	ctrl                *core.Controller
+	startedAt           time.Time
 	basePath            string
 	restartHandler      func()
 	tickets             map[string]downloadTicket
@@ -76,7 +77,7 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err := ctrl.SetBrowserBasePath(basePath); err != nil {
 		return nil, err
 	}
-	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, dockerTerminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), dockerAttachTickets: map[string]dockerAttachTicket{}, remoteTickets: map[string]remoteClientTicket{}, applicationTickets: map[string]time.Time{}, docker: ctrl.Docker()}, nil
+	return &Server{ctrl: ctrl, startedAt: time.Now(), basePath: basePath, tickets: map[string]downloadTicket{}, dockerTerminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), dockerAttachTickets: map[string]dockerAttachTicket{}, remoteTickets: map[string]remoteClientTicket{}, applicationTickets: map[string]time.Time{}, docker: ctrl.Docker()}, nil
 }
 
 func (s *Server) BasePath() string { return s.basePath }
@@ -106,6 +107,9 @@ func (s *Server) Handler() http.Handler {
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/v1/system", s.handleSystem)
+	api.HandleFunc("GET /api/v1/dashboard/status", s.handleDashboardStatus)
+	api.HandleFunc("GET /api/v1/launcher", s.handleLauncherGet)
+	api.HandleFunc("PUT /api/v1/launcher", s.handleLauncherPut)
 	api.HandleFunc("POST /api/v1/ws/ticket", s.handleApplicationTicket)
 	api.HandleFunc("GET /api/v1/plugins", s.handlePlugins)
 	api.HandleFunc("POST /api/v1/restart", s.handleRestartApplication)

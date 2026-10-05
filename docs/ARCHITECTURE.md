@@ -144,10 +144,12 @@ Core owns layout and visual primitives; plugins own feature pages and feature
 semantics. Plugin CSS should use public semantic design tokens rather than
 hard-code RunPilot's current colors or spacing.
 
-Overview and Settings remain core extension hosts. Overview renders plugin
-contributions; host monitoring presentation is planned as widget contributions.
-The current System package is a technical fixture, not the intended user-facing
-System feature.
+Overview and Settings remain core extension hosts. Overview is a responsive
+widget host with built-in System, RunPilot and Launcher cards; plugins register
+feature summaries with stable IDs and mount/refresh/dispose hooks. Host metrics
+reuse the existing platform adapters. Launcher shortcuts live in framework
+configuration. The current System package remains a technical fixture, not the
+user-facing System feature.
 
 ## Plugin publication and installation
 
@@ -184,7 +186,7 @@ plugin work; see the [backlog](../BACKLOG.md).
 
 ### Docker status
 
-Docker has a Linux-only first-party plugin (`plugins/docker`, version `0.1.0`,
+Docker has a Linux-only first-party plugin (`plugins/docker`, source version `0.1.1`,
 ABI v2) for Compose projects, containers, volumes, networks and interactive
 container terminals. It owns the normal `docker` page and uses generic bounded
 `process.run`, owner-scoped `workspace.*`, and `process.session.*` capabilities.
@@ -208,7 +210,7 @@ are designed; see the concise [backlog](../BACKLOG.md).
 
 ### Tasks status
 
-Tasks has a publishable first-party plugin (`plugins/tasks`, version `0.1.0`,
+Tasks has a publishable first-party plugin (`plugins/tasks`, source version `0.1.3`,
 ABI v2, never auto-enabled). It covers continuous command tasks and
 scheduled command tasks, owns their definitions and semantics, and talks to the
 browser only through the common WebSocket. It runs on the generic storage,
@@ -229,8 +231,8 @@ ordered/bounded event delivery. See [PLUGIN_API.md](PLUGIN_API.md).
 The async ABI-v2 process/scheduler/event path remains covered by real-WASM
 race/integration tests.
 
-The widget contribution model should be designed when the first real widgets are
-implemented, rather than by expanding the System fixture now.
+Tasks and Docker now contribute compact Overview widgets from their frontends.
+Their business logic and backend RPCs remain plugin-owned.
 
 ## Security and guardrails
 

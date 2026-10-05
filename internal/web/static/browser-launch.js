@@ -9,7 +9,7 @@
   });
   const params = new URLSearchParams(location.hash.slice(1));
   let launch, restricted = params.has(marker) || globalThis.name?.startsWith(namePrefix);
-  if (!restricted) { await load(new URL("app.js", document.baseURI).href); return; }
+  if (!restricted) { await load(new URL("overview-widgets.js", document.baseURI).href); await load(new URL("dashboard.js", document.baseURI).href); await load(new URL("app.js", document.baseURI).href); return; }
   // This tab must never migrate or acquire management credentials, even on errors.
   RunPilotAuthStorage.clearShared(localStorage); sessionStorage.removeItem("runpilot.token");
   const title = document.createElement("h1"), status = document.createElement("p");

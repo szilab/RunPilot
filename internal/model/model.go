@@ -159,7 +159,17 @@ type Config struct {
 	// Plugins contains mutable administrator choices. Plugin manifests are
 	// installation metadata and must never be rewritten when a user toggles a
 	// plugin.
-	Plugins map[string]PluginSettings `json:"plugins,omitempty" yaml:"plugins,omitempty"`
+	Plugins  map[string]PluginSettings `json:"plugins,omitempty" yaml:"plugins,omitempty"`
+	Launcher []LauncherEntry           `json:"launcher,omitempty" yaml:"launcher,omitempty"`
+}
+
+// LauncherEntry is framework configuration for an Overview shortcut.
+type LauncherEntry struct {
+	ID       string `json:"id" yaml:"id"`
+	Name     string `json:"name" yaml:"name"`
+	URL      string `json:"url" yaml:"url"`
+	Icon     string `json:"icon,omitempty" yaml:"icon,omitempty"`
+	OpenMode string `json:"openMode" yaml:"openMode"`
 }
 
 type PluginRegistryConfig struct {

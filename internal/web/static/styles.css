@@ -516,3 +516,41 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
   .environment-editor.span-2 { grid-column: auto; }
   label.span-2 { grid-column: auto; }
 }
+
+/* Overview widget host */
+.overview-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--rp-space-3); border:0; overflow:visible; background:transparent; align-items:start; }
+.overview-widget { grid-column:span 2; min-width:0; padding:18px; border:1px solid var(--rp-border); border-radius:var(--rp-radius-large); background:var(--rp-surface-elevated); box-shadow:0 5px 20px rgba(0,0,0,.035); }
+.overview-widget[data-size="small"] { grid-column:span 1; }
+.overview-widget[data-size="wide"] { grid-column:span 4; }
+.overview-widget-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+.overview-widget-head h2 { margin:0; color:var(--rp-text-strong); font-size:17px; }
+.overview-widget-body { display:grid; gap:10px; min-width:0; }
+.overview-fact, .overview-meter-label { display:flex; justify-content:space-between; align-items:baseline; gap:10px; min-width:0; font-size:13px; }
+.overview-fact span, .overview-meter-label span, .overview-widget-note { color:var(--rp-text-muted); }
+.overview-fact strong, .overview-meter-label strong { color:var(--rp-text-strong); font-weight:600; text-align:right; overflow-wrap:anywhere; }
+.overview-meter { height:6px; margin-top:-5px; background:var(--rp-border); border-radius:999px; overflow:hidden; }
+.overview-meter span { display:block; height:100%; border-radius:inherit; background:var(--rp-accent); }
+.overview-stat-row { display:flex; gap:10px; flex-wrap:wrap; }
+.overview-stat { display:grid; gap:3px; flex:1 1 75px; min-width:0; padding:10px; border-radius:var(--rp-radius); background:var(--rp-surface); text-align:center; }
+.overview-stat strong { color:var(--rp-text-strong); font-size:22px; }
+.overview-stat span { color:var(--rp-text-muted); font-size:11px; }
+.overview-widget-note, .overview-widget-error { margin:2px 0; font-size:12px; overflow-wrap:anywhere; }
+.overview-widget-error { color:var(--rp-danger,#b91c1c); }
+.overview-launcher-toolbar { display:flex; justify-content:flex-end; }
+.overview-launcher-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:12px; }
+.overview-launcher-item { min-width:0; padding:10px; border:1px solid var(--rp-border); border-radius:var(--rp-radius); background:var(--rp-surface); }
+.overview-launcher-open { display:grid; justify-items:center; gap:5px; width:100%; padding:7px 4px; border:0; background:transparent; color:var(--rp-text); cursor:pointer; }
+.overview-launcher-open strong, .overview-launcher-open small { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.overview-launcher-open small { color:var(--rp-text-muted); }
+.overview-launcher-icon { display:grid; place-items:center; width:42px; height:42px; border-radius:12px; background:var(--rp-surface-elevated); color:var(--rp-accent); font-size:23px; }
+.overview-launcher-icon img { width:28px; height:28px; object-fit:contain; }
+.overview-launcher-controls { display:flex; justify-content:center; gap:3px; flex-wrap:wrap; }
+.overview-launcher-controls .button { padding:3px 5px; font-size:10px; }
+.overview-launcher-dialog form { display:grid; gap:12px; min-width:min(460px,80vw); }
+.overview-launcher-dialog label { display:grid; gap:5px; }
+.overview-launcher-dialog input, .overview-launcher-dialog select { width:100%; }
+.overview-embedded-bar { display:flex; justify-content:space-between; margin-bottom:10px; }
+#embeddedFrame { width:100%; height:calc(100vh - 150px); min-height:400px; border:1px solid var(--rp-border); border-radius:var(--rp-radius-large); background:var(--rp-surface-elevated); }
+@media (max-width:850px) { .overview-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } .overview-widget[data-size="wide"] { grid-column:span 2; } }
+@media (max-width:550px) { .overview-metrics { grid-template-columns:1fr; } .overview-widget, .overview-widget[data-size="wide"], .overview-widget[data-size="small"] { grid-column:span 1; } }
+:root[data-theme="dark"] .overview-metrics { border:0; background:transparent; }

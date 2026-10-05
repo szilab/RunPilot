@@ -13,7 +13,8 @@ let pluginStatuses = [], pluginBusy = new Set();
 let pluginDiscoveryErrors = [], pluginRestartRequired = false;
 let pluginCatalog = [], pluginCatalogError = "", pluginCatalogLoaded = false, pluginCatalogLoading = false;
 let pluginExtensions = new Map();
-const pluginNavigation = new Map(), pluginOverview = new Map(), pluginSettings = new Map();
+const pluginNavigation = new Map(), pluginSettings = new Map();
+const overviewWidgets = new RunPilotOverviewWidgets($("overviewMetrics"));
 const pluginThemeListeners = new Set();
 let applicationSocket = null, applicationSocketPromise = null, applicationSequence = 0;
 const applicationPending = new Map(), applicationListeners = new Map(), applicationStreams = new Map();
@@ -27,6 +28,7 @@ const sidebarStorageKey = "runpilot.sidebar-collapsed";
 
 const pageMeta = {
   overview: ["Overview", null],
+  embedded: ["Application", null],
   settings: ["Settings", null],
 };
 
@@ -163,7 +165,13 @@ function registerPluginNavigation(extension, entry) {
   pluginNavigation.set(entry.id, { ...entry, button, page, extension });
   button.addEventListener("click", () => setPage(entry.id));
 }
-function registerPluginOverview(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginOverview.has(entry.id)) throw new Error("invalid or duplicate overview card"); pluginOverview.set(entry.id,{...entry,extension}); }
+function registerPluginOverview(extension, entry) {
+  if (entry && !entry.mount && typeof entry.render === "function") {
+    const draw = body => { const node = entry.render(); body.replaceChildren(); if (node) body.append(node); };
+    return overviewWidgets.register(extension, {...entry, title:entry.title || entry.id, mount:draw, refresh:draw});
+  }
+  return overviewWidgets.register(extension, entry);
+}
 function registerPluginSettings(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginSettings.has(entry.id)) throw new Error("invalid or duplicate settings section"); pluginSettings.set(entry.id,{...entry,extension}); }
 
 async function api(path, options = {}) {
@@ -475,7 +483,6 @@ async function refresh() {
     ]);
     if (pluginSnapshot) { pluginStatuses = pluginSnapshot.plugins || []; pluginDiscoveryErrors=pluginSnapshot.discoveryErrors || []; pluginRestartRequired=!!pluginSnapshot.restartRequired; renderPluginSettings(); if (!pluginCatalogLoaded && !pluginCatalogLoading) refreshPluginCatalog(); }
     if (frontendSnapshot) await loadPluginExtensions(frontendSnapshot);
-    renderOverview();
     setConnected(true);
   } catch (e) {
     softwareLoading = false; softwareLoadingKey = "";
@@ -491,10 +498,12 @@ async function loadPluginExtensions(extensions) {
   const active = new Set((extensions || []).map(extension => extension.id));
   for (const [id, loaded] of pluginExtensions) {
     if (!active.has(id)) {
-      if (typeof loaded.root === "function") loaded.root(); else loaded.root?.remove();
+      try { if (typeof loaded.root === "function") loaded.root(); else if (typeof loaded.root?.dispose === "function") loaded.root.dispose(); else loaded.root?.remove?.(); }
+      catch (error) { console.error(`plugin ${id} cleanup`, error); }
       for (const [key, entry] of pluginNavigation) if (entry.extension === id) { entry.button.remove(); entry.page.remove(); pluginNavigation.delete(key); if (currentPage === key) { $("pluginHeaderActions").replaceChildren(); $("pluginHeaderActions").classList.add("hidden"); } }
-      for (const [key, entry] of pluginOverview) if (entry.extension === id) pluginOverview.delete(key);
+      overviewWidgets.unregisterOwner(id);
       for (const [key, entry] of pluginSettings) if (entry.extension === id) pluginSettings.delete(key);
+      document.querySelectorAll('link[data-runpilot-plugin]').forEach(link => { if (link.dataset.runpilotPlugin === id) link.remove(); });
       pluginExtensions.delete(id);
     }
   }
@@ -516,8 +525,8 @@ async function loadPluginExtensions(extensions) {
     if (typeof module.activate !== "function") throw new Error(`Plugin ${extension.id} does not export activate()`);
     const runpilot = Object.freeze({
       ui: pluginUI(),
-      navigation: Object.freeze({ register: entry => registerPluginNavigation(extension.id, entry) }),
-      overview: Object.freeze({ register: entry => registerPluginOverview(extension.id, entry), render: renderOverview }),
+      navigation: Object.freeze({ register: entry => registerPluginNavigation(extension.id, entry), open: page => setPage(page) }),
+      overview: Object.freeze({ register: entry => registerPluginOverview(extension.id, entry), refresh: () => overviewWidgets.refresh(), render: () => overviewWidgets.refresh() }),
       settings: Object.freeze({ register: entry => registerPluginSettings(extension.id, entry) }),
       ws: pluginWS,
     });
@@ -587,16 +596,15 @@ async function managePlugin(id, action, version="") {
   finally { pluginBusy.delete(id); renderPluginSettings(); }
 }
 
-function renderOverview() {
-  $("overviewMetrics").replaceChildren();
-  for (const entry of pluginOverview.values()) { try { const node=entry.render(); if(node) $("overviewMetrics").append(node); } catch(error) { console.error(`plugin overview ${entry.id}`,error); } }
-  if (!$("overviewMetrics").childElementCount) $("overviewMetrics").append(pluginUI().EmptyState({ title: "No overview widgets yet", message: "Enabled plugins can add widgets here." }));
-}
+function renderOverview() { overviewWidgets.render(); }
+
+RunPilotDashboard.register(overviewWidgets, api, page => setPage(page), message => toast(message));
 
 function startAutoRefresh() {
   if (refreshTimer) return;
+  let overviewTicks = 0;
   refreshTimer = setInterval(() => {
-    if (!document.hidden) refresh();
+    if (!document.hidden) { refresh(); if (currentPage === "overview" && ++overviewTicks % 6 === 0) overviewWidgets.refresh(); }
   }, 5000);
 }
 
@@ -913,6 +921,8 @@ function configurePlatformAwareFields(capabilities) {
 function setPage(page) {
   const registered = pluginNavigation.get(page);
   if (!Object.hasOwn(pageMeta, page) && !registered) return;
+  overviewWidgets.setActive(page === "overview");
+  if (currentPage === "embedded" && page !== "embedded") $("embeddedFrame").src = "about:blank";
   currentPage = page;
   document.querySelectorAll(".nav").forEach(n => n.classList.toggle("active", n.dataset.page === page));
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
@@ -932,6 +942,19 @@ function setPage(page) {
 	if (registered) { registered.page.replaceChildren(); registered.render(registered.page); }
   refresh();
 }
+
+window.RunPilotOpenEmbedded = item => {
+  if (!RunPilotDashboard.validURL(item?.url, "runpilot")) { toast("Invalid /p/ shortcut"); return; }
+  const base = new URL(document.baseURI);
+  const target = new URL(item.url.slice(1), base);
+  if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname + "p/")) { toast("Invalid /p/ shortcut"); return; }
+  $("embeddedFrame").src = target.href;
+  $("embeddedFrame").title = item.name || "Embedded application";
+  $("embeddedExternal").href = target.href;
+  setPage("embedded");
+  $("pageTitle").textContent = item.name || "Application";
+};
+$("embeddedBack").addEventListener("click", () => setPage("overview"));
 
 document.querySelectorAll(".nav").forEach(n => n.addEventListener("click", () => setPage(n.dataset.page)));
 $("restartApplicationButton").addEventListener("click", requestRunPilotRestart);
@@ -1134,6 +1157,7 @@ $("loginForm").addEventListener("submit", async e => {
     await loadSystemInfo();
     await connectApplicationSocket();
     await refresh();
+    overviewWidgets.setActive(currentPage === "overview");
     startAutoRefresh();
     startConnectionMonitor();
   } catch {
@@ -1155,6 +1179,7 @@ $("loginForm").addEventListener("submit", async e => {
   try { await connectApplicationSocket(); } catch (e) { toast(e.message); }
   await refresh();
   try { await loadSystemInfo(); } catch (e) { if (e.message !== "Unauthorized") toast(e.message); }
+  overviewWidgets.setActive(currentPage === "overview");
   startAutoRefresh();
 })();
 

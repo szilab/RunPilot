@@ -30,9 +30,20 @@ function terminalAssets() {
   return assetPromise;
 }
 
+export function dockerOverviewSummary(snapshot) {
+  const containers = (snapshot?.projects || []).flatMap(project => project.containers || []);
+  return {
+    total: containers.length,
+    running: containers.filter(item => item.state === "running").length,
+    stopped: containers.filter(item => ["exited", "stopped", "created", "dead"].includes(item.state)).length,
+    unhealthy: containers.filter(item => item.health === "unhealthy").length,
+    problems: containers.filter(item => item.health === "unhealthy" || item.state === "restarting").slice(0, 3),
+  };
+}
+
 export async function activate(runpilot) {
   const esc = runpilot.ui.escape;
-  let root = null, snapshot = null, error = "", loading = false, modal = null, terminal = null;
+  let root = null, snapshot = null, error = "", loading = false, modal = null, terminal = null, widgetBody = null, widgetLoading = false;
   const busy = new Set();
   const listeners = [];
   async function rpc(method, params = {}) {
@@ -77,7 +88,7 @@ export async function activate(runpilot) {
     loading = true; render();
     try { snapshot = await rpc("docker.snapshot"); error = ""; }
     catch (cause) { error = cause.message; }
-    finally { loading = false; render(); }
+    finally { loading = false; render(); renderWidget(); }
   }
   function closeModal() { if (modal) { modal.close(); modal.remove(); modal = null; } }
   function dialog(title, content, onSubmit, submitLabel = "Save") {
@@ -152,6 +163,26 @@ export async function activate(runpilot) {
     const target = event.target.closest("[data-action]"); if (!target || !root?.contains(target)) return;
     void action(target.dataset.action, target.dataset.key || "").catch(cause => { error = cause.message; runpilot.ui.toast(cause.message); render(); });
   };
+  function renderWidget() {
+    if (!widgetBody?.isConnected) return;
+    widgetBody.replaceChildren();
+    if (error) {const note=document.createElement("p");note.setAttribute("role","alert");note.textContent=error;widgetBody.append(note);return;}
+    if (!snapshot?.runtime?.available) {const note=document.createElement("p");note.className="overview-widget-note";note.textContent=snapshot?.runtime?.message || "Docker unavailable";widgetBody.append(note);}
+    const summary=dockerOverviewSummary(snapshot);
+    const stats=document.createElement("div");stats.className="overview-stat-row";
+    for(const [label,value] of [["Total",summary.total],["Running",summary.running],["Stopped",summary.stopped],["Unhealthy",summary.unhealthy]]) {const cell=document.createElement("div");cell.className="overview-stat";const strong=document.createElement("strong");strong.textContent=value;const small=document.createElement("span");small.textContent=label;cell.append(strong,small);stats.append(cell);}
+    widgetBody.append(stats);
+    for(const item of summary.problems) {const note=document.createElement("p");note.className="overview-widget-note";note.textContent=`${item.name}: ${item.health || item.state}`;widgetBody.append(note);}
+    const open=document.createElement("button");open.type="button";open.className="button secondary small";open.textContent="Open Docker";open.onclick=()=>runpilot.navigation.open("docker");widgetBody.append(open);
+  }
+  async function refreshWidget() {
+    if (!widgetBody?.isConnected || widgetLoading) return;
+    widgetLoading=true;
+    try { snapshot=await rpc("docker.snapshot"); error=""; }
+    catch(cause) { error=cause.message; }
+    finally { widgetLoading=false;renderWidget(); }
+  }
+  runpilot.overview.register({id:"docker.summary",title:"Docker",size:"medium",order:40,mount(body){widgetBody=body;return refreshWidget();},refresh:refreshWidget,dispose(){widgetBody=null;}});
   runpilot.navigation.register({id:"docker",title:"Docker",icon:{src:new URL("./icon.svg",import.meta.url).href},render:page => {root = page;root.removeEventListener("click",click);root.addEventListener("click",click);render();void refresh();}});
   listeners.push(runpilot.ws.on(PLUGIN,"process.session.output",event => { if (terminal?.id === event?.id) terminal.term.write(dec(event.data)); }));
   listeners.push(runpilot.ws.on(PLUGIN,"process.session.error",event => { if (terminal?.id === event?.id) terminal.term.writeln(`\r\n${event.message || "Terminal I/O error"}`); }));

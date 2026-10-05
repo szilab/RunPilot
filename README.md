@@ -6,10 +6,12 @@
 
 RunPilot is a lightweight Windows/Linux host-management application written in Go. One native service manages configured workloads and operations and exposes an embedded local web UI. Windows uses Windows Service Control Manager; Linux uses a systemd user service.
 
-The normal UI provides plugin management and Overview contributions. Tasks,
-Terminal, RDP and VNC have first-party plugins; installing and enabling them is
-explicit. Legacy backup, storage, software and Docker backends remain available
-through their existing APIs and configuration, but their pages are hidden.
+The normal UI provides plugin management and an Overview dashboard with host
+status, RunPilot status, a configurable launcher, and summaries from enabled
+Tasks and Docker plugins. Tasks, Docker, Terminal, RDP and VNC have first-party
+plugins; installing and enabling them is explicit. Legacy backup, storage and
+software backends remain available through their existing APIs and
+configuration, but their pages are hidden.
 
 > **RunPilot provides the framework; plugins provide the features.**
 
@@ -35,18 +37,21 @@ currently hidden:
 - Embedded authenticated web UI
 - Plugin package/runtime support with independent backend/frontend contracts
 - GitHub-backed plugin catalog with explicit install/update/enable lifecycle
+- Overview launcher shortcuts for external HTTP(S) pages and existing `/p/`
+  proxy paths; embedded pages run in a restricted frame and depend on the
+  upstream application's frame and base-path support
 
 ## Architecture direction
 
 The target core is a small plugin host: package/runtime management, versioned
 host capabilities, one authenticated application WebSocket, the web shell,
-shared UI/theme primitives and framework settings. Tasks, Terminal, RDP and VNC
-are plugin-owned in the normal UI. Storage, Docker, Software and Backup remain
+shared UI/theme primitives and framework settings. Tasks, Docker, Terminal, RDP and VNC
+are plugin-owned in the normal UI. Storage, Software and Backup remain
 transitional core implementations. Xpra remains a temporary internal core exception
 with no user-facing navigation while its plugin capabilities are designed.
 
-Host CPU/memory/disk presentation is planned as widget contributions rather
-than expanding the nonpublic System ABI fixture into a permanent feature.
+Host CPU/memory/disk presentation is built into Overview, without expanding
+the nonpublic System ABI fixture into a permanent feature.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the architectural source of
 truth, [docs/PLUGINS.md](docs/PLUGINS.md) for plugin development, and
