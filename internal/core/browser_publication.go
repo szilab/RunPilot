@@ -22,6 +22,16 @@ type BrowserPublication struct {
 	MountPath string `json:"mountPath"`
 	Bootstrap string `json:"bootstrap"`
 	Worker    string `json:"worker"`
+	RuntimeID string `json:"runtimeId,omitempty"`
+}
+
+// BrowserRuntime owns the single gateway worker scope for this listener. The
+// scope and serving routes are host-defined, never supplied by a package.
+type BrowserRuntime struct {
+	ID        string `json:"id"`
+	Owner     string `json:"owner"`
+	Bootstrap string `json:"bootstrap"`
+	Worker    string `json:"worker"`
 }
 type BrowserStreamGrant struct{ Owner, StreamID string }
 type browserTicket struct {
@@ -43,6 +53,7 @@ type browserPublications struct {
 	tickets  map[string]browserTicket
 	closed   bool
 	basePath string
+	runtime  *BrowserRuntime
 	emit     func(string, string)
 }
 
@@ -66,14 +77,64 @@ func (m *browserPublications) call(owner, base, method string, raw json.RawMessa
 		base = m.basePath
 	}
 	switch method {
+	case "browser.runtime.register":
+		var in struct {
+			Bootstrap string `json:"bootstrap"`
+			Worker    string `json:"worker"`
+		}
+		if decodeNetworkParams(raw, &in) != nil || !browserAsset(in.Bootstrap) || !browserAsset(in.Worker) || !strings.HasSuffix(in.Bootstrap, ".js") || !strings.HasSuffix(in.Worker, ".js") {
+			return nil, networkInvalid("invalid browser runtime assets")
+		}
+		if m.runtime != nil {
+			if m.runtime.Owner != owner || m.runtime.Bootstrap != in.Bootstrap || m.runtime.Worker != in.Worker {
+				return nil, &plugins.HostFailure{Code: "already_exists", Message: "listener browser runtime is already owned"}
+			}
+			return json.Marshal(m.runtime)
+		}
+		id := browserID()
+		if id == "" {
+			return nil, networkInvalid("cannot allocate browser runtime")
+		}
+		m.runtime = &BrowserRuntime{id, owner, in.Bootstrap, in.Worker}
+		return json.Marshal(m.runtime)
+	case "browser.runtime.remove":
+		var in struct {
+			ID string `json:"id"`
+		}
+		if decodeNetworkParams(raw, &in) != nil || in.ID == "" {
+			return nil, networkInvalid("runtime ID required")
+		}
+		if m.runtime == nil || m.runtime.ID != in.ID || m.runtime.Owner != owner {
+			return nil, &plugins.HostFailure{Code: "not_found", Message: "unknown browser runtime"}
+		}
+		for id, g := range m.gateways {
+			if m.mounts[g.publication].RuntimeID == in.ID {
+				m.closeLocked(id, g)
+			}
+		}
+		for id, p := range m.mounts {
+			if p.RuntimeID == in.ID {
+				delete(m.mounts, id)
+			}
+		}
+		m.runtime = nil
+		return json.RawMessage(`{}`), nil
 	case "browser.publication.register":
 		var in struct {
 			MountPath string `json:"mountPath"`
 			Bootstrap string `json:"bootstrap"`
 			Worker    string `json:"worker"`
+			RuntimeID string `json:"runtimeId"`
 		}
-		if decodeNetworkParams(raw, &in) != nil || browserpath.Mount(in.MountPath) != nil || !browserAsset(in.Bootstrap) || !browserAsset(in.Worker) {
+		if decodeNetworkParams(raw, &in) != nil || browserpath.Mount(in.MountPath) != nil || !browserAsset(in.Bootstrap) {
 			return nil, networkInvalid("invalid browser publication")
+		}
+		if in.RuntimeID != "" {
+			if in.Worker != "" || m.runtime == nil || m.runtime.ID != in.RuntimeID || m.runtime.Owner != owner {
+				return nil, networkInvalid("publication requires the owner's active browser runtime")
+			}
+		} else if !browserAsset(in.Worker) {
+			return nil, networkInvalid("publication worker required")
 		}
 		for _, p := range m.mounts {
 			if browserpath.Overlap(p.MountPath, in.MountPath) {
@@ -87,7 +148,7 @@ func (m *browserPublications) call(owner, base, method string, raw json.RawMessa
 		if id == "" {
 			return nil, networkInvalid("cannot allocate publication")
 		}
-		p := BrowserPublication{id, owner, in.MountPath, in.Bootstrap, in.Worker}
+		p := BrowserPublication{ID: id, Owner: owner, MountPath: in.MountPath, Bootstrap: in.Bootstrap, Worker: in.Worker, RuntimeID: in.RuntimeID}
 		m.mounts[id] = p
 		return json.Marshal(p)
 	case "browser.publication.remove":
@@ -162,7 +223,7 @@ func (m *browserPublications) call(owner, base, method string, raw json.RawMessa
 			}
 			m.mu.Unlock()
 		}()
-		return json.Marshal(map[string]string{"id": id, "publicPrefix": browserpath.Escape(browserpath.Join(base, p.MountPath)), "publicationId": p.ID})
+		return json.Marshal(map[string]string{"id": id, "publicPrefix": browserpath.Escape(browserpath.Join(base, p.MountPath)), "publicationId": p.ID, "runtimeId": p.RuntimeID, "baseURL": browserpath.Escape(strings.TrimSuffix(base, "/")) + "/"})
 	case "http.gateway.close":
 		var in struct {
 			ID string `json:"id"`
@@ -269,10 +330,28 @@ func (m *browserPublications) stop(owner string) {
 			delete(m.mounts, id)
 		}
 	}
+	if m.runtime != nil && (owner == "" || m.runtime.Owner == owner) {
+		m.runtime = nil
+	}
 	m.mu.Unlock()
 	for _, closed := range done {
 		<-closed
 	}
+}
+func (c *Controller) BrowserRuntime(id string) (BrowserRuntime, []BrowserPublication, bool) {
+	m := c.browserPublications
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.runtime == nil || m.runtime.ID != id {
+		return BrowserRuntime{}, nil, false
+	}
+	publications := []BrowserPublication{}
+	for _, p := range m.mounts {
+		if p.RuntimeID == id && p.Owner == m.runtime.Owner {
+			publications = append(publications, p)
+		}
+	}
+	return *m.runtime, publications, true
 }
 func (c *Controller) BrowserPublication(relative string) (BrowserPublication, bool) {
 	c.browserPublications.mu.Lock()

@@ -454,26 +454,60 @@ and HTTP infrastructure. The host supplies the calling plugin owner; none of
 these operations grants a normal RunPilot login.
 
 ```text
-browser.publication.register {mountPath, bootstrap, worker} -> {id, owner, mountPath, bootstrap, worker}
+browser.runtime.register    {bootstrap, worker} -> {id, owner, bootstrap, worker}
+browser.runtime.remove      {id} -> {}
+browser.publication.register {mountPath, bootstrap, runtimeId} -> {id, owner, mountPath, bootstrap, runtimeId}
 browser.publication.remove   {id} -> {}
-http.gateway.open           {publicationId, upstreamURL, upstreamBasePath} -> {id, publicPrefix, publicationId}
+http.gateway.open           {publicationId, upstreamURL, upstreamBasePath} -> {id, publicPrefix, publicationId, runtimeId, baseURL}
 http.gateway.close          {id} -> {}
 browser.stream.ticket       {streamId} -> {ticket}
 ```
 
-A publication mounts package-owned `web/` bootstrap HTML and worker JS under a
-normalized relative mount. Root, overlapping mounts and framework paths (`api`,
+A publication mounts package-owned `web/` bootstrap HTML under a normalized
+relative mount and references its owner's active browser runtime. Root,
+overlapping mounts and framework paths (`api`,
 `plugins`, `vendor`, `healthz`, root filenames) are reserved. Mount paths
 use literal URL-safe characters, with no percent escapes or traversal. Host base
 paths and upstream base paths also preserve Unicode/spaces with URL escaping. Mounts
-are runtime state and must be reconstructed during initialization. The HTML's
-`__RUNPILOT_PUBLICATION__` placeholder and the worker's
-`self.RUNPILOT_PUBLICATION` receive `{owner, publicationId, publicPrefix,
-basePath, assets}`. The worker script is served at
-`publicPrefix/__runpilot__/sw.js?publication=<id>` with
-`Service-Worker-Allowed: publicPrefix/`; stale generations return 410. HTTPS
-serves only package initialization, never upstream payloads. Removing a mount
-closes its gateways. Plugin shutdown removes all mounts and gateways.
+are runtime state and must be reconstructed during initialization. Removing a
+mount closes its gateways. Plugin shutdown removes mounts, runtime and gateways.
+
+There is one browser runtime per listener. Registration accepts only package-owned
+`web/` JavaScript assets; the host chooses the serving routes and scope. Identical
+owner/asset registration is idempotent. Another owner, replacement assets, arbitrary
+scope, or a foreign runtime reference is rejected. Runtime removal retires its
+publications and streams; restart creates fresh generation IDs. Ordinary plugin
+asset routes never receive `Service-Worker-Allowed`.
+
+Host asset routes under `basePath/__runpilot__/browser/<runtimeId>/` serve `sw.js`,
+`bootstrap.js?publication=<id>` and bounded public `publications.json` metadata.
+They require no management login and grant no application authority. Stale
+runtime/publication generations return 410. Only this runtime's worker route
+receives `Service-Worker-Allowed: <basePath>/`. Its immutable
+`self.RUNPILOT_BROWSER_RUNTIME` configuration includes `{owner, runtimeId,
+basePath, scope, assets, workerURL, publicationsURL}` and does not vary on target
+CRUD, so adding another target cannot replace a live worker. Package bootstrap
+JavaScript and the publication HTML's `__RUNPILOT_PUBLICATION__` placeholder receive
+that configuration plus `{publicationId, publicPrefix, bootstrapHTML}`.
+
+Restricted browser publications may bootstrap from the RunPilot base URL using
+a fragment and transition to their virtual path only after a basePath-scoped
+worker has taken control. `http.gateway.open` returns the actual listener's escaped
+`baseURL`, including CLI overrides. A `noopener,noreferrer` tab opens
+`baseURL#runpilot-publication=<URL-encoded JSON>` containing exactly `{runtime,
+publication, stream, ticket}` (32-character URL-safe IDs, fragment at most 1024
+characters). There are no upstream URLs or query credentials. The generic root
+hook consumes/removes the fragment, clears management credentials from the tab,
+and loads the registered runtime bootstrap instead of starting the management UI
+or login dialog. Invalid launches stay in an error state. A scoped lineage in
+`window.name` also bypasses management initialization during recovery.
+
+HTTPS serves only package initialization/metadata, never upstream payloads.
+Legacy contract-1.x publications may still register `{mountPath, bootstrap,
+worker}` without `runtimeId`; their worker remains scoped to
+`publicPrefix/` at `publicPrefix/__runpilot__/sw.js?publication=<id>`. A publication
+using a runtime cannot also request a target worker. The Web Apps bootstrap
+retires its legacy target registration before entering that virtual path.
 
 An HTTP gateway snapshots one HTTP(S) origin without userinfo/path/query/fragment,
 its normalized upstream base path, and the publication's public prefix:
@@ -555,14 +589,24 @@ migrates and removes legacy localStorage tokens. Browser features must launch
 with `noopener` so their tab does not inherit that credential or an opener.
 
 Web Apps binds document navigations through a single-use, one-minute worker-local
-handoff under `publicPrefix/__runpilot__/navigate/`. Its redirect binds the
+handoff under `scope/__runpilot__/browser/<runtimeId>/navigate/`. Its redirect binds the
 reserved `resultingClientId` before returning to the clean application URL;
 redirect chains retain that client ID. This also works in browsers that omit
 the initiating client ID on navigation. An opaque, target-session-only lineage
-handle in the tab's `window.name` lets the package bootstrap resume that same
+handle in the tab's `window.name` (`runpilot.browser:` plus `{runtime, publication,
+handle}`) lets the package bootstrap resume that same
 worker-local session after a reload or document navigation. It grants no new
 gateway, login or target access. No handle is written to localStorage or
-sessionStorage; worker loss, host restart or session close fails closed.
+sessionStorage; worker loss, host restart or session close fails closed. Explicit
+client bindings select tunnels; a bound client cannot request another publication
+or management resources. Dead bound clients receive local errors, never network
+fallback. Normal management clients/subresources keep ordinary networking.
+When navigation APIs omit initiating client IDs, a known virtual path selects
+only local, inert package resume HTML. That bootstrap must redeem its lineage
+handle before it can navigate through a tunnel. It never infers a session from a
+path or another live tab. The worker caches only bounded public route metadata
+and package HTML so previously virtual navigations can fail locally after worker
+state loss; credentials, cookies and application responses are never cached.
 Browsers without `Request.body` use their native upload Blob's readable stream;
 upload chunks still obey the tunnel credit window. Response bodies are streamed
 without buffering or rewriting.

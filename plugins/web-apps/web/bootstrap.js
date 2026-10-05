@@ -1,41 +1,41 @@
 (async () => {
-  const config = globalThis.RUNPILOT_PUBLICATION;
-  const status = document.getElementById("status");
-  const params = new URLSearchParams(location.hash.slice(1));
-  const ticket = params.get("ticket"), streamId = params.get("stream"), publication = params.get("publication");
-  // Remove the bootstrap capability before registration, network traffic, or application rendering.
-  if (ticket || streamId || publication) history.replaceState(null, "", location.pathname + location.search);
-  const namePrefix = "runpilot.web.apps:";
+  const config = globalThis.RUNPILOT_PUBLICATION, launch = globalThis.RUNPILOT_BROWSER_LAUNCH;
+  delete globalThis.RUNPILOT_BROWSER_LAUNCH;
+  const status = document.getElementById("status"), namePrefix = "runpilot.browser:";
   try {
-    // Clear any remaining legacy shared credential before application code runs.
-    // This deliberately does not migrate it into the Web App tab.
-    RunPilotAuthStorage.clearShared(localStorage);
+    RunPilotAuthStorage.clearShared(localStorage); sessionStorage.removeItem("runpilot.token");
     let lineage;
-    try { if (globalThis.name?.startsWith(namePrefix)) lineage = JSON.parse(globalThis.name.slice(namePrefix.length)); } catch { /* Unrelated application window names are not capabilities. */ }
-    const initialize = !!(ticket && streamId && publication === config.publicationId);
-    if (!initialize && (ticket || streamId || publication || lineage?.publication !== config.publicationId || !lineage.handle)) throw new Error("This gateway has expired. Open the Web App again from RunPilot.");
+    try { if (globalThis.name?.startsWith(namePrefix) && globalThis.name.length <= 512) lineage = JSON.parse(globalThis.name.slice(namePrefix.length)); } catch { /* An application window name is not automatically a capability. */ }
+    const initialize = !!launch;
+    if (initialize ? launch.runtime !== config.runtimeId || launch.publication !== config.publicationId : lineage?.runtime !== config.runtimeId || lineage?.publication !== config.publicationId || !lineage?.handle) throw new Error("This gateway has expired. Open the Web App again from RunPilot.");
     if (!isSecureContext || !crypto.subtle || !navigator.serviceWorker) throw new Error("Web Apps require HTTPS, Service Workers and encrypted WebSocket support.");
-    const scope = config.publicPrefix + "/";
-    const scriptURL = new URL(scope + "__runpilot__/sw.js?publication=" + encodeURIComponent(config.publicationId), location.origin).href;
-    await navigator.serviceWorker.register(scriptURL, { scope, updateViaCache: "none" });
-    await navigator.serviceWorker.ready;
+    const scriptURL = new URL(config.workerURL, location.origin).href;
+    // Retire this owner's legacy target-scoped worker before entering its path;
+    // a more specific old registration would otherwise win over the base worker.
+    for (const registration of await navigator.serviceWorker.getRegistrations()) {
+      const worker = registration.active || registration.waiting || registration.installing;
+      if (registration.scope === new URL(config.publicPrefix + "/", location.origin).href && worker && new URL(worker.scriptURL).pathname === config.publicPrefix + "/__runpilot__/sw.js") await registration.unregister();
+    }
+    await navigator.serviceWorker.register(scriptURL, { scope: config.scope, updateViaCache: "none" });
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("Service Worker could not activate this publication")), 10000);
+      navigator.serviceWorker.ready.then(() => { clearTimeout(timeout); resolve(); }, error => { clearTimeout(timeout); reject(error); });
+    });
     if (navigator.serviceWorker.controller?.scriptURL !== scriptURL) await new Promise((resolve, reject) => {
       const changed = () => {
         if (navigator.serviceWorker.controller?.scriptURL !== scriptURL) return;
         clearTimeout(timeout); navigator.serviceWorker.removeEventListener("controllerchange", changed); resolve();
       };
-      const timeout = setTimeout(() => { navigator.serviceWorker.removeEventListener("controllerchange", changed); reject(new Error("Service Worker could not activate this publication")); }, 10000);
+      const timeout = setTimeout(() => { navigator.serviceWorker.removeEventListener("controllerchange", changed); reject(new Error("Service Worker could not control this publication")); }, 10000);
       navigator.serviceWorker.addEventListener("controllerchange", changed); changed();
     });
     const channel = new MessageChannel();
     const handoff = await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => { channel.port1.close(); reject(new Error("Encrypted gateway initialization timed out")); }, 15000);
       channel.port1.onmessage = event => { clearTimeout(timeout); channel.port1.close(); event.data.ok ? resolve(event.data) : reject(new Error(event.data.error || "Encryption could not be established")); };
-      navigator.serviceWorker.controller.postMessage({ type: initialize ? "gateway.initialize" : "gateway.resume", ticket, streamId, handle: lineage?.handle, publication: config.publicationId, url: location.href }, [channel.port2]);
+      navigator.serviceWorker.controller.postMessage({ type: initialize ? "gateway.initialize" : "gateway.resume", ticket: launch?.ticket, streamId: launch?.stream, handle: lineage?.handle, runtime: config.runtimeId, publication: config.publicationId, url: initialize ? new URL(config.publicPrefix + "/", location.origin).href : location.href }, [channel.port2]);
     });
-    // This in-memory tab handle grants only the already-open target session. It
-    // survives document navigation, without localStorage/sessionStorage credentials.
-    globalThis.name = namePrefix + JSON.stringify({ publication: config.publicationId, handle: handoff.handle });
+    globalThis.name = namePrefix + JSON.stringify({ runtime: config.runtimeId, publication: config.publicationId, handle: handoff.handle });
     location.replace(handoff.url);
   } catch (error) { status.textContent = error.message || "The encrypted gateway could not be established"; status.setAttribute("role", "alert"); }
 })();

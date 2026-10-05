@@ -28,6 +28,8 @@ type openedGateway struct {
 		ID            string `json:"id"`
 		PublicationID string `json:"publicationId"`
 		PublicPrefix  string `json:"publicPrefix"`
+		RuntimeID     string `json:"runtimeId"`
+		BaseURL       string `json:"baseURL"`
 	} `json:"session"`
 }
 
@@ -40,7 +42,7 @@ func webAppsController(t *testing.T, base string, dataDirs ...string) *core.Cont
 		dir = t.TempDir()
 	}
 	source := filepath.Join("..", "..", "plugins", "web-apps")
-	dest := filepath.Join(dir, "plugins", "web.apps", "0.1.1")
+	dest := filepath.Join(dir, "plugins", "web.apps", "0.1.2")
 	if err := filepath.WalkDir(source, func(filename string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -178,21 +180,33 @@ func TestWebAppsWASMEncryptedGatewayAndPublication(t *testing.T) {
 			if response.StatusCode != 503 {
 				t.Fatal("resource fell through to HTTP", response.StatusCode)
 			}
-			response, err = http.Get(server.URL + opened.Session.PublicPrefix + "/__runpilot__/sw.js?publication=" + opened.Session.PublicationID)
+			if opened.Session.BaseURL != prefix+"/" || opened.Session.RuntimeID == "" {
+				t.Fatal("invalid root launch metadata", opened.Session)
+			}
+			runtimeURL := server.URL + prefix + "/__runpilot__/browser/" + opened.Session.RuntimeID + "/"
+			response, err = http.Get(runtimeURL + "sw.js")
 			if err != nil {
 				t.Fatal(err)
 			}
 			_ = response.Body.Close()
-			if response.Header.Get("Service-Worker-Allowed") != opened.Session.PublicPrefix+"/" {
-				t.Fatal("broad SW scope", response.Header)
+			if response.Header.Get("Service-Worker-Allowed") != prefix+"/" {
+				t.Fatal("incorrect base SW scope", response.Header)
 			}
-			response, err = http.Get(server.URL + opened.Session.PublicPrefix + "/__runpilot__/sw.js?publication=stale")
+			response, err = http.Get(runtimeURL + "bootstrap.js?publication=stale")
 			if err != nil {
 				t.Fatal(err)
 			}
 			_ = response.Body.Close()
 			if response.StatusCode != 410 {
 				t.Fatal("stale publication accepted")
+			}
+			response, err = http.Get(server.URL + prefix + "/plugins/web.apps/web/sw.js")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = response.Body.Close()
+			if response.Header.Get("Service-Worker-Allowed") != "" {
+				t.Fatal("ordinary asset gained worker scope")
 			}
 			var foreign openedGateway
 			json.Unmarshal(appsRPC(t, c, "apps.session.open", map[string]string{"targetId": "app-1"}), &foreign)
@@ -337,7 +351,7 @@ func TestWebAppsUseActualListenerBasePathOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	opened := openWebApp(t, c, "http://127.0.0.1:1234")
-	if opened.Session.PublicPrefix != "/cli/override/app" {
+	if opened.Session.PublicPrefix != "/cli/override/app" || opened.Session.BaseURL != "/cli/override/" {
 		t.Fatal("gateway ignored listener override", opened.Session.PublicPrefix)
 	}
 	response := httptest.NewRecorder()
@@ -378,6 +392,15 @@ func TestWebAppsRestartKeepsTargetsButDropsRuntimeSessions(t *testing.T) {
 		p, ok := c.BrowserPublication("/app/")
 		if !ok || p.ID == opened.Session.PublicationID {
 			t.Fatal("publication generation retained")
+		}
+		if _, _, ok := c.BrowserRuntime(opened.Session.RuntimeID); ok || p.RuntimeID == opened.Session.RuntimeID {
+			t.Fatal("browser runtime generation retained")
+		}
+		s, _ := New(c)
+		response := httptest.NewRecorder()
+		s.Handler().ServeHTTP(response, httptest.NewRequest("GET", "/__runpilot__/browser/"+opened.Session.RuntimeID+"/sw.js", nil))
+		if response.Code != 410 || response.Header().Get("Service-Worker-Allowed") != "" {
+			t.Fatal("stale runtime served a privileged worker", response.Code)
 		}
 		if _, ok := c.ConsumeBrowserStreamTicket(opened.Ticket); ok {
 			t.Fatal("bootstrap credential retained across restart")

@@ -1,7 +1,11 @@
 export const publicPrefix = (base, mount) => String(base || "/").replace(/\/$/, "") + mount + "/";
 export function launchGateway(opened, opener = window.open.bind(window)) {
-  const params = new URLSearchParams({ ticket: opened.ticket, stream: opened.session.id, publication: opened.session.publicationId });
-  opener(opened.session.publicPrefix + "/#" + params, "_blank", "noopener,noreferrer");
+  const launch = { runtime: opened.session.runtimeId, publication: opened.session.publicationId, stream: opened.session.id, ticket: opened.ticket };
+  if (!Object.values(launch).every(value => typeof value === "string" && /^[A-Za-z0-9_-]{32}$/.test(value))) throw new Error("Invalid browser publication launch");
+  const base = new URL(opened.session.baseURL, location.origin);
+  if (base.origin !== location.origin || base.search || base.hash || !base.pathname.endsWith("/")) throw new Error("Invalid RunPilot base URL");
+  const params = new URLSearchParams({ "runpilot-publication": JSON.stringify(launch) });
+  opener(base.pathname + "#" + params, "_blank", "noopener,noreferrer");
 }
 
 async function removeWorker(prefix) {

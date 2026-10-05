@@ -68,3 +68,42 @@ func TestBrowserPublicationTicketOwnershipAndLifecycle(t *testing.T) {
 		t.Fatal("runtime registrations leaked")
 	}
 }
+
+func TestBrowserRuntimeExclusiveOwnershipAndRemoval(t *testing.T) {
+	m := newBrowserPublications(nil)
+	defer m.stop("")
+	runtime := browserCall(t, m, "one", "/p", "browser.runtime.register", map[string]string{"bootstrap": "web/bootstrap.js", "worker": "web/sw.js"})
+	same := browserCall(t, m, "one", "/p", "browser.runtime.register", map[string]string{"bootstrap": "web/bootstrap.js", "worker": "web/sw.js"})
+	if same["id"] != runtime["id"] {
+		t.Fatal("runtime registration is not idempotent")
+	}
+	for _, attempt := range []struct{ owner, method, raw string }{
+		{"other", "browser.runtime.register", `{"bootstrap":"web/bootstrap.js","worker":"web/sw.js"}`},
+		{"one", "browser.runtime.register", `{"bootstrap":"web/bootstrap.js","worker":"web/different.js"}`},
+		{"one", "browser.runtime.register", `{"bootstrap":"web/bootstrap.js","worker":"web/sw.js","scope":"/"}`},
+		{"one", "browser.runtime.register", `{"bootstrap":"https://evil/bootstrap.js","worker":"web/sw.js"}`},
+		{"other", "browser.runtime.remove", `{"id":"` + runtime["id"] + `"}`},
+		{"other", "browser.publication.register", `{"mountPath":"/other","bootstrap":"web/bootstrap.html","runtimeId":"` + runtime["id"] + `"}`},
+	} {
+		if _, err := m.call(attempt.owner, "/p", attempt.method, json.RawMessage(attempt.raw)); err == nil {
+			t.Fatal("invalid runtime operation accepted", attempt.owner, attempt.method)
+		}
+	}
+	publication := browserCall(t, m, "one", "/p", "browser.publication.register", map[string]string{"mountPath": "/app", "bootstrap": "web/bootstrap.html", "runtimeId": runtime["id"]})
+	g := browserCall(t, m, "one", "/p", "http.gateway.open", map[string]string{"publicationId": publication["id"], "upstreamURL": "http://localhost:1234", "upstreamBasePath": "/app"})
+	if g["runtimeId"] != runtime["id"] || g["baseURL"] != "/p/" {
+		t.Fatal(g)
+	}
+	browserCall(t, m, "one", "/p", "browser.runtime.remove", map[string]string{"id": runtime["id"]})
+	if m.runtime != nil || len(m.mounts) != 0 || len(m.gateways) != 0 {
+		t.Fatal("runtime removal leaked mounts or streams")
+	}
+	replacement := browserCall(t, m, "other", "/p", "browser.runtime.register", map[string]string{"bootstrap": "web/bootstrap.js", "worker": "web/sw.js"})
+	if replacement["id"] == runtime["id"] {
+		t.Fatal("runtime generation reused")
+	}
+	m.stop("other")
+	if m.runtime != nil {
+		t.Fatal("owner shutdown leaked runtime")
+	}
+}

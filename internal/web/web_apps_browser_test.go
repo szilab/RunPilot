@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -97,7 +98,28 @@ func TestWebAppsRealBrowser(t *testing.T) {
 			c := webAppsController(t, base)
 			openWebApp(t, c, upstream.URL, upstreamBase)
 			s, _ := New(c, base)
-			server := httptest.NewUnstartedServer(s.Handler())
+			var targetHTTP atomic.Int64
+			var rootDocuments atomic.Int64
+			handler := s.Handler()
+			basePrefix := strings.TrimSuffix(base, "/")
+			legacy := base == "/" && !route.tls
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if legacy && r.URL.Path == "/app/__runpilot__/sw.js" && r.URL.Query().Get("publication") == "legacy" {
+					w.Header().Set("Content-Type", "application/javascript")
+					w.Header().Set("Service-Worker-Allowed", "/app/")
+					fmt.Fprint(w, `self.addEventListener("install",e=>e.waitUntil(self.skipWaiting()));self.addEventListener("activate",e=>e.waitUntil(self.clients.claim()));`)
+					return
+				}
+				if strings.HasPrefix(r.URL.Path, basePrefix+"/app/") || strings.HasPrefix(r.URL.Path, basePrefix+"/router/") || strings.HasPrefix(r.URL.Path, basePrefix+"/crud/") {
+					targetHTTP.Add(1)
+					http.Error(w, "target path must never reach the HTTP listener", http.StatusForbidden)
+					return
+				}
+				if r.Header.Get("Sec-Fetch-Dest") == "document" && r.URL.Path == basePrefix+"/" {
+					rootDocuments.Add(1)
+				}
+				handler.ServeHTTP(w, r)
+			}))
 			if route.tls {
 				server.StartTLS()
 			} else {
@@ -106,11 +128,17 @@ func TestWebAppsRealBrowser(t *testing.T) {
 			defer server.Close()
 			cmd := exec.Command("node", "plugins/web-apps/web/browser.test.cjs")
 			cmd.Dir = filepath.Join("..", "..")
-			cmd.Env = append(os.Environ(), "RUNPILOT_TEST_URL="+server.URL, "RUNPILOT_TEST_UPSTREAM="+upstream.URL, "RUNPILOT_TEST_UPSTREAM_BASE="+upstreamBase, "RUNPILOT_TEST_BASE="+browserpath.Escape(strings.TrimSuffix(base, "/")), "RUNPILOT_TEST_TOKEN="+c.Snapshot().Server.Token, fmt.Sprintf("RUNPILOT_TEST_TLS=%t", route.tls))
+			cmd.Env = append(os.Environ(), "RUNPILOT_TEST_URL="+server.URL, "RUNPILOT_TEST_UPSTREAM="+upstream.URL, "RUNPILOT_TEST_UPSTREAM_BASE="+upstreamBase, "RUNPILOT_TEST_TOKEN="+c.Snapshot().Server.Token, "RUNPILOT_TEST_BASE="+browserpath.Escape(strings.TrimSuffix(base, "/")), fmt.Sprintf("RUNPILOT_TEST_TLS=%t", route.tls), fmt.Sprintf("RUNPILOT_TEST_LEGACY=%t", legacy))
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("browser integration: %v\n%s", err, out)
 			} else {
 				t.Log(string(out))
+				if targetHTTP.Load() != 0 {
+					t.Fatalf("%d application HTTP requests bypassed the worker", targetHTTP.Load())
+				}
+				if rootDocuments.Load() < 2 {
+					t.Fatalf("root document launches missing: %d", rootDocuments.Load())
+				}
 			}
 		})
 	}

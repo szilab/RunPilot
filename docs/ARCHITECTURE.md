@@ -237,11 +237,16 @@ implemented, rather than by expanding the System fixture now.
 
 ### Web Apps transport proof
 
-The unpublished `web.apps` 0.1.1 ABI-v2 plugin owns target CRUD, persisted target
+The unpublished `web.apps` 0.1.2 ABI-v2 plugin owns target CRUD, persisted target
 configuration and its browser UI. It motivated reusable browser publication,
 restricted stream ticket and native Go HTTP gateway capabilities; core owns no
-application-specific target behavior. A narrowly scoped plugin Service Worker
-renders HTTP applications locally through synthetic streaming responses. All
+application-specific target behavior. Restricted browser publications bootstrap
+from the RunPilot base URL using a fragment and transition to their virtual path
+only after a basePath-scoped worker has taken control. The generic root hook
+bypasses management authentication/initialization for these tabs. One owner-bound
+browser runtime shares that worker across explicitly bound client sessions;
+normal management clients retain ordinary networking. The plugin renders HTTP
+applications locally through synthetic streaming responses. All
 upstream application payload crosses the encrypted common application WebSocket,
 including when normal RunPilot payload encryption is disabled. HTTPS serves
 package bootstrap/worker assets only. Target tabs receive only a single gateway

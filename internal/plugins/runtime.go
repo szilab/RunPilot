@@ -577,7 +577,7 @@ func (r *Runtime) dispatchCapability(ctx context.Context, payload []byte) capabi
 			return detailedFailure(request.Capability, err)
 		}
 		return capabilitySuccess(value)
-	case "browser.publication.register", "browser.publication.remove", "browser.stream.ticket", "http.gateway.open", "http.gateway.close":
+	case "browser.runtime.register", "browser.runtime.remove", "browser.publication.register", "browser.publication.remove", "browser.stream.ticket", "http.gateway.open", "http.gateway.close":
 		browser, ok := r.host.(BrowserHost)
 		if !ok {
 			return capabilityFailure("unavailable", "browser capabilities unavailable")

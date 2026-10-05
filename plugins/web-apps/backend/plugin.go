@@ -47,10 +47,13 @@ type session struct {
 	TargetID      string `json:"targetId"`
 	PublicPrefix  string `json:"publicPrefix"`
 	PublicationID string `json:"publicationId"`
+	RuntimeID     string `json:"runtimeId"`
+	BaseURL       string `json:"baseURL"`
 }
 type plugin struct {
 	publications map[string]string
 	sessions     map[string]session
+	runtimeID    string
 }
 
 func newPlugin() *plugin {
@@ -142,13 +145,16 @@ func (p *plugin) readTargets() (targetStore, *rpcError) {
 	return stored, nil
 }
 func (p *plugin) publish(t target) *rpcError {
+	if f := p.ensureRuntime(); f != nil {
+		return f
+	}
 	if p.publications[t.ID] != "" {
 		return nil
 	}
 	var out struct {
 		ID string `json:"id"`
 	}
-	if err := callHost("browser.publication.register", map[string]any{"mountPath": t.MountPath, "bootstrap": "web/bootstrap.html", "worker": "web/sw.js"}, &out); err != nil {
+	if err := callHost("browser.publication.register", map[string]any{"mountPath": t.MountPath, "bootstrap": "web/bootstrap.html", "runtimeId": p.runtimeID}, &out); err != nil {
 		return hostError(err)
 	}
 	if out.ID == "" {
@@ -157,9 +163,28 @@ func (p *plugin) publish(t target) *rpcError {
 	p.publications[t.ID] = out.ID
 	return nil
 }
+func (p *plugin) ensureRuntime() *rpcError {
+	if p.runtimeID != "" {
+		return nil
+	}
+	var out struct {
+		ID string `json:"id"`
+	}
+	if err := callHost("browser.runtime.register", map[string]string{"bootstrap": "web/bootstrap.js", "worker": "web/sw.js"}, &out); err != nil {
+		return hostError(err)
+	}
+	if out.ID == "" {
+		return fail("failed", "browser runtime returned no ID")
+	}
+	p.runtimeID = out.ID
+	return nil
+}
 func (p *plugin) initialize() *rpcError {
 	stored, f := p.readTargets()
 	if f != nil {
+		return f
+	}
+	if f = p.ensureRuntime(); f != nil {
 		return f
 	}
 	for _, t := range stored.Targets {
@@ -408,5 +433,9 @@ func (p *plugin) shutdown() {
 	}
 	for id := range p.publications {
 		p.removePublication(id)
+	}
+	if p.runtimeID != "" {
+		_ = callHost("browser.runtime.remove", map[string]string{"id": p.runtimeID}, nil)
+		p.runtimeID = ""
 	}
 }

@@ -186,6 +186,7 @@ func (s *Server) Handler() http.Handler {
 	// Docker attach uses a scoped, short-lived ticket rather than the API token.
 	mux.HandleFunc("GET /api/v1/docker/attach", s.handleDockerAttach)
 	mux.HandleFunc("GET /plugins/{id}/{path...}", s.handlePluginAsset)
+	mux.HandleFunc("GET /__runpilot__/browser/{runtime}/{asset}", s.serveBrowserRuntime)
 
 	sub, _ := fs.Sub(staticFS, "static")
 	static := http.FileServer(http.FS(sub))

@@ -26,6 +26,10 @@ func (h *fakeHost) call(method string, params any, out any) error {
 		return json.Unmarshal(raw, out)
 	}
 	switch method {
+	case "browser.runtime.register":
+		return respond(map[string]string{"id": "runtime"})
+	case "browser.runtime.remove":
+		return nil
 	case "storage.get":
 		if h.storage != nil && out != nil {
 			return json.Unmarshal(h.storage, out)
@@ -51,7 +55,7 @@ func (h *fakeHost) call(method string, params any, out any) error {
 	case "http.gateway.open":
 		h.opened = args
 		h.next++
-		return respond(map[string]string{"id": fmt.Sprintf("stream-%d", h.next), "publicPrefix": "/p" + h.publications[args["publicationId"].(string)], "publicationId": args["publicationId"].(string)})
+		return respond(map[string]string{"id": fmt.Sprintf("stream-%d", h.next), "publicPrefix": "/p" + h.publications[args["publicationId"].(string)], "publicationId": args["publicationId"].(string), "runtimeId": "runtime", "baseURL": "/p/"})
 	case "http.gateway.close":
 		h.closes++
 		return nil

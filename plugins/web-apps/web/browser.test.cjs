@@ -7,6 +7,11 @@ const browserType = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE)[process.env.
   const browser = await browserType.launch({ headless: true, executablePath: process.env.RUNPILOT_BROWSER_EXECUTABLE, args });
   try {
     const context = await browser.newContext({ ignoreHTTPSErrors: process.env.RUNPILOT_TEST_TLS === "true" });
+    const documents = [];
+    context.on("request", request => {
+      if (!request.isNavigationRequest()) return;
+      documents.push(request.url());
+    });
     const shell = await context.newPage();
     await shell.addInitScript(({ token, path }) => { if (location.pathname === path) localStorage.setItem("runpilot.token", token); }, { token: process.env.RUNPILOT_TEST_TOKEN, path: process.env.RUNPILOT_TEST_BASE + "/" });
     await shell.goto(process.env.RUNPILOT_TEST_URL + process.env.RUNPILOT_TEST_BASE + "/");
@@ -21,12 +26,20 @@ const browserType = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE)[process.env.
       assert.equal(await shell.locator(".webapps-card.docker-card.remote-card").count(), 1);
     }
     await shell.setViewportSize({ width: 1280, height: 800 });
+    if (process.env.RUNPILOT_TEST_LEGACY === "true") await shell.evaluate(async base => {
+      const registration = await navigator.serviceWorker.register(base + "/app/__runpilot__/sw.js?publication=legacy", { scope: base + "/app/" });
+      const worker = registration.installing || registration.waiting || registration.active;
+      if (worker.state !== "activated") await new Promise(resolve => worker.addEventListener("statechange", () => { if (worker.state === "activated") resolve(); }));
+    }, process.env.RUNPILOT_TEST_BASE);
+    const appStart = documents.length;
     const appPromise = context.waitForEvent("page");
     await shell.getByRole("button", { name: "Open", exact: true }).click();
     const app = await appPromise;
     app.on("pageerror", error => console.error("application page error:", error.message));
     await app.waitForFunction(() => document.querySelector("#app-ready"), null, { timeout: 15000 });
     assert.ok(app.url().endsWith(process.env.RUNPILOT_TEST_BASE + "/app/web/"));
+    const initial = new URL(documents[appStart]);
+    assert.equal(initial.pathname, process.env.RUNPILOT_TEST_BASE + "/"); assert.equal(initial.hash, ""); assert.equal(initial.search, "");
     assert.equal(await app.evaluate(() => window.opener), null);
     assert.equal(await app.evaluate(() => sessionStorage.getItem("runpilot.token")), null);
     assert.equal(await app.evaluate(() => localStorage.getItem("runpilot.token")), null);
@@ -48,7 +61,8 @@ const browserType = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE)[process.env.
     assert.deepEqual(result.range, { status: 206, contentRange: "bytes 2-5/10", body: "2345" });
     assert.equal(result.compressed, "compressed response"); assert.equal(result.redirect, "private-cookie");
     assert.equal(result.post, 400000); assert.equal(result.large, 20 * 1024 * 1024);
-    assert.equal(new URL(result.scope).pathname, process.env.RUNPILOT_TEST_BASE + "/app/");
+    assert.equal(new URL(result.scope).pathname, process.env.RUNPILOT_TEST_BASE + "/");
+    assert.equal(await app.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length), 1, "competing target worker was not retired");
     await app.reload();
     await app.waitForFunction(() => document.querySelector("#app-ready"), null, { timeout: 15000 });
     assert.equal(await app.evaluate(async () => (await fetch("cookie")).text()), "private-cookie");
@@ -68,8 +82,27 @@ const browserType = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE)[process.env.
     assert.equal(await second.evaluate(() => localStorage.getItem("runpilot.token")), null);
     assert.equal(await second.evaluate(() => sessionStorage.getItem("runpilot.token")), null);
     await second.close();
-    await shell.getByRole("button", { name: /Close sessions/ }).click();
+    await addTarget("Router", "/router");
+    const routerCard = shell.locator(".webapps-card").filter({ hasText: "Router" });
+    const routerStart = documents.length;
+    const routerPromise = context.waitForEvent("page"); await routerCard.getByRole("button", { name: "Open", exact: true }).click();
+    const router = await routerPromise; await router.waitForFunction(() => document.querySelector("#app-ready"));
+    assert.ok(router.url().endsWith(process.env.RUNPILOT_TEST_BASE + "/router/web/"));
+    assert.equal(new URL(documents[routerStart]).pathname, process.env.RUNPILOT_TEST_BASE + "/");
+    assert.equal(await router.evaluate(async () => (await fetch("cookie")).text()), "");
+    await router.evaluate(async () => fetch("login", { method: "POST", body: "router-login" }));
+    assert.equal(await shell.evaluate(() => sessionStorage.getItem("runpilot.token")), process.env.RUNPILOT_TEST_TOKEN);
+    const normalResponse = await shell.evaluate(async () => (await fetch("api/v1/system", { headers: { Authorization: "Bearer " + sessionStorage.getItem("runpilot.token") } })).status);
+    assert.equal(normalResponse, 200, "base worker intercepted management API");
+    await shell.locator(".webapps-card").filter({ hasText: "Test app" }).getByRole("button", { name: /Close sessions/ }).click();
+    await shell.locator(".webapps-card").filter({ hasText: "Test app" }).getByRole("button", { name: /Close sessions/ }).waitFor({ state: "detached" });
     assert.equal(await app.evaluate(async () => (await fetch("cookie")).status), 502);
+    assert.equal(await router.evaluate(async () => (await fetch("cookie")).text()), "private-cookie", "closing another publication disrupted router");
+    await router.reload(); await router.waitForFunction(() => document.querySelector("#app-ready"));
+    assert.equal(await router.evaluate(async () => (await fetch("cookie")).text()), "private-cookie");
+    await routerCard.getByRole("button", { name: /Close sessions/ }).click(); await routerCard.getByRole("button", { name: /Close sessions/ }).waitFor({ state: "detached" }); await router.close();
+    shell.once("dialog", dialog => dialog.accept()); await routerCard.getByRole("button", { name: "Delete", exact: true }).click();
+    await routerCard.waitFor({ state: "detached" });
     async function addTarget(name, mount) {
       await shell.getByRole("button", { name: "Add Web App" }).click();
       const dialog = shell.locator("dialog.webapps-dialog");
