@@ -2,7 +2,7 @@ apiVersion: runpilot.plugin/v1
 id: remote.vnc
 name: VNC / noVNC
 description: VNC remote desktop access
-version: 1.0.0
+version: 1.0.1
 requires:
   backend: ">=1.0.0 <2.0.0"
   frontend: ">=1.0.0 <2.0.0"

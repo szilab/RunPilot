@@ -257,7 +257,7 @@ export async function activate(runpilot) {
     item.resizeObserver.observe(host);
   }
   runpilot.navigation.register({
-    id: "terminal", title: "Terminal", icon: ">_",
+    id: "terminal", title: "Terminal", icon: { src: new URL("./icon.svg", import.meta.url).href },
     render: root => {
       page = root;
       render();

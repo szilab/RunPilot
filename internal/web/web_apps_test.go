@@ -20,6 +20,7 @@ import (
 	"github.com/szilab/RunPilot/internal/httpgateway"
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/websocketsecure"
+	"gopkg.in/yaml.v3"
 )
 
 type openedGateway struct {
@@ -42,7 +43,17 @@ func webAppsController(t *testing.T, base string, dataDirs ...string) *core.Cont
 		dir = t.TempDir()
 	}
 	source := filepath.Join("..", "..", "plugins", "web-apps")
-	dest := filepath.Join(dir, "plugins", "web.apps", "releases", "0.4.0")
+	manifest, err := os.ReadFile(filepath.Join(source, "plugin.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packageInfo struct {
+		Version string `yaml:"version"`
+	}
+	if err := yaml.Unmarshal(manifest, &packageInfo); err != nil || packageInfo.Version == "" {
+		t.Fatalf("web apps manifest version: %v", err)
+	}
+	dest := filepath.Join(dir, "plugins", "web.apps", "releases", packageInfo.Version)
 	if err := filepath.WalkDir(source, func(filename string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err

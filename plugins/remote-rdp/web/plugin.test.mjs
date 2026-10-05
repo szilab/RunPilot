@@ -72,9 +72,9 @@ test("session surface hides the local cursor on every Guacamole layer", () => {
   assert.match(css, /\.rdp-session-surface, \.rdp-session-surface \* \{ cursor: none; \}/);
 });
 
-test("RDP navigation uses a monitor and targets reuse the legacy responsive cards", () => {
+test("RDP navigation uses its packaged icon and targets reuse the legacy responsive cards", () => {
   const css = readFileSync(new URL("./plugin.css", import.meta.url), "utf8");
-  assert.match(frontendSource, /title: "RDP", icon: "monitor"/);
+  assert.match(frontendSource, /title: "RDP", icon: \{ src: new URL\("\.\/icon\.svg", import\.meta\.url\)\.href \}/);
   assert.match(frontendSource, /headerActions\(root\)/);
   assert.doesNotMatch(frontendSource, /<h2>RDP targets<\/h2>/);
   assert.match(frontendSource, /settingsForm.className = "plugin-settings-form rdp-plugin-settings"/);

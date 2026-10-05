@@ -152,6 +152,7 @@ function pluginUI() {
   });
 }
 function pluginNavigationIcon(icon) {
+  if (icon && typeof icon === "object" && typeof icon.src === "string") return `<img class="nav-icon nav-icon-image" src="${escapeHtml(icon.src)}" alt="" aria-hidden="true">`;
   if (icon === "monitor") return '<svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>';
   return `<span class="nav-icon" aria-hidden="true">${escapeHtml(icon || "•")}</span>`;
 }

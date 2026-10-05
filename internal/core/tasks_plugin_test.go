@@ -26,8 +26,8 @@ const tasksID = "tasks"
 func copyTasksPlugin(t *testing.T, dataDir string) {
 	t.Helper()
 	source := filepath.Join("..", "..", "plugins", tasksID)
-	destination := filepath.Join(dataDir, "plugins", tasksID, "releases", "0.1.0")
-	for _, name := range []string{"plugin.yaml", "backend/plugin.wasm", "web/plugin.js", "web/plugin.css"} {
+	destination := filepath.Join(dataDir, "plugins", tasksID, "releases", sourcePluginVersion(t, source))
+	for _, name := range []string{"plugin.yaml", "backend/plugin.wasm", "web/plugin.js", "web/plugin.css", "web/icon.svg"} {
 		data, err := os.ReadFile(filepath.Join(source, filepath.FromSlash(name)))
 		if err != nil {
 			t.Fatal(err)

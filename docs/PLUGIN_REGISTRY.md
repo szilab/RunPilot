@@ -225,6 +225,9 @@ tracking. The published workflow builds the same immutable package format, then
 creates its tagged GitHub release and regenerates the catalog. There is not yet a
 Settings workflow for installing a local archive.
 
+Use `tools/test-plugin-local.sh plugins/tasks ./data` to install a local source
+package under `data/plugins/<id>/releases/<version>`, then restart RunPilot.
+
 Updates are detected only when the user checks the catalog, and installation is
 explicit. A newly installed version is selected on the next startup; the running
 version stays active until then. Older version directories are retained, but the

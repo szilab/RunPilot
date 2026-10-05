@@ -360,8 +360,11 @@ instead of opening their own application WebSocket. Navigation/pages, Overview
 cards and Settings sections are registered through the corresponding extension
 hosts.
 
-Navigation entries may use `icon: "monitor"` for the shared desktop icon.
-Other icon strings continue to render as text glyphs. Settings forms appear
+Navigation entries may use a plugin-packaged image, for example
+`icon: { src: new URL("./icon.svg", import.meta.url).href }`. The shell displays
+it at 20 × 20 pixels with the same spacing as core navigation icons. The
+`icon: "monitor"` desktop icon and other text glyph strings remain supported
+for existing plugins. Settings forms appear
 inside their owning plugin's card only while that plugin is enabled. Plugins
 provide their heading, fields, and actions using the host's shared responsive
 layout without imposing a custom section width.

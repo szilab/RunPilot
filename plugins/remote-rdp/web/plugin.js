@@ -491,7 +491,7 @@ export async function activate(runpilot) {
     },
   });
   runpilot.navigation.register({
-    id: "remote-rdp", title: "RDP", icon: "monitor",
+    id: "remote-rdp", title: "RDP", icon: { src: new URL("./icon.svg", import.meta.url).href },
     headerActions(root) {
       if (activeSession) return;
       const button = document.createElement("button"); button.type = "button"; button.className = "button primary small"; button.textContent = "Add target"; button.addEventListener("click", () => editTarget());

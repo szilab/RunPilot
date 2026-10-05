@@ -435,7 +435,7 @@ export function activate(runpilot) {
   ];
 
   runpilot.navigation.register({
-    id: "tasks", title: "Tasks", icon: "☑",
+    id: "tasks", title: "Tasks", icon: { src: new URL("./icon.svg", import.meta.url).href },
     render: root => { page = root; render(); load(); },
   });
   load();

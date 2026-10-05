@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/xml"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,6 +76,30 @@ func TestCoreShellLeavesFeatureNavigationToPlugins(t *testing.T) {
 	}
 	if !strings.Contains(string(plugin), `id: "tasks", title: "Tasks"`) || strings.Contains(string(plugin), `id: "tasks-plugin"`) {
 		t.Error("Tasks plugin does not own the normal Tasks page")
+	}
+}
+
+func TestFirstPartyPluginNavigationImages(t *testing.T) {
+	for _, name := range []string{"remote-vnc", "remote-rdp", "tasks", "terminal", "web-apps"} {
+		pluginDir := filepath.Join("..", "..", "plugins", name, "web")
+		source, err := os.ReadFile(filepath.Join(pluginDir, "plugin.js"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(source), `icon: { src: new URL("./icon.svg", import.meta.url).href }`) {
+			t.Errorf("%s navigation does not reference its packaged icon", name)
+		}
+		asset, err := os.ReadFile(filepath.Join(pluginDir, "icon.svg"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var icon struct {
+			XMLName xml.Name `xml:"svg"`
+			ViewBox string   `xml:"viewBox,attr"`
+		}
+		if err := xml.Unmarshal(asset, &icon); err != nil || icon.XMLName.Local != "svg" || icon.ViewBox != "0 0 24 24" {
+			t.Errorf("%s has an invalid sidebar SVG: %v", name, err)
+		}
 	}
 }
 
@@ -238,8 +263,18 @@ func TestSidebarWarnsWhenHTTPDisablesWebSocketPayloadEncryption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(styles), `.shell.sidebar-collapsed .side-foot, .shell.sidebar-collapsed .connection-warning { width: 40px; height: 40px;`) || !strings.Contains(string(styles), `position: absolute; inset: 0; display: grid; place-items: center;`) {
+	if !strings.Contains(string(styles), `.shell.sidebar-collapsed .connection-warning { position: relative; align-self: start; width: 40px; height: 40px;`) || !strings.Contains(string(styles), `position: absolute; inset: 0; display: grid; place-items: center;`) {
 		t.Fatal("collapsed sidebar warning treatment is missing")
+	}
+	for _, want := range []string{
+		`.shell.sidebar-collapsed .system-version { display: none; }`,
+		`.shell.sidebar-collapsed .side-foot-label { position: absolute;`,
+		`.shell.sidebar-collapsed .side-foot { justify-content: center; height: 40px; padding: 0; border: 0; background: transparent; }`,
+		`.shell.sidebar-collapsed .side-foot .dot { flex: 0 0 8px; }`,
+	} {
+		if !strings.Contains(string(styles), want) {
+			t.Fatalf("collapsed sidebar connection indicator is missing %q", want)
+		}
 	}
 }
 

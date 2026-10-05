@@ -64,12 +64,13 @@ ARCHIVE="$TEMP_DIR/$PLUGIN_ID-$VERSION.rpplugin"
 (cd "$ROOT" && go run ./cmd/plugin-build -out "$ARCHIVE" "$PLUGIN_SOURCE")
 
 PLUGIN_ROOT="$DATA_DIR/plugins/$PLUGIN_ID"
-DEST="$PLUGIN_ROOT/$VERSION"
-mkdir -p "$PLUGIN_ROOT"
-STAGE="$(mktemp -d "$PLUGIN_ROOT/.install.XXXXXX")"
+RELEASE_ROOT="$PLUGIN_ROOT/releases"
+DEST="$RELEASE_ROOT/$VERSION"
+mkdir -p "$RELEASE_ROOT"
+STAGE="$(mktemp -d "$RELEASE_ROOT/.install.XXXXXX")"
 unzip -q "$ARCHIVE" -d "$STAGE"
 if [[ -e "$DEST" || -L "$DEST" ]]; then
-    BACKUP="$PLUGIN_ROOT/.backup.$PLUGIN_ID.$VERSION.$$"
+    BACKUP="$RELEASE_ROOT/.backup.$PLUGIN_ID.$VERSION.$$"
     mv -- "$DEST" "$BACKUP"
 fi
 if ! mv -- "$STAGE" "$DEST"; then

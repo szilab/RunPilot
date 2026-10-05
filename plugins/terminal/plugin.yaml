@@ -2,7 +2,7 @@ apiVersion: runpilot.plugin/v1
 id: terminal
 name: Terminal
 description: Interactive terminal using host process sessions
-version: 0.1.5
+version: 0.1.6
 requires:
   frontend: ">=1.0.0 <2.0.0"
   backend: ">=1.0.0 <2.0.0"

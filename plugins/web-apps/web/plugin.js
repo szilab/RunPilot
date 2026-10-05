@@ -80,7 +80,7 @@ export async function activate(runpilot) {
     try { const [t, s] = await Promise.all([call("apps.targets.list"), call("apps.sessions.list")]); targets = t.targets; sessions = s.sessions; }
     catch (error) { message = error.message; } render();
   }
-  runpilot.navigation.register({ id: "web-apps", title: "Web Apps", icon: "◈", render(root) { page = root; void load(); }, headerActions(root) { const button = document.createElement("button"); button.className = "button primary small"; button.textContent = "Add Web App"; button.onclick = () => edit(); root.append(button); } });
+  runpilot.navigation.register({ id: "web-apps", title: "Web Apps", icon: { src: new URL("./icon.svg", import.meta.url).href }, render(root) { page = root; void load(); }, headerActions(root) { const button = document.createElement("button"); button.className = "button primary small"; button.textContent = "Add Web App"; button.onclick = () => edit(); root.append(button); } });
   const refresh = setInterval(() => { if (page?.isConnected && page.classList.contains("active")) void load(); }, 30000);
   return { dispose() { disposed = true; clearInterval(refresh); } };
 }

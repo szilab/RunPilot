@@ -190,7 +190,7 @@ func pluginResponseHasError(raw json.RawMessage) bool {
 func copyRemoteVNCPlugin(t *testing.T, dataDir string) {
 	t.Helper()
 	source := filepath.Join("..", "..", "plugins", "remote-vnc")
-	destination := filepath.Join(dataDir, "plugins", remoteVNCPluginID, "releases", "1.0.0")
+	destination := filepath.Join(dataDir, "plugins", remoteVNCPluginID, "releases", sourcePluginVersion(t, source))
 	err := filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
