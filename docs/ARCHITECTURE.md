@@ -234,3 +234,18 @@ implemented, rather than by expanding the System fixture now.
 - Prefer incremental migrations over simultaneous rewrites.
 - Keep themes non-executable; a future theme package should be CSS/metadata, not
   another WASM plugin.
+
+### Web Apps transport proof
+
+The unpublished `web.apps` 0.1.0 ABI-v2 plugin owns target CRUD, persisted target
+configuration and its browser UI. It motivated reusable browser publication,
+restricted stream ticket and native Go HTTP gateway capabilities; core owns no
+application-specific target behavior. A narrowly scoped plugin Service Worker
+renders HTTP applications locally through synthetic streaming responses. All
+upstream application payload crosses the encrypted common application WebSocket,
+including when normal RunPilot payload encryption is disabled. HTTPS serves
+package bootstrap/worker assets only. Target tabs receive only a single gateway
+capability; normal RunPilot bearer credentials migrate from localStorage into
+tab-scoped sessionStorage and target tabs launch with `noopener`. Phase 1 requires
+relative URLs or compatible application base paths, with no body rewriting or
+upstream application WebSockets; follow-up compatibility work is in the backlog.

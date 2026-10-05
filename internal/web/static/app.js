@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-let token = localStorage.getItem("runpilot.token") || "";
+let token = RunPilotAuthStorage.migrate(sessionStorage, localStorage);
 let currentPage = "overview";
 let processes = [];
 let jobs = [];
@@ -1318,7 +1318,7 @@ $("loginForm").addEventListener("submit", async e => {
   token = candidate;
   try {
     await api("api/v1/system");
-    localStorage.setItem("runpilot.token", token);
+    RunPilotAuthStorage.save(sessionStorage, localStorage, token);
     $("loginError").classList.add("hidden");
     $("loginDialog").close();
     setConnected(true);

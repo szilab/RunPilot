@@ -446,3 +446,110 @@ First-party WASM backends use TinyGo 0.38.0 with the repository's
 The System package is a nonpublic reference fixture for ABI, host capability,
 WebSocket and frontend-extension tests. It uses ABI 2 and is excluded from the
 public catalog; it should not grow into the permanent host-monitoring feature.
+
+## Browser publications and restricted streams
+
+These additive backend-contract 1.x capabilities provide reusable browser mounts
+and HTTP infrastructure. The host supplies the calling plugin owner; none of
+these operations grants a normal RunPilot login.
+
+```text
+browser.publication.register {mountPath, bootstrap, worker} -> {id, owner, mountPath, bootstrap, worker}
+browser.publication.remove   {id} -> {}
+http.gateway.open           {publicationId, upstreamURL, upstreamBasePath} -> {id, publicPrefix, publicationId}
+http.gateway.close          {id} -> {}
+browser.stream.ticket       {streamId} -> {ticket}
+```
+
+A publication mounts package-owned `web/` bootstrap HTML and worker JS under a
+normalized relative mount. Root, overlapping mounts and framework paths (`api`,
+`plugins`, `vendor`, `healthz`, root filenames) are reserved. Mount paths
+use literal URL-safe characters, with no percent escapes or traversal. Host base
+paths and upstream base paths also preserve Unicode/spaces with URL escaping. Mounts
+are runtime state and must be reconstructed during initialization. The HTML's
+`__RUNPILOT_PUBLICATION__` placeholder and the worker's
+`self.RUNPILOT_PUBLICATION` receive `{owner, publicationId, publicPrefix,
+basePath, assets}`. The worker script is served at
+`publicPrefix/__runpilot__/sw.js?publication=<id>` with
+`Service-Worker-Allowed: publicPrefix/`; stale generations return 410. HTTPS
+serves only package initialization, never upstream payloads. Removing a mount
+closes its gateways. Plugin shutdown removes all mounts and gateways.
+
+An HTTP gateway snapshots one HTTP(S) origin without userinfo/path/query/fragment,
+its normalized upstream base path, and the publication's public prefix:
+`publicPrefix + suffix -> upstreamBasePath + suffix`, preserving escaped resource
+paths and queries. Browser requests supply only relative public paths. The Go
+standard-library client disables automatic redirects, automatic decompression
+and environment proxies. Same-upstream redirects inside the upstream base map
+back to the public prefix; HTTP(S) external redirects remain external. Unsafe
+schemes, userinfo and same-upstream redirects outside the configured base fail.
+Hop-by-hop, proxy, browser cookie and forwarding headers are stripped; the
+upstream Host is fixed, Origin is synthesized for unsafe methods or when supplied,
+and in-prefix Referer URLs map to the upstream origin/base (others are removed). Application Authorization, Range, If-Range, status, content type and
+cache headers are retained. There is no body rewriting.
+
+Each gateway owns an ephemeral cookie jar: upstream Set-Cookie updates the jar,
+subsequent requests receive its cookies, and synthetic browser responses never
+receive Set-Cookie. Cookie state is bounded to 128 records / 64 KiB per session.
+Cookies and active sessions are never durable. JavaScript
+access to server-created cookies is outside this contract. Gateways expire
+unattached after one minute, have a five-minute tunnel idle timeout, and close
+on disconnect, explicit close, owner shutdown or host shutdown. Active gateways
+are limited to 8 per owner and 64 globally; publications/tickets are bounded.
+The owner receives `http.gateway.closed {id}` for plugin-local reconciliation.
+
+`browser.stream.ticket` issues a random, owner/stream-scoped, single-use ticket
+valid for one minute. Currently its stream provider is the HTTP gateway; later
+providers may reuse the same restriction. The common `api/v1/ws` endpoint
+consumes it and **requires** the existing RunPilot encryption handshake,
+regardless of normal payload-mode settings or query overrides. That connection
+can attach/close only the granted stream and exchange its binary data; it cannot
+invoke plugin RPC, subscribe to plugin events, obtain REST authority, or become
+a normal authenticated application session. Even a normal plaintext application
+connection cannot attach these gateway streams. There is no feature endpoint.
+
+### HTTP tunnel version 1
+
+Inside the existing RPS1 binary stream, frames are concatenated without regard
+to WebSocket message boundaries. All integers are unsigned big endian:
+
+```text
+version:u8 (=1), type:u8, requestId:u32, payloadLength:u32, payload:bytes
+```
+
+Request IDs are nonzero, monotonically increasing per gateway. At most 16
+exchanges run concurrently; the browser admits at most 64 bounded waiting requests. Payloads are at most 16 KiB. Types:
+
+| Type | Direction | Payload |
+| --- | --- | --- |
+| 1 request start | browser → host | JSON `{method,path,headers}`; headers map to string arrays |
+| 2 request body | browser → host | raw bytes |
+| 3 request end | browser → host | empty |
+| 4 request cancel | browser → host | empty; cancels upstream request |
+| 5 response start | host → browser | JSON `{status,headers}` |
+| 6 response body | host → browser | raw bytes |
+| 7 response end | host → browser | empty |
+| 8 response error | host → browser | safe UTF-8 message |
+| 9 upload credit | host → browser | byte count:u32 |
+| 10 download credit | browser → host | byte count:u32 |
+
+GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS share the transport; CONNECT and
+TRACE are rejected. Start/header metadata is at most 16 KiB, headers at most
+64 names and 16 KiB combined, request path/query at most 8 KiB. Each exchange has
+a maximum 64 KiB unconsumed byte window in each direction (1 MiB per direction
+per gateway). Upload credit is returned only when the upstream pipe consumes
+bytes. The host waits for download credit before reading upstream bodies;
+ReadableStream consumption returns browser credit. Parser buffers, send queues,
+physical WebSocket buffering and stalled writes are also bounded. Invalid frames
+or excess credit close the gateway; late frames for completed IDs are ignored.
+Version/type fields allow a later protocol version to extend this contract.
+
+The worker constructs synthetic Responses without persistent application caches.
+It negotiates gzip/deflate (identity for Range), carries compressed bytes through
+the tunnel, and uses streaming DecompressionStream for browser rendering because
+synthetic Responses do not perform network content decoding. Decoded responses
+remove invalid compressed Content-Length/Content-Encoding metadata. The normal
+UI and worker load the same worker-safe `RunPilotSecureWebSocket` implementation.
+Normal UI bearer authentication is held in sessionStorage: the current tab
+migrates and removes legacy localStorage tokens. Browser features must launch
+with `noopener` so their tab does not inherit that credential or an opener.

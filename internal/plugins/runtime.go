@@ -63,6 +63,10 @@ type ProcessSessionHost interface {
 	ProcessSessionStatus(context.Context, string, json.RawMessage) (json.RawMessage, error)
 	ProcessSessionTerminate(context.Context, string, json.RawMessage) (json.RawMessage, error)
 }
+type BrowserHost interface {
+	BrowserCapability(context.Context, string, string, json.RawMessage) (json.RawMessage, error)
+}
+
 type NetworkStreamHost interface {
 	NetworkStreamOpen(context.Context, string, json.RawMessage) (json.RawMessage, error)
 	NetworkStreamRead(context.Context, string, json.RawMessage) (json.RawMessage, error)
@@ -569,6 +573,16 @@ func (r *Runtime) dispatchCapability(ctx context.Context, payload []byte) capabi
 		case "process.session.terminate":
 			value, err = sessions.ProcessSessionTerminate(ctx, r.manifest.ID, request.Params)
 		}
+		if err != nil {
+			return detailedFailure(request.Capability, err)
+		}
+		return capabilitySuccess(value)
+	case "browser.publication.register", "browser.publication.remove", "browser.stream.ticket", "http.gateway.open", "http.gateway.close":
+		browser, ok := r.host.(BrowserHost)
+		if !ok {
+			return capabilityFailure("unavailable", "browser capabilities unavailable")
+		}
+		value, err := browser.BrowserCapability(ctx, r.manifest.ID, request.Capability, request.Params)
 		if err != nil {
 			return detailedFailure(request.Capability, err)
 		}

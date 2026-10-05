@@ -1,0 +1,11 @@
+.webapps-list { display: grid; gap: var(--space-4, 1rem); }
+.webapps-card { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.25rem; border: 1px solid var(--border); border-radius: var(--radius-lg, 12px); background: var(--surface); }
+.webapps-card h2 { margin: 0 0 .5rem; color: var(--text-strong); font-size: 1.1rem; }
+.webapps-card p { color: var(--text-muted); margin: .3rem 0; overflow-wrap: anywhere; }
+.webapps-card code { color: var(--text); overflow-wrap: anywhere; }
+.webapps-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+.webapps-dialog form { display: grid; gap: 1rem; }
+.webapps-dialog label { display: grid; gap: .4rem; }
+.webapps-dialog p { color: var(--text-muted); }
+.webapps-dialog [data-error] { color: var(--danger); }
+@media (max-width: 700px) { .webapps-card { flex-direction: column; align-items: stretch; } }

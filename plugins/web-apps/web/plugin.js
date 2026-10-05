@@ -1,0 +1,60 @@
+export const publicPrefix = (base, mount) => String(base || "/").replace(/\/$/, "") + mount + "/";
+export function launchGateway(opened, opener = window.open.bind(window)) {
+  const params = new URLSearchParams({ ticket: opened.ticket, stream: opened.session.id, publication: opened.session.publicationId });
+  opener(opened.session.publicPrefix + "/#" + params, "_blank", "noopener,noreferrer");
+}
+
+async function removeWorker(prefix) {
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration(new URL(prefix, location.origin).href);
+    if (registration && new URL(registration.scope).pathname === prefix && new URL(registration.active?.scriptURL || registration.waiting?.scriptURL).pathname === prefix + "__runpilot__/sw.js") await registration.unregister();
+  } catch { /* Stale workers still fail closed after host-side publication removal. */ }
+}
+
+export async function activate(runpilot) {
+  const call = (method, params = {}) => runpilot.ws.call("web.apps", method, params);
+  const escape = runpilot.ui.escape;
+  const base = new URL(document.baseURI).pathname.replace(/\/$/, "");
+  let page, targets = [], sessions = [], message = "", disposed = false;
+  function edit(existing = {}) {
+    const dialog = document.createElement("dialog"); dialog.className = "dialog webapps-dialog";
+    const field = (label, name, fallback = "") => `<label><span>${label}</span><input name="${name}" value="${escape(existing[name] || fallback)}" maxlength="${name === "name" ? 100 : name === "upstreamURL" ? 2048 : 1024}" required></label>`;
+    dialog.innerHTML = `<form method="dialog"><div class="dialog-head"><h2>${existing.id ? "Edit Web App" : "Add Web App"}</h2></div>${field("Name", "name")}${field("Mount path", "mountPath", "/app")}${field("Upstream HTTP(S) origin", "upstreamURL", "http://127.0.0.1:8080")}${field("Upstream base path", "upstreamBasePath", "/")}<p>Use relative application URLs or configure the application's base path to match the public path. Application WebSockets and JavaScript-visible server cookies are not supported in Phase 1.</p><p data-error role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-cancel>Cancel</button><button type="submit" class="button primary">Save</button></div></form>`;
+    dialog.querySelector("[data-cancel]").onclick = () => dialog.close();
+    dialog.querySelector("form").onsubmit = async event => {
+      event.preventDefault(); const form = event.target, button = form.querySelector('[type="submit"]'); button.disabled = true;
+      const target = { id: existing.id || "" }; for (const key of ["name", "mountPath", "upstreamURL", "upstreamBasePath"]) target[key] = form.elements[key].value;
+      try { await call("apps.targets.save", { target }); if (existing.mountPath && existing.mountPath !== target.mountPath) await removeWorker(publicPrefix(base, existing.mountPath)); dialog.close(); await load(); }
+      catch (error) { dialog.querySelector("[data-error]").textContent = error.message; button.disabled = false; }
+    };
+    dialog.addEventListener("close", () => dialog.remove(), { once: true }); document.body.append(dialog); dialog.showModal();
+  }
+  async function action(work) { try { message = ""; await work(); await load(); } catch (error) { message = error.message; render(); } }
+  function render() {
+    if (!page || disposed) return; page.replaceChildren();
+    const root = document.createElement("div"); root.className = "webapps-list";
+    if (message) { const notice = document.createElement("p"); notice.setAttribute("role", "alert"); notice.textContent = message; root.append(notice); }
+    if (!targets.length) root.append(runpilot.ui.EmptyState({ title: "No Web Apps", message: "Add a host-reachable HTTP application to get started." }));
+    for (const target of targets) {
+      const card = document.createElement("article"); card.className = "webapps-card";
+      card.innerHTML = `<div><h2>${escape(target.name)}</h2><p>${escape(target.upstreamURL)}</p><code>${escape(publicPrefix(base, target.mountPath))}</code></div>`;
+      const actions = document.createElement("div"); actions.className = "webapps-actions";
+      const button = (label, style, work) => { const el = document.createElement("button"); el.type = "button"; el.className = "button " + style; el.textContent = label; el.onclick = work; actions.append(el); };
+      button("Open", "primary small", () => action(async () => { const opened = await call("apps.session.open", { targetId: target.id }); launchGateway(opened); }));
+      button("Edit", "secondary small", () => edit(target));
+      button("Delete", "danger small", () => { if (confirm(`Delete Web App “${target.name}”?`)) void action(async () => { await call("apps.targets.delete", { id: target.id }); await removeWorker(publicPrefix(base, target.mountPath)); }); });
+      const active = sessions.filter(session => session.targetId === target.id);
+      if (active.length) button(`Close sessions (${active.length})`, "secondary small", () => action(async () => { for (const session of active) await call("apps.session.close", { id: session.id }); }));
+      card.append(actions); root.append(card);
+    }
+    page.append(root);
+  }
+  async function load() {
+    if (disposed) return;
+    try { const [t, s] = await Promise.all([call("apps.targets.list"), call("apps.sessions.list")]); targets = t.targets; sessions = s.sessions; }
+    catch (error) { message = error.message; } render();
+  }
+  runpilot.navigation.register({ id: "web-apps", title: "Web Apps", icon: "◈", render(root) { page = root; void load(); }, headerActions(root) { const button = document.createElement("button"); button.className = "button primary small"; button.textContent = "Add Web App"; button.onclick = () => edit(); root.append(button); } });
+  const refresh = setInterval(() => { if (page?.isConnected && page.classList.contains("active")) void load(); }, 30000);
+  return { dispose() { disposed = true; clearInterval(refresh); } };
+}

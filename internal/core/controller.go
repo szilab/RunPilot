@@ -47,6 +47,7 @@ type Controller struct {
 	pluginProcesses      *pluginProcessManager
 	pluginSessions       *pluginSessionManager
 	pluginNetworkStreams *pluginNetworkStreamManager
+	browserPublications  *browserPublications
 	eventMu              sync.RWMutex
 	eventSubscribers     map[uint64]chan plugins.Event
 	nextEventSubscriber  uint64
@@ -101,6 +102,10 @@ func Open(dataDir string) (*Controller, error) {
 	c.pluginNetworkStreams = newPluginNetworkStreamManager(func(owner, id string) {
 		c.deliverPluginEvent(owner, "network.stream.closed", map[string]string{"id": id})
 	})
+	c.browserPublications = newBrowserPublications(func(owner, id string) {
+		c.deliverPluginEvent(owner, "http.gateway.closed", map[string]string{"id": id})
+	})
+	c.browserPublications.basePath = c.Snapshot().Server.BasePath
 	c.pluginProcesses.history = h
 	c.pluginProcesses.publish = func(owner, event string, data any) {
 		if raw, err := json.Marshal(data); err == nil {
@@ -168,6 +173,7 @@ func (c *Controller) Close() {
 	c.pluginProcesses.close()
 	c.pluginSessions.close()
 	c.pluginNetworkStreams.close()
+	c.browserPublications.stop("")
 	close(c.stopEvents)
 	c.remote.Close()
 	c.scheduler.Stop()
@@ -458,6 +464,7 @@ func (h controllerPluginHost) PluginStopped(pluginID string) {
 	h.controller.pluginProcesses.stopOwner(pluginID)
 	h.controller.pluginSessions.stopOwner(pluginID)
 	h.controller.pluginNetworkStreams.stopOwner(pluginID)
+	h.controller.browserPublications.stop(pluginID)
 }
 
 func (h controllerPluginHost) NetworkStreamOpen(ctx context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {

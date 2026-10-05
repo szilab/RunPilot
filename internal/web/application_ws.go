@@ -62,7 +62,8 @@ func (s *Server) consumeApplicationTicket(ticket string) bool {
 }
 
 func (s *Server) handleApplicationWS(w http.ResponseWriter, r *http.Request) {
-	if !s.consumeApplicationTicket(r.URL.Query().Get("ticket")) {
+	grant, restricted := s.ctrl.ConsumeBrowserStreamTicket(r.URL.Query().Get("ticket"))
+	if !restricted && !s.consumeApplicationTicket(r.URL.Query().Get("ticket")) {
 		http.Error(w, "application connection expired", http.StatusUnauthorized)
 		return
 	}
@@ -72,7 +73,11 @@ func (s *Server) handleApplicationWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 	conn.SetReadLimit(websocketsecure.MaxEncryptedMessageSize)
-	secure, err := websocketsecure.ServerHandshake(r.Context(), conn, requestWebSocketPayloadMode(r, s.ctrl.Snapshot().Server.WebSocketPayloadMode))
+	mode := requestWebSocketPayloadMode(r, s.ctrl.Snapshot().Server.WebSocketPayloadMode)
+	if restricted {
+		mode = websocketsecure.ModeRequired
+	}
+	secure, err := websocketsecure.ServerHandshake(r.Context(), conn, mode)
 	if err != nil {
 		_ = conn.Close(websocket.StatusPolicyViolation, "secure WebSocket negotiation failed")
 		return
@@ -106,15 +111,17 @@ func (s *Server) handleApplicationWS(w http.ResponseWriter, r *http.Request) {
 			attachment.release()
 		}
 	}()
-	events, unsubscribe := s.ctrl.SubscribePluginEvents()
-	defer unsubscribe()
-	go func() {
-		for event := range events {
-			ctx, cancel := context.WithTimeout(r.Context(), time.Second)
-			_ = write(ctx, event) // bounded channel drops for slow/disconnected clients.
-			cancel()
-		}
-	}()
+	if !restricted {
+		events, unsubscribe := s.ctrl.SubscribePluginEvents()
+		defer unsubscribe()
+		go func() {
+			for event := range events {
+				ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+				_ = write(ctx, event) // bounded channel drops for slow/disconnected clients.
+				cancel()
+			}
+		}()
+	}
 	for {
 		kind, data, err := secure.Read(r.Context())
 		if err != nil {
@@ -148,6 +155,10 @@ func (s *Server) handleApplicationWS(w http.ResponseWriter, r *http.Request) {
 		}
 		var control applicationStreamControl
 		if json.Unmarshal(data, &control) == nil && control.Type != "" {
+			if restricted && (control.Plugin != grant.Owner && control.Type == "stream.attach" || control.StreamID != grant.StreamID) {
+				_ = write(r.Context(), map[string]any{"type": "stream.error", "code": "forbidden", "streamId": control.StreamID})
+				continue
+			}
 			switch control.Type {
 			case "stream.attach":
 				if control.Plugin == "" || control.StreamID == "" {
@@ -162,7 +173,14 @@ func (s *Server) handleApplicationWS(w http.ResponseWriter, r *http.Request) {
 					_ = write(r.Context(), map[string]any{"type": "stream.error", "streamId": control.StreamID, "code": "failed_precondition"})
 					continue
 				}
-				stream, release, attachErr := s.ctrl.AttachPluginNetworkStream(control.Plugin, control.StreamID)
+				var stream net.Conn
+				var release func()
+				var attachErr error
+				if restricted {
+					stream, release, attachErr = s.ctrl.AttachBrowserStream(grant.Owner, grant.StreamID)
+				} else {
+					stream, release, attachErr = s.ctrl.AttachPluginNetworkStream(control.Plugin, control.StreamID)
+				}
 				if attachErr != nil {
 					code := "not_found"
 					var failure *plugins.HostFailure
@@ -179,7 +197,15 @@ func (s *Server) handleApplicationWS(w http.ResponseWriter, r *http.Request) {
 				if err := write(r.Context(), map[string]any{"type": "stream.attached", "streamId": control.StreamID}); err != nil {
 					return
 				}
-				go s.forwardNetworkStream(r.Context(), control.StreamID, stream, release, attachments, &attachmentMu, writeRaw, write)
+				forwardWrite := write
+				if restricted {
+					forwardWrite = func(ctx context.Context, value any) error {
+						err := write(ctx, value)
+						_ = conn.Close(websocket.StatusNormalClosure, "browser stream closed")
+						return err
+					}
+				}
+				go s.forwardNetworkStream(r.Context(), control.StreamID, stream, release, attachments, &attachmentMu, writeRaw, forwardWrite)
 				continue
 			case "stream.close":
 				attachmentMu.Lock()
@@ -197,6 +223,10 @@ func (s *Server) handleApplicationWS(w http.ResponseWriter, r *http.Request) {
 				_ = write(r.Context(), map[string]any{"type": "stream.error", "streamId": control.StreamID, "code": "bad_request"})
 				continue
 			}
+		}
+		if restricted {
+			_ = write(r.Context(), plugins.Failure("", "forbidden", "connection is restricted to one browser stream"))
+			continue
 		}
 		request, err := plugins.ParseRequest(data)
 		if err != nil {

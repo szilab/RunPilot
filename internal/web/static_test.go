@@ -80,7 +80,7 @@ func TestSecureWebSocketDefersApplicationTrafficUntilHandshakeCompletes(t *testi
 		"this._ready=true; this.onopen?.()",
 		"const sequence=this.sendSequence, header=concat(TAG",
 		"this.sendSequence++",
-		"}).catch(error=>this._reportError(error));",
+		"this._fail(error);throw error",
 		"Secure WebSocket requires HTTPS and Web Crypto",
 		"kind===\"text\"?textDecoder.decode(plain):plain",
 	} {

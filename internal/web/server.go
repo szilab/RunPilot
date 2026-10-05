@@ -73,6 +73,9 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := ctrl.SetBrowserBasePath(basePath); err != nil {
+		return nil, err
+	}
 	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, dockerTerminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), dockerAttachTickets: map[string]dockerAttachTicket{}, remoteTickets: map[string]remoteClientTicket{}, applicationTickets: map[string]time.Time{}, docker: ctrl.Docker()}, nil
 }
 
@@ -186,7 +189,12 @@ func (s *Server) Handler() http.Handler {
 
 	sub, _ := fs.Sub(staticFS, "static")
 	static := http.FileServer(http.FS(sub))
-	mux.Handle("/", static)
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.serveBrowserPublication(w, r) {
+			return
+		}
+		static.ServeHTTP(w, r)
+	}))
 	if s.basePath == "/" {
 		return logging(mux)
 	}
