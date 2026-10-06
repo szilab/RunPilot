@@ -280,7 +280,8 @@ func TestDockerProjectNameCollision(t *testing.T) {
 		t.Fatalf("external project name collision was actionable: %v", e)
 	}
 	f.files["projects/owned/.runpilot-legacy-origin"] = "/srv/external"
-	f.set([]string{"compose", "--project-name", "owned", "-f", "compose.yaml", "up", "-d"}, "")
+	f.files["projects/owned/.env"] = "IMAGE=example\n"
+	f.set([]string{"compose", "--project-name", "owned", "--project-directory", "/srv/external", "--env-file", "/runpilot/projects/owned/.env", "-f", "compose.yaml", "up", "-d"}, "")
 	mustSuccess(t, func() (any, *rpcError) { return p.projectAction("owned", "up") })
 }
 func TestDockerResourceGuardsAndMalformedJSON(t *testing.T) {

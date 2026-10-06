@@ -187,14 +187,16 @@ plugin work; see the [backlog](../BACKLOG.md).
 
 ### Docker status
 
-Docker has a Linux-only first-party plugin (`plugins/docker`, source version `0.1.1`,
+Docker has a Linux-only first-party plugin (`plugins/docker`, source version `0.1.2`,
 ABI v2) for Compose projects, containers, volumes, networks and interactive
 container terminals. It owns the normal `docker` page and uses generic bounded
 `process.run`, owner-scoped `workspace.*`, and `process.session.*` capabilities.
-Existing `<dataDir>/compose` projects are copied into the Docker plugin workspace
-on startup without overwriting plugin-owned projects or deleting the source. The
-copy records its legacy origin so existing containers can be verified against
-their original Compose directory; external name collisions remain read only.
+Existing `<dataDir>/compose` control files are copied into the Docker plugin
+workspace on startup without overwriting plugin-owned projects or deleting the
+source. Container data stays at its original path. The copy records its legacy
+origin so Compose actions retain relative bind mounts and existing containers
+can be verified against their original Compose directory; external name
+collisions remain read only.
 External containers allow bounded log viewing but no lifecycle mutations or
 interactive terminal.
 The legacy Docker manager and HTTP handlers remain transitional because hidden
