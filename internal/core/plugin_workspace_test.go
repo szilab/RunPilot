@@ -80,6 +80,13 @@ func TestLegacyDockerProjectMigration(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "config", "settings.txt"), []byte("old"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(filepath.Join(source, "config"), 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(source, "config"), 0700) })
+	if err := os.WriteFile(filepath.Join(source, ".env"), []byte("IMAGE=example\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := migrateLegacyDockerProjects(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +98,12 @@ func TestLegacyDockerProjectMigration(t *testing.T) {
 	origin, err := os.ReadFile(filepath.Join(dest, ".runpilot-legacy-origin"))
 	if err != nil || string(origin) != source {
 		t.Fatalf("migration origin: %s %v", origin, err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "config")); !os.IsNotExist(err) {
+		t.Fatalf("container data was copied: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(dest, ".env")); err != nil || string(data) != "IMAGE=example\n" {
+		t.Fatalf("migration environment: %s %v", data, err)
 	}
 	if err := os.WriteFile(filepath.Join(dest, "compose.yaml"), []byte("new"), 0600); err != nil {
 		t.Fatal(err)
@@ -105,6 +118,33 @@ func TestLegacyDockerProjectMigration(t *testing.T) {
 	data, err = os.ReadFile(filepath.Join(source, "compose.yaml"))
 	if err != nil || string(data) != "services: {one: {}}" {
 		t.Fatal("migration changed source")
+	}
+}
+func TestLegacyDockerProjectMigrationContinuesAfterBadProject(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "compose", "bad")
+	good := filepath.Join(dir, "compose", "good")
+	if err := os.MkdirAll(bad, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(good, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(good, "compose.yaml"), filepath.Join(bad, "compose.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(good, "compose.yaml"), []byte("services: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateLegacyDockerProjects(dir); err == nil || !strings.Contains(err.Error(), "project bad") {
+		t.Fatalf("bad project error: %v", err)
+	}
+	projects := filepath.Join(dir, "plugins", "docker", "data", "workspace", "projects")
+	if _, err := os.Stat(filepath.Join(projects, "bad")); !os.IsNotExist(err) {
+		t.Fatalf("bad project imported: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(projects, "good", "compose.yaml")); err != nil {
+		t.Fatalf("good project not imported: %v", err)
 	}
 }
 func TestWorkspaceHostFailureCodes(t *testing.T) {

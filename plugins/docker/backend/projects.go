@@ -237,7 +237,25 @@ func (p *plugin) projectAction(name, action string) (any, *rpcError) {
 	}
 	p.busy[name] = true
 	defer delete(p.busy, name)
-	args := []string{"compose", "--project-name", name, "-f", file, action}
+	args := []string{"compose", "--project-name", name}
+	if dirs, e := p.projectDirectories(name); e != nil {
+		return nil, e
+	} else if len(dirs) > 1 {
+		// Keep relative bind mounts and other project-relative paths at their
+		// original location, while the editable Compose file stays in workspace.
+		args = append(args, "--project-directory", dirs[1])
+		if entries, e := listDir("projects/" + name); e != nil {
+			return nil, e
+		} else {
+			for _, entry := range entries {
+				if entry.Name == ".env" && !entry.Directory && !entry.Symlink {
+					args = append(args, "--env-file", filepath.Join(dirs[0], ".env"))
+					break
+				}
+			}
+		}
+	}
+	args = append(args, "-f", file, action)
 	if action == "up" {
 		args = append(args, "-d")
 	}

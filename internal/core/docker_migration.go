@@ -1,11 +1,11 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // migrateLegacyDockerProjects is a transitional, one-way copy. The source
@@ -38,6 +38,7 @@ func migrateLegacyDockerProjects(dataDir string) error {
 	if err != nil {
 		return err
 	}
+	var failures []error
 	for _, entry := range entries {
 		name := entry.Name()
 		if !legacyProjectName(name) || !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
@@ -47,13 +48,15 @@ func migrateLegacyDockerProjects(dataDir string) error {
 		if _, err := os.Lstat(dest); err == nil {
 			continue
 		} else if !os.IsNotExist(err) {
-			return err
+			failures = append(failures, fmt.Errorf("migrate legacy Docker project %s: %w", name, err))
+			continue
 		}
 		tmp, err := os.MkdirTemp(target, ".migration-")
 		if err != nil {
-			return err
+			failures = append(failures, fmt.Errorf("migrate legacy Docker project %s: %w", name, err))
+			continue
 		}
-		err = copyLegacyProject(filepath.Join(source, name), tmp, 0)
+		err = copyLegacyProject(filepath.Join(source, name), tmp)
 		if err == nil {
 			var marker *os.File
 			marker, err = os.OpenFile(filepath.Join(tmp, ".runpilot-legacy-origin"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
@@ -69,10 +72,10 @@ func migrateLegacyDockerProjects(dataDir string) error {
 		}
 		if err != nil {
 			_ = os.RemoveAll(tmp)
-			return fmt.Errorf("migrate legacy Docker project %s: %w", name, err)
+			failures = append(failures, fmt.Errorf("migrate legacy Docker project %s: %w", name, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 func legacyProjectName(s string) bool {
 	if s == "" || len(s) > 128 {
@@ -85,40 +88,23 @@ func legacyProjectName(s string) bool {
 	}
 	return true
 }
-func copyLegacyProject(src, dst string, depth int) error {
-	if depth > 32 {
-		return fmt.Errorf("project directory is too deep")
-	}
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-	if len(entries) > 4096 {
-		return fmt.Errorf("project directory has too many entries")
-	}
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".migration-") {
+func copyLegacyProject(src, dst string) error {
+	// Service data below a project often belongs to containers and is neither
+	// readable by RunPilot nor safe to move to a new bind-mount path. Compose
+	// actions retain src as their project directory; only editable control
+	// files need a workspace copy.
+	composeFileCopied := false
+	for _, name := range []string{"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml", ".env"} {
+		from, to := filepath.Join(src, name), filepath.Join(dst, name)
+		fi, err := os.Lstat(from)
+		if os.IsNotExist(err) {
 			continue
 		}
-		from, to := filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())
-		fi, err := os.Lstat(from)
 		if err != nil {
 			return err
 		}
-		if fi.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("project contains a symlink")
-		}
-		if fi.IsDir() {
-			if err := os.Mkdir(to, 0700); err != nil {
-				return err
-			}
-			if err := copyLegacyProject(from, to, depth+1); err != nil {
-				return err
-			}
-			continue
-		}
 		if !fi.Mode().IsRegular() || fi.Size() > 16<<20 {
-			return fmt.Errorf("project contains an unsupported or oversized file")
+			return fmt.Errorf("project control file %s is unsupported or oversized", name)
 		}
 		input, err := os.Open(from)
 		if err != nil {
@@ -138,6 +124,12 @@ func copyLegacyProject(src, dst string, depth int) error {
 		if closeErr != nil {
 			return closeErr
 		}
+		if name != ".env" {
+			composeFileCopied = true
+		}
+	}
+	if !composeFileCopied {
+		return fmt.Errorf("project has no Compose file")
 	}
 	return nil
 }
