@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // Load the plugin as a data: module so this works on any Node version
 // regardless of package "type" detection.
-const source = fs.readFileSync(fileURLToPath(new URL("../../tasks/web/plugin.js", import.meta.url)), "utf8");
+const sourcePath = fileURLToPath(new URL("../../tasks/web/plugin.js", import.meta.url));
+const sourceURL = pathToFileURL(sourcePath).href;
+const source = fs.readFileSync(sourcePath, "utf8").replaceAll("import.meta.url", JSON.stringify(sourceURL));
 const plugin = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 const { splitArgs, formatArgs, scheduleText, splitInterval, taskFromForm, activate } = plugin;
 
@@ -57,16 +59,17 @@ test("invalid numbers are rejected before any request", () => {
 });
 
 function fakeRuntime(replies) {
-  const registered = [], subscriptions = new Map(), calls = [], toasts = [];
+  const registered = [], overviewRegistered = [], subscriptions = new Map(), calls = [], toasts = [];
   const runpilot = {
     ws: {
       call: async (pluginId, method, params) => { calls.push([pluginId, method, params]); const reply = replies[method]; return typeof reply === "function" ? reply(params) : reply; },
       on: (pluginId, event, listener) => { subscriptions.set(`${pluginId}:${event}`, listener); return () => subscriptions.delete(`${pluginId}:${event}`); },
     },
     navigation: { register: entry => registered.push(entry) },
+    overview: { register: entry => overviewRegistered.push(entry), refresh() {} },
     ui: { escape: value => String(value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]), toast: (message, level) => toasts.push([message, level]) },
   };
-  return { runpilot, registered, subscriptions, calls, toasts };
+  return { runpilot, registered, overviewRegistered, subscriptions, calls, toasts };
 }
 
 const view = (id, name, type, status = {}) => ({ task: { id, name, type, command: { path: "/bin/x" }, restart: { mode: "on-failure" }, schedule: type === "scheduled" ? { type: "interval", intervalSeconds: 60 } : undefined, enabled: true }, status: { state: type === "scheduled" ? "idle" : "stopped", ...status } });
@@ -77,6 +80,8 @@ test("the page renders escaped task data, reacts to events and unsubscribes", as
   assert.equal(runtime.registered.length, 1);
   assert.equal(runtime.registered[0].id, "tasks");
   assert.equal(runtime.registered[0].title, "Tasks");
+  assert.equal(runtime.overviewRegistered.length, 1);
+  assert.equal(runtime.overviewRegistered[0].id, "tasks.summary");
   assert.deepEqual([...runtime.subscriptions.keys()].sort(), ["tasks:history.output", "tasks:tasks.changed", "tasks:tasks.run.completed", "tasks:tasks.status"]);
   const page = { isConnected: true, innerHTML: "", addEventListener() {} };
   runtime.registered[0].render(page);

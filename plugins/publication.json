@@ -8,6 +8,6 @@
     {"id": "tasks", "source": "plugins/tasks", "publish": true},
     {"id": "docker", "source": "plugins/docker", "publish": true},
     {"id": "terminal", "source": "plugins/terminal", "publish": true},
-    {"id": "web.apps", "source": "plugins/web-apps", "publish": false}
+    {"id": "web.apps", "source": "plugins/web-apps", "publish": true}
   ]
 }
