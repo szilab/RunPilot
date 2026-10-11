@@ -24,11 +24,10 @@ type Store struct {
 }
 
 func Open(dataDir string) (*Store, error) {
-	legacyDir := filepath.Join(dataDir, "legacy")
-	if err := os.MkdirAll(filepath.Join(legacyDir, "runs"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dataDir, "internal", "runs"), 0o700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", filepath.Join(legacyDir, "history.db"))
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +69,7 @@ CREATE INDEX IF NOT EXISTS runs_owner_subject ON runs(owner, target_id, started_
 }
 
 func (s *Store) RunLogPath(runID string) string {
-	return filepath.Join(s.dataDir, "legacy", "runs", runID+".log")
+	return filepath.Join(s.dataDir, "internal", "runs", runID+".log")
 }
 
 func (s *Store) Append(rec model.RunRecord) error {

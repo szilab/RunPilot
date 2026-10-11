@@ -4,12 +4,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/szilab/RunPilot/internal/core"
 )
 
 func TestBasePathRoutesUIAndAPI(t *testing.T) {
-	ctrl, err := core.Open(t.TempDir())
+	ctrl, err := openReadyController(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

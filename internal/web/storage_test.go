@@ -9,12 +9,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-
-	"github.com/szilab/RunPilot/internal/core"
 )
 
 func TestDownloadTicketAtRootUsesLocalPath(t *testing.T) {
-	ctrl, err := core.Open(t.TempDir())
+	ctrl, err := openReadyController(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +51,7 @@ func TestDownloadTicketAtRootUsesLocalPath(t *testing.T) {
 }
 
 func TestStorageTextEndpointCreatesNewLocalFile(t *testing.T) {
-	ctrl, err := core.Open(t.TempDir())
+	ctrl, err := openReadyController(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +76,7 @@ func TestStorageTextEndpointCreatesNewLocalFile(t *testing.T) {
 }
 
 func TestStorageLocationsAreRuntimeOnly(t *testing.T) {
-	ctrl, err := core.Open(t.TempDir())
+	ctrl, err := openReadyController(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +105,7 @@ func TestStorageLocationsAreRuntimeOnly(t *testing.T) {
 }
 
 func TestSoftwareProviderConfigurationRequiresAuth(t *testing.T) {
-	ctrl, err := core.Open(t.TempDir())
+	ctrl, err := openReadyController(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

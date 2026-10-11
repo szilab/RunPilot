@@ -5,12 +5,10 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
-
-	"github.com/szilab/RunPilot/internal/core"
 )
 
 func TestLegacyTerminalEndpointsAreRemoved(t *testing.T) {
-	ctrl, err := core.Open(t.TempDir())
+	ctrl, err := openReadyController(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

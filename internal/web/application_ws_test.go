@@ -20,7 +20,6 @@ import (
 	"github.com/szilab/RunPilot/internal/model"
 
 	"github.com/coder/websocket"
-	"github.com/szilab/RunPilot/internal/core"
 	"github.com/szilab/RunPilot/internal/plugins"
 	"github.com/szilab/RunPilot/internal/websocketsecure"
 )
@@ -42,7 +41,7 @@ func TestApplicationWebSocketRoutesSystemPlugin(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ctrl, err := core.Open(dataDir)
+	ctrl, err := openReadyController(t, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +151,7 @@ func TestApplicationWebSocketMultiplexesOwnedNetworkStreamAndRPC(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ctrl, err := core.Open(dataDir)
+	ctrl, err := openReadyController(t, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}

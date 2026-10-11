@@ -17,7 +17,6 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/szilab/RunPilot/internal/config"
-	"github.com/szilab/RunPilot/internal/core"
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/plugins"
 )
@@ -105,7 +104,7 @@ esac
 	}); err != nil {
 		t.Fatal(err)
 	}
-	controller, err := core.Open(dataDir)
+	controller, err := openReadyController(t, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}

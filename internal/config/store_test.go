@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/szilab/RunPilot/internal/model"
@@ -230,4 +232,54 @@ func containsStorageSection(value string) bool {
 		}
 	}
 	return false
+}
+
+func TestFreshSetupTokenRotationIsAtomicAndPersistent(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := store.Snapshot().Server.Token
+	if store.Snapshot().Server.SetupComplete || initial == "" {
+		t.Fatal("fresh install did not require setup with a token")
+	}
+	const next = "a-new-token-that-is-at-least-24-bytes-long"
+	var successes atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if store.ChangeInitialToken(initial, next) == nil {
+				successes.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if successes.Load() != 1 {
+		t.Fatalf("successful rotations = %d", successes.Load())
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Snapshot().Server; got.Token != next || !got.SetupComplete {
+		t.Fatalf("reopened server config = %#v", got)
+	}
+}
+
+func TestExistingConfigWithoutSetupMarkerIsUpgrade(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runpilot.yaml")
+	if err := os.WriteFile(path, []byte("server:\n  token: existing-valid-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !store.Snapshot().Server.SetupComplete || store.Snapshot().Server.Token != "existing-valid-token" {
+		t.Fatal("upgrade forced setup or changed token")
+	}
 }

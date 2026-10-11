@@ -10,7 +10,7 @@ import (
 	"github.com/szilab/RunPilot/internal/model"
 )
 
-func TestStoreUsesSeparateLegacyDirectory(t *testing.T) {
+func TestStoreDoesNotCreateLegacyDirectory(t *testing.T) {
 	dataDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dataDir, "history.db"), []byte("old database"), 0o600); err != nil {
 		t.Fatal(err)
@@ -27,10 +27,10 @@ func TestStoreUsesSeparateLegacyDirectory(t *testing.T) {
 	if len(runs) != 0 {
 		t.Fatalf("old database was imported: %#v", runs)
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, "legacy", "history.db")); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(filepath.Join(dataDir, "legacy")); !os.IsNotExist(err) {
+		t.Fatalf("legacy directory exists: %v", err)
 	}
-	if got := store.RunLogPath("run-one"); got != filepath.Join(dataDir, "legacy", "runs", "run-one.log") {
+	if got := store.RunLogPath("run-one"); got != filepath.Join(dataDir, "internal", "runs", "run-one.log") {
 		t.Fatalf("legacy log path = %s", got)
 	}
 }

@@ -222,9 +222,11 @@ capability.
 
 The plugin owns the normal `tasks` page. Legacy task definitions in
 `runpilot.yaml` and the legacy backend remain intact but are not shown in the
-normal UI. New legacy runs use `<dataDir>/legacy`; old local history is not
-imported. **Backup is not part of the Tasks
-plugin**: Backup jobs remain in the legacy job engine until their own migration.
+normal UI. Legacy task code and configuration are still present pending cleanup.
+The core transitional history is now in-memory with temporary logs below
+`<dataDir>/internal/runs`; startup no longer creates `<dataDir>/legacy` or imports
+old local history. **Backup is not part of the Tasks plugin**: Backup jobs remain
+in the legacy job engine until their own migration.
 
 The capability changes made for Tasks are generic framework infrastructure:
 interpreter-aware `process.start` (launcher semantics), process timeouts and

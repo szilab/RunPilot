@@ -75,12 +75,18 @@ func Open(dataDir string) (*Store, error) {
 	}
 	// Storage used to be persisted configuration. Decode it only so opening an
 	// older file can rewrite it without the obsolete section; locations are now
-	// discovered at runtime by the Storage registry.
+	// discovered at runtime by the Storage registry. A valid token without the
+	// new setup marker is an existing installation and remains initialized.
 	var raw map[string]any
 	if err := yaml.Unmarshal(b, &raw); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", s.path, err)
 	}
 	_, hadLegacyStorage := raw["storage"]
+	serverRaw, _ := raw["server"].(map[string]any)
+	_, hadSetupMarker := serverRaw["setupComplete"]
+	if !hadSetupMarker && s.cfg.Server.Token != "" {
+		s.cfg.Server.SetupComplete = true
+	}
 	before := clone(s.cfg)
 	normalize(&s.cfg)
 	if before.Server.Token == "" {
@@ -123,6 +129,27 @@ func (s *Store) Update(fn func(*model.Config) error) error {
 	return nil
 }
 
+// ChangeInitialToken completes first-run setup while checking and rotating the
+// unique installation token under the same lock.
+func (s *Store) ChangeInitialToken(current, next string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cfg.Server.SetupComplete || current == "" || s.cfg.Server.Token != current {
+		return errors.New("initial token change rejected")
+	}
+	if len(next) < 24 || next == current {
+		return errors.New("new token must be different and at least 24 characters")
+	}
+	prev := s.cfg
+	s.cfg.Server.Token = next
+	s.cfg.Server.SetupComplete = true
+	if err := s.saveLocked(); err != nil {
+		s.cfg = prev
+		return err
+	}
+	return nil
+}
+
 func (s *Store) saveLocked() error {
 	b, err := yaml.Marshal(s.cfg)
 	if err != nil {
@@ -139,10 +166,11 @@ func defaultConfig() model.Config {
 	config := model.Config{
 		Version: 1,
 		Server: model.ServerConfig{
-			Bind:     "127.0.0.1:9070",
-			Port:     9070,
-			BasePath: "/",
-			Token:    randomToken(),
+			Bind:          "127.0.0.1:9070",
+			Port:          9070,
+			BasePath:      "/",
+			Token:         randomToken(),
+			SetupComplete: false,
 		},
 		Processes: []model.ProcessDefinition{},
 		Jobs:      []model.JobDefinition{},

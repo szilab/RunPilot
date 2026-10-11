@@ -64,9 +64,6 @@ func Run(ctx context.Context, dataDir string, options ...Options) error {
 		})
 	})
 	defer ui.Close()
-	if ctrl.TokenCreated() {
-		log.Printf("RunPilot API token (save it now): %s", cfg.Server.Token)
-	}
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           ui.Handler(),

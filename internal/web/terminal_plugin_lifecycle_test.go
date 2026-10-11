@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	"github.com/szilab/RunPilot/internal/config"
-	"github.com/szilab/RunPilot/internal/core"
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/plugins"
 )
@@ -111,7 +110,7 @@ func TestTerminalPluginUserLifecycleHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctrl, err := core.Open(dataDir)
+	ctrl, err := openReadyController(t, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +134,7 @@ func TestTerminalPluginUserLifecycleHTTP(t *testing.T) {
 		t.Helper()
 		ctrl.Close()
 		var openErr error
-		ctrl, openErr = core.Open(dataDir)
+		ctrl, openErr = openReadyController(t, dataDir)
 		if openErr != nil {
 			t.Fatal(openErr)
 		}

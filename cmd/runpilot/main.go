@@ -43,6 +43,22 @@ func run() error {
 		return service.Run(*dataDir, daemon.Options{Port: *port, BindAddress: *bindAddress, BasePath: *basePath})
 	case "service":
 		return runServiceCommand(args[1:])
+	case "setup-token":
+		fs := flag.NewFlagSet("setup-token", flag.ContinueOnError)
+		dataDir := fs.String("data-dir", config.DefaultDataDir(), "RunPilot data directory")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		store, err := config.Open(*dataDir)
+		if err != nil {
+			return err
+		}
+		cfg := store.Snapshot()
+		if cfg.Server.SetupComplete {
+			return fmt.Errorf("first-run setup is already complete")
+		}
+		fmt.Println(cfg.Server.Token)
+		return nil
 	case "version", "--version", "-v":
 		fmt.Println("RunPilot", version.Version)
 		return nil
@@ -114,6 +130,7 @@ Usage:
   runpilot service start                     Start the native service
   runpilot service stop                      Stop the native service
   runpilot service uninstall                 Remove the native service
+  runpilot setup-token [--data-dir PATH]    Print the unique initial token before setup
   runpilot version                           Print version
 
 With no arguments RunPilot starts in foreground mode.

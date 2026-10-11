@@ -7,12 +7,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/szilab/RunPilot/internal/core"
 	"github.com/szilab/RunPilot/internal/model"
 )
 
 func TestDashboardStatusAndLauncherAPI(t *testing.T) {
-	ctrl, err := core.Open(t.TempDir())
+	ctrl, err := openReadyController(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

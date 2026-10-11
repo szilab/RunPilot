@@ -93,7 +93,7 @@ func webAppsController(t *testing.T, base string, dataDirs ...string) *core.Cont
 	}); err != nil {
 		t.Fatal(err)
 	}
-	c, err := core.Open(dir)
+	c, err := openReadyController(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}

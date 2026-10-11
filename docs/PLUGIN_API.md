@@ -263,7 +263,7 @@ packaged host deployment, not the user account or operating system.
 IDs and log locations are host-generated and never accept paths. Execution
 metadata and output live in the calling plugin's
 `<dataDir>/plugins/<owner>/data/history.db` and `data/runs/<id>.log`.
-Legacy core runs remain in `<dataDir>/legacy/history.db` and never list plugin
+Legacy core runs use an in-memory transitional history store and never list plugin
 executions.
 
 ```text

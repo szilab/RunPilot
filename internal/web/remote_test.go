@@ -6,12 +6,10 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/szilab/RunPilot/internal/core"
 )
 
 func TestLegacyRemotePageAndProviderAPIsAreGone(t *testing.T) {
-	ctrl, err := core.Open(t.TempDir())
+	ctrl, err := openReadyController(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +38,7 @@ func TestLegacyRemotePageAndProviderAPIsAreGone(t *testing.T) {
 }
 
 func TestXpraClientTicketRedirectStaysOnTheScopedProxyPath(t *testing.T) {
-	ctrl, err := core.Open(t.TempDir())
+	ctrl, err := openReadyController(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +59,7 @@ func TestXpraClientTicketRedirectStaysOnTheScopedProxyPath(t *testing.T) {
 }
 
 func TestXpraProxyRedirectUsesOnlySessionSnapshotParameters(t *testing.T) {
-	ctrl, err := core.Open(t.TempDir())
+	ctrl, err := openReadyController(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -145,6 +145,7 @@ type ServerConfig struct {
 	Port                 int    `json:"port,omitempty" yaml:"port,omitempty"`
 	BasePath             string `json:"basePath,omitempty" yaml:"basePath,omitempty"`
 	Token                string `json:"token" yaml:"token"`
+	SetupComplete        bool   `json:"setupComplete" yaml:"setupComplete"`
 	WebSocketPayloadMode string `json:"websocketPayloadMode,omitempty" yaml:"websocketPayloadMode,omitempty"`
 }
 

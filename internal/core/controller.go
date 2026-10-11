@@ -648,6 +648,9 @@ func (c *Controller) DataDir() string        { return c.dataDir }
 func (c *Controller) ConfigPath() string     { return c.config.Path() }
 func (c *Controller) Snapshot() model.Config { return c.config.Snapshot() }
 func (c *Controller) TokenCreated() bool     { return c.config.TokenCreated() }
+func (c *Controller) ChangeInitialToken(current, next string) error {
+	return c.config.ChangeInitialToken(current, next)
+}
 
 func (c *Controller) StorageLocations(ctx context.Context) []storage.Descriptor {
 	return c.storage.List(ctx)

@@ -267,9 +267,20 @@ without an interactive login, enable lingering for that user:
 sudo loginctl enable-linger <username>
 ```
 
-Open `http://127.0.0.1:9070`. On first start, `run` prints a newly generated API
-token once. Save it and use it on the web UI login screen. The token is stored in
-`runpilot.yaml`.
+Open `http://127.0.0.1:9070`. New installations start locked in a focused setup
+screen. Retrieve the unique initial token locally with `runpilot setup-token`
+(run the command as the RunPilot service account and pass `--data-dir` if needed),
+then replace it with a new token of at least 24 characters. RunPilot stores the
+new token and setup completion atomically in `runpilot.yaml`. Existing installs
+with a valid token remain initialized across upgrades; upgrades never print or
+reset tokens. App Central does not document an authenticated mechanism for
+passing a unique secret to the package administrator, so its NAS package uses
+the same local `setup-token` command rather than first-client registration.
+ASUSTOR documents package configuration, hooks, and ADM session IDs, but not a
+supported package-admin secret delivery channel in its [App Central Developer
+Guide](https://downloadgb.asustor.com/developer/App_Central_Developer_Guide_5.1.0_20251010.pdf).
+For App Central, run `/usr/local/AppCentral/runpilot/bin/runpilot setup-token
+--data-dir /volume1/.@plugins/AppCentral/runpilot/data` over SSH as `admin`.
 
 ## Web server and reverse proxy
 

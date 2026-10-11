@@ -106,6 +106,8 @@ func (s *Server) Handler() http.Handler {
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/v1/system", s.handleSystem)
+	mux.HandleFunc("GET /api/v1/setup", s.handleSetupStatus)
+	mux.HandleFunc("POST /api/v1/setup/token", s.handleInitialTokenChange)
 	api.HandleFunc("GET /api/v1/dashboard/status", s.handleDashboardStatus)
 	api.HandleFunc("GET /api/v1/launcher", s.handleLauncherGet)
 	api.HandleFunc("PUT /api/v1/launcher", s.handleLauncherPut)
@@ -200,9 +202,9 @@ func (s *Server) Handler() http.Handler {
 		static.ServeHTTP(w, r)
 	}))
 	if s.basePath == "/" {
-		return logging(mux)
+		return logging(s.setupGate(mux))
 	}
-	return logging(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return logging(s.setupGate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == s.basePath {
 			http.Redirect(w, r, s.basePath+"/", http.StatusPermanentRedirect)
 			return
@@ -218,7 +220,7 @@ func (s *Server) Handler() http.Handler {
 			clone.URL.RawPath = strings.TrimPrefix(r.URL.RawPath, s.basePath)
 		}
 		mux.ServeHTTP(w, clone)
-	}))
+	})))
 }
 
 // Close releases all interactive shell sessions during RunPilot shutdown.
@@ -237,6 +239,43 @@ func normalizeBasePath(value string) (string, error) {
 		return "", fmt.Errorf("invalid server base path %q", value)
 	}
 	return clean, nil
+}
+
+const initialSetupHTML = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Set up RunPilot</title><style>body{font:16px system-ui;max-width:34rem;margin:12vh auto;padding:0 1rem;background:#101820;color:#edf3f7}h1{font-size:2rem}label{display:block;margin:1rem 0}input{box-sizing:border-box;width:100%;padding:.75rem;margin-top:.4rem}button{padding:.8rem 1.2rem;background:#68b4a5;border:0;border-radius:.4rem;font-weight:700}#error{color:#ff9d9d}</style><h1>Set up RunPilot</h1><p>RunPilot is locked until you replace this installation’s unique initial token. On the NAS or host, run <code>runpilot setup-token</code> and enter the printed token below. This local command is the administrator-only retrieval path.</p><form id="f"><label>Initial token<input name="current" type="password" required autocomplete="current-password"></label><label>New token (at least 24 characters)<input name="next" type="password" minlength="24" required autocomplete="new-password"></label><label>Confirm new token<input name="confirm" type="password" minlength="24" required autocomplete="new-password"></label><p id="error"></p><button>Change token and continue</button></form><script>f.onsubmit=async e=>{e.preventDefault();error.textContent="";if(f.next.value!==f.confirm.value){error.textContent="The new tokens do not match.";return}try{const r=await fetch("api/v1/setup/token",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({current:f.current.value,next:f.next.value})});if(!r.ok)throw Error("Token change failed. Check the initial token and try again.");sessionStorage.setItem("runpilot.token",f.next.value);location.href="."}catch(x){error.textContent=x.message}}</script></html>`
+
+func (s *Server) setupGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.ctrl.Snapshot().Server.SetupComplete || r.URL.Path == "/healthz" || r.URL.Path == "/api/v1/setup" || r.URL.Path == "/api/v1/setup/token" || strings.HasPrefix(r.URL.Path, "/static/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == "/" || r.URL.Path == "/setup" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = io.WriteString(w, initialSetupHTML)
+			return
+		}
+		writeJSON(w, http.StatusPreconditionRequired, map[string]string{"error": "initial setup required", "setup": "/setup"})
+	})
+}
+
+func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]bool{"required": !s.ctrl.Snapshot().Server.SetupComplete})
+}
+
+func (s *Server) handleInitialTokenChange(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Current string `json:"current"`
+		Next    string `json:"next"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if err := s.ctrl.ChangeInitialToken(input.Current, input.Next); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "token change rejected"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"complete": true})
 }
 
 func (s *Server) auth(next http.Handler) http.Handler {

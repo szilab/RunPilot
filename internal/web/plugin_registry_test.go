@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/szilab/RunPilot/internal/config"
-	"github.com/szilab/RunPilot/internal/core"
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/plugins"
 )
@@ -65,7 +64,7 @@ func TestPluginRegistryLifecycleHTTP(t *testing.T) {
 	if err := store.Update(func(cfg *model.Config) error { cfg.PluginRegistry.URL = registry.URL + "/catalog.json"; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	ctrl, err := core.Open(dataDir)
+	ctrl, err := openReadyController(t, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +108,7 @@ func TestPluginRegistryLifecycleHTTP(t *testing.T) {
 		t.Fatal("enable/rescan hot activated frontend")
 	}
 	ctrl.Close()
-	ctrl, err = core.Open(dataDir)
+	ctrl, err = openReadyController(t, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +169,7 @@ func TestPluginRegistryLifecycleHTTP(t *testing.T) {
 		t.Fatal("uninstall did not update discovery")
 	}
 	ctrl.Close()
-	ctrl, err = core.Open(dataDir)
+	ctrl, err = openReadyController(t, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
