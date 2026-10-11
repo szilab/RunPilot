@@ -41,9 +41,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="1.0.4-dev.${GITHUB_SHA::7}"
-          ./tools/asustor/build.sh "$VERSION"
-          (cd dist && sha256sum --check "runpilot_${VERSION}_x86-64.apk.sha256")
+          CORE_VERSION="$(go run ./cmd/runpilot version | sed 's/^RunPilot //')"
+          APK_VERSION="1.0.5.r${GITHUB_RUN_NUMBER}"
+          ./tools/asustor/build.sh "$APK_VERSION" "$CORE_VERSION"
+          (cd dist && sha256sum --check "runpilot_${APK_VERSION}_x86-64.apk.sha256")
 
       - uses: actions/upload-artifact@v4
         with:
@@ -54,8 +55,8 @@ jobs:
         with:
           name: runpilot-asustor-${{ github.sha }}
           path: |
-            dist/runpilot_*_x86-64.apk
-            dist/runpilot_*_x86-64.apk.sha256
+            dist/runpilot_1.0.5.r${{ github.run_number }}_x86-64.apk
+            dist/runpilot_1.0.5.r${{ github.run_number }}_x86-64.apk.sha256
 
   # windows-build:
   #   runs-on: windows-latest

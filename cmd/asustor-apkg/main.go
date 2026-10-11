@@ -23,10 +23,10 @@ import (
 
 const packageName = "runpilot"
 
-var versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+var versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:(?:-[0-9A-Za-z.-]+)|(?:\.r[0-9]+))?(?:\+[0-9A-Za-z.-]+)?$`)
 
 func main() {
-	version := flag.String("version", "", "RunPilot package version (SemVer)")
+	version := flag.String("version", "", "ASUSTOR App Central package version")
 	binary := flag.String("binary", "", "Linux amd64 RunPilot executable")
 	source := flag.String("source", "packaging/asustor", "ASUSTOR package source directory")
 	outDir := flag.String("out", "dist", "Artifact output directory")
@@ -34,7 +34,7 @@ func main() {
 	if *version == "" || *binary == "" {
 		fail("-version and -binary are required")
 	}
-	if !versionPattern.MatchString(*version) {
+	if !validPackageVersion(*version) {
 		fail("invalid package version %q", *version)
 	}
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
@@ -56,6 +56,10 @@ func main() {
 		fail("write checksum: %v", err)
 	}
 	fmt.Println(artifact)
+}
+
+func validPackageVersion(version string) bool {
+	return versionPattern.MatchString(version)
 }
 
 func buildAPK(source, binary, version, artifact string) error {

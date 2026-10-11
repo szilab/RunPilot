@@ -153,19 +153,36 @@ AS6702T. It requires ADM 5.0 or newer, runs as the ADM `admin` account, and does
 not use Docker to run RunPilot. Build the APKG 2.0 package from the repository:
 
 ```bash
-./tools/asustor/build.sh 1.0.4
+./tools/asustor/build.sh 1.0.5.r121
 ```
 
-The builder creates `dist/runpilot_1.0.4_x86-64.apk` and its SHA-256 file. In
-ADM, open **App Central → Management → Manual Install** and select the APK. App
-Central owns start-at-boot and shutdown lifecycle through the package's
+The builder creates `dist/runpilot_1.0.5.r121_x86-64.apk` and its SHA-256 file.
+The first argument is the App Central package version; the optional second
+argument is the embedded RunPilot core version. CI uses
+`1.0.5.r${GITHUB_RUN_NUMBER}` for package builds. GitHub Actions run numbers
+increase for each workflow run, so retries of the same run keep the same
+package version and later runs receive a higher revision. For manual builds,
+use a revision higher than every previously built or installed package for the
+same `major.minor.patch` base. The `.rN` suffix follows the dotted revision
+form used in ASUSTOR's own package examples. App Central Ref. 6001 reports that
+the uploaded package version is already installed; the developer guide defines
+`general.version` as the package version but does not document that error code
+or its comparison algorithm. Earlier hash-suffixed development versions were
+not monotonic. The new numeric revision scheme removes that ordering ambiguity,
+but a future ADM upgrade check is still needed to confirm how Ref. 6001 is
+handled by the current ADM release.
+
+In ADM, open **App Central → Management → Manual Install** and select the APK.
+App Central owns start-at-boot and shutdown lifecycle through the package's
 `CONTROL/start-stop.sh` hook. The ADM desktop icon opens `http://NAS:9070/`.
-RunPilot binds to the NAS LAN interfaces on port 9070 and still requires the
-RunPilot API token to use the application. Keep direct access on a trusted LAN;
-HTTP does not protect the token in transit. For remote access, configure an
-HTTPS reverse proxy in ADM yourself and restrict access there. Package install
-does not change ADM's reverse proxy, certificates, firewall or other network
-settings.
+RunPilot binds to all NAS interfaces on port 9070 so LAN clients can connect.
+RunPilot API routes require its API token, but plain HTTP does not protect that
+token or session traffic from network observers. Keep direct access on a
+trusted LAN. For remote access, configure an HTTPS reverse proxy in ADM and
+restrict access there. The App Central desktop privilege controls launcher
+visibility; it is not a substitute for RunPilot authentication. Package
+installation does not change ADM's reverse proxy, certificates, firewall or
+other network settings.
 
 Mutable state lives at
 `/volume1/.@plugins/AppCentral/runpilot/data/`, owned by `admin` with private
@@ -185,7 +202,7 @@ running as the package's `admin` service account:
 |---|---:|---|
 | Tasks | 0.1.3 | A scheduled shell command succeeded and its output/history survived a RunPilot restart; a continuous task started and stopped successfully. |
 | Terminal | 0.1.6 | Two interactive PTY sessions opened; resize and input/output worked, and both sessions closed successfully. |
-| Docker | 0.1.1 | Loaded; Docker control was unavailable because ADM's Docker socket is root-only and RunPilot runs as `admin`. The package does not change socket permissions or use `sudo`. |
+| Docker | 0.1.1 | Loaded; Docker control was unavailable because the tested ADM Docker socket was `root:root` mode `0660` and the `admin` service account had no Docker group. The package does not change socket permissions or use `sudo`. |
 | RDP | 1.0.3 | Loaded; session connectivity was not tested because no guacd endpoint was available. Configure a reachable external guacd service. |
 | VNC | 1.0.1 | Loaded; session connectivity was not tested because no VNC target was available. Configure a reachable external VNC server. |
 | Web Apps | 0.4.1 | Loaded; proxying was not exercised because no upstream was configured. Upstreams must be reachable over HTTP/HTTPS, including their WebSocket endpoints where used. |
@@ -207,6 +224,14 @@ requires the corresponding service and permissions. The isolated NAS run
 verified the UI, health endpoint, authenticated API, host metrics and clean
 shutdown with the native binary. These feature checks used an isolated RunPilot
 instance; they did not change existing NAS services or Docker state.
+
+Granting the RunPilot service account access to Docker's root-owned socket is
+optional and is not configured by this package. Docker socket access is
+effectively root-level host authority: a Docker client can request privileged
+containers and host filesystem mounts. Only consider it after an administrator
+verifies a persistent, ADM-supported access-control mechanism and accepts that
+impact. Do not run all of RunPilot as root or loosen socket permissions to
+enable the Docker plugin.
 
 For troubleshooting, check the App Central app state and read
 `/volume1/.@plugins/AppCentral/runpilot/data/runpilot.log` over SSH. The package
