@@ -15,15 +15,49 @@ func LocatorPath() string {
 		return path
 	}
 	if runtime.GOOS == "windows" {
-		if root := os.Getenv("ProgramData"); root != "" {
+		legacy := legacyWindowsLocatorPath()
+		if legacy != "" {
+			if _, err := os.Lstat(legacy); err == nil {
+				return legacy
+			}
+		}
+		if root := os.Getenv("APPDATA"); root != "" {
 			return filepath.Join(root, "RunPilot", "data-root")
 		}
+		if home, err := userHomeDir(); err == nil {
+			return filepath.Join(home, "AppData", "Roaming", "RunPilot", "data-root")
+		}
+		return ""
 	}
-	if root := os.Getenv("XDG_CONFIG_HOME"); root != "" {
+	if root := DefaultConfigDir(); root != "" {
 		return filepath.Join(root, "runpilot", "data-root")
 	}
+	return ""
+}
+
+func legacyWindowsLocatorPath() string {
+	if root := os.Getenv("ProgramData"); root != "" {
+		return filepath.Join(root, "RunPilot", "data-root")
+	}
+	return ""
+}
+
+// DefaultConfigDir returns the platform configuration directory without creating it.
+func DefaultConfigDir() string {
+	if runtime.GOOS == "windows" {
+		if root := os.Getenv("APPDATA"); root != "" {
+			return root
+		}
+		if home, err := userHomeDir(); err == nil {
+			return filepath.Join(home, "AppData", "Roaming")
+		}
+		return ""
+	}
+	if root := os.Getenv("XDG_CONFIG_HOME"); root != "" {
+		return root
+	}
 	if home, err := userHomeDir(); err == nil {
-		return filepath.Join(home, ".config", "runpilot", "data-root")
+		return filepath.Join(home, ".config")
 	}
 	return ""
 }
@@ -44,7 +78,17 @@ func ResolveDataDir(explicit string) (string, error) {
 		}
 	}
 	if candidate == "" {
-		candidate = DefaultDataDir()
+		if runtime.GOOS == "windows" {
+			legacy := filepath.Join(os.Getenv("ProgramData"), "RunPilot")
+			if os.Getenv("ProgramData") != "" {
+				if _, err := os.Stat(filepath.Join(legacy, "runpilot.yaml")); err == nil {
+					candidate = legacy
+				}
+			}
+		}
+		if candidate == "" {
+			candidate = DefaultDataDir()
+		}
 	}
 	if candidate == "" {
 		return "", errors.New("resolve default data directory: home directory is unavailable")

@@ -28,9 +28,16 @@ func DefaultDataDir() string {
 		return v
 	}
 	if runtime.GOOS == "windows" {
-		if p := os.Getenv("ProgramData"); p != "" {
+		if p := os.Getenv("LOCALAPPDATA"); p != "" {
 			return filepath.Join(p, "RunPilot")
 		}
+		if p := os.Getenv("APPDATA"); p != "" {
+			return filepath.Join(filepath.Dir(p), "Local", "RunPilot")
+		}
+		if home, err := userHomeDir(); err == nil {
+			return filepath.Join(home, "AppData", "Local", "RunPilot")
+		}
+		return ""
 	}
 	if runtime.GOOS == "linux" {
 		if dataHome := os.Getenv("XDG_DATA_HOME"); dataHome != "" {
@@ -41,7 +48,7 @@ func DefaultDataDir() string {
 		}
 		return ""
 	}
-	return filepath.Join(".", "runpilot-data")
+	return ""
 }
 
 func Open(dataDir string) (*Store, error) {

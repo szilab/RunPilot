@@ -286,7 +286,7 @@ If the administrator password is lost, stop RunPilot and run
 RunPilot and create a new administrator within the setup window. Pass
 `--data-dir` when RunPilot was deployed with an explicit data directory.
 
-The default application data directory is `%ProgramData%\RunPilot` on Windows,
+The default application data directory is `%LOCALAPPDATA%\RunPilot` on Windows,
 `$XDG_DATA_HOME/runpilot` or `~/.local/share/runpilot` on Linux, and
 `/volume1/.@plugins/AppCentral/runpilot/data` on ASUSTOR. The setup page accepts
 an absolute path accessible to the RunPilot service identity. It refuses symlink
@@ -415,9 +415,10 @@ On Windows, from an elevated terminal:
 .\runpilot.exe service start
 ```
 
-The default data directory is `%ProgramData%\RunPilot`. Its persistent locator
-is stored under `%ProgramData%\RunPilot\data-root`, independently of the
-selected root.
+The default data directory is `%LOCALAPPDATA%\RunPilot`. Its persistent locator
+is stored under `%APPDATA%\RunPilot\data-root`, independently of the selected
+root. Older installations using `%ProgramData%\RunPilot` retain their existing
+data directory and locator.
 
 ## Configuration model
 

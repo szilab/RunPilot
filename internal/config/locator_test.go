@@ -3,8 +3,26 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+func TestDefaultConfigDirUsesPlatformConfigurationHome(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux configuration-directory conventions")
+	}
+	t.Setenv("XDG_CONFIG_HOME", "/custom/config")
+	if got := DefaultConfigDir(); got != "/custom/config" {
+		t.Fatalf("XDG config directory=%q", got)
+	}
+	t.Setenv("XDG_CONFIG_HOME", "")
+	oldHome := userHomeDir
+	userHomeDir = func() (string, error) { return "/home/runpilot-user", nil }
+	t.Cleanup(func() { userHomeDir = oldHome })
+	if got := DefaultConfigDir(); got != filepath.Join("/home/runpilot-user", ".config") {
+		t.Fatalf("default config directory=%q", got)
+	}
+}
 
 func TestDataRootPrecedenceAndPersistence(t *testing.T) {
 	base := t.TempDir()
