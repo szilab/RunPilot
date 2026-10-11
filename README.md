@@ -175,16 +175,26 @@ so upgrades retain it. Uninstall stops RunPilot but deliberately leaves this
 directory and its data in place; remove it manually only after deciding the
 configuration and history are no longer needed.
 
-RunPilot uses the normal published plugin catalog for Tasks, Terminal, Docker,
-RDP, VNC and Web Apps. Docker management follows the NAS Docker CLI and daemon
-permissions. ADM's Docker socket may be restricted to root; RunPilot runs as
-`admin` and does not broaden those permissions, so Docker control requires an
-administrator to grant the account access outside this package. Tasks and
-Terminal use commands and shells available to `admin`. RDP needs an externally
-reachable guacd service; VNC needs a reachable VNC target. Remote desktop
-targets and guacd are not bundled or installed by RunPilot. Web Apps needs
-reachable HTTP/HTTPS upstreams, including their WebSocket endpoints where
-used. The plugin catalog can be used without those host integrations.
+RunPilot uses the normal published plugin catalog. In an isolated RunPilot
+instance on an AS6702T running ADM 5.1.4, these current catalog releases
+downloaded, installed, enabled, loaded at startup, and served their frontend
+assets successfully:
+
+| Plugin | Published version | AS6702T result and remaining host requirement |
+|---|---:|---|
+| Tasks | 0.1.3 | Loaded; task execution and scheduling were not exercised on the NAS. Commands run with the `admin` account's permissions. |
+| Terminal | 0.1.6 | Loaded; an interactive shell session was not exercised on the NAS. Shells and commands must be available to `admin`. |
+| Docker | 0.1.1 | Loaded; Docker control was unavailable because ADM's Docker socket is root-only and RunPilot runs as `admin`. The package does not change socket permissions or use `sudo`. |
+| RDP | 1.0.3 | Loaded; session connectivity was not tested because no guacd endpoint was available. Configure a reachable external guacd service. |
+| VNC | 1.0.1 | Loaded; session connectivity was not tested because no VNC target was available. Configure a reachable external VNC server. |
+| Web Apps | 0.4.1 | Loaded; proxying was not exercised because no upstream was configured. Upstreams must be reachable over HTTP/HTTPS, including their WebSocket endpoints where used. |
+
+The isolated NAS run also verified the UI, health endpoint, authenticated API,
+host metrics, and clean shutdown with the native binary. These checks did not
+install the APK through App Central or verify its package registry and lifecycle
+hooks. Repository tests cover plugin contracts and lifecycle behavior; feature
+connectivity against Docker, guacd, VNC, or configured Web Apps still requires
+the corresponding service and permissions.
 
 For troubleshooting, check the App Central app state and read
 `/volume1/.@plugins/AppCentral/runpilot/data/runpilot.log` over SSH. The package
@@ -192,10 +202,10 @@ hook supports `start`, `stop`, `restart` and `status`; App Central itself should
 own normal lifecycle changes. Check that port 9070 is unused before installing
 and that ADM's account permissions allow the selected plugin's operations.
 
-App Central package building and the native binary have been tested on an
-AS6702T running ADM 5.1.4. Installing or upgrading through App Central requires
-a separate validation because it changes ADM's package registry and invokes
-system lifecycle hooks.
+APKG building, package archive validation, and the native binary have been
+tested on an AS6702T running ADM 5.1.4. Installing or upgrading through App
+Central requires a separate validation because it changes ADM's package
+registry and invokes system lifecycle hooks.
 
 ## Development
 
