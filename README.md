@@ -175,15 +175,16 @@ so upgrades retain it. Uninstall stops RunPilot but deliberately leaves this
 directory and its data in place; remove it manually only after deciding the
 configuration and history are no longer needed.
 
-RunPilot uses the normal published plugin catalog. In an isolated RunPilot
-instance on an AS6702T running ADM 5.1.4, these current catalog releases
-downloaded, installed, enabled, loaded at startup, and served their frontend
-assets successfully:
+RunPilot uses the normal published plugin catalog. These current catalog
+releases downloaded, installed, enabled, loaded at startup, and served their
+frontend assets in an isolated RunPilot instance on an AS6702T running ADM
+5.1.4. Tasks and Terminal were also exercised in a fresh isolated instance
+running as the package's `admin` service account:
 
 | Plugin | Published version | AS6702T result and remaining host requirement |
 |---|---:|---|
-| Tasks | 0.1.3 | Loaded; task execution and scheduling were not exercised on the NAS. Commands run with the `admin` account's permissions. |
-| Terminal | 0.1.6 | Loaded; an interactive shell session was not exercised on the NAS. Shells and commands must be available to `admin`. |
+| Tasks | 0.1.3 | A scheduled shell command succeeded and its output/history survived a RunPilot restart; a continuous task started and stopped successfully. |
+| Terminal | 0.1.6 | Two interactive PTY sessions opened; resize and input/output worked, and both sessions closed successfully. |
 | Docker | 0.1.1 | Loaded; Docker control was unavailable because ADM's Docker socket is root-only and RunPilot runs as `admin`. The package does not change socket permissions or use `sudo`. |
 | RDP | 1.0.3 | Loaded; session connectivity was not tested because no guacd endpoint was available. Configure a reachable external guacd service. |
 | VNC | 1.0.1 | Loaded; session connectivity was not tested because no VNC target was available. Configure a reachable external VNC server. |
