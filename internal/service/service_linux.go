@@ -176,6 +176,9 @@ func unitContents(executable, dataDir, workingDir string, option daemon.Options)
 	if dataDir != "" {
 		args = append(args, "--data-dir", unitQuote(dataDir))
 	}
+	if option.ConfigDir != "" {
+		args = append(args, "--config-dir", unitQuote(option.ConfigDir))
+	}
 	if option.Port != 0 {
 		args = append(args, "--port", strconv.Itoa(option.Port))
 	}

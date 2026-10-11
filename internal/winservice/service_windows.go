@@ -86,6 +86,9 @@ func Install(dataDir string, options ...daemon.Options) error {
 		binPath += " --data-dir " + quoteSC(dataDir)
 	}
 	if len(options) > 0 {
+		if options[0].ConfigDir != "" {
+			binPath += " --config-dir " + quoteSC(options[0].ConfigDir)
+		}
 		if options[0].Port != 0 {
 			binPath += fmt.Sprintf(" --port %d", options[0].Port)
 		}

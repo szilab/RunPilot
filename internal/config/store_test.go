@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,21 @@ import (
 
 	"github.com/szilab/RunPilot/internal/model"
 )
+
+func TestOpenWithConfigDirStoresConfigSeparatelyFromData(t *testing.T) {
+	dataDir := t.TempDir()
+	configDir := filepath.Join(t.TempDir(), "config")
+	store, err := OpenWithConfigDir(dataDir, configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(configDir, "runpilot.yaml"); store.Path() != want {
+		t.Fatalf("config path = %q, want %q", store.Path(), want)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "runpilot.yaml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unexpected config file beside data: %v", err)
+	}
+}
 
 func TestStorePersists(t *testing.T) {
 	dir := t.TempDir()

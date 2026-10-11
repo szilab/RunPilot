@@ -293,7 +293,7 @@ func normalizeBasePath(value string) (string, error) {
 	return clean, nil
 }
 
-const initialSetupHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Set up RunPilot</title><script>document.documentElement.dataset.scheme="system";document.documentElement.dataset.theme=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"</script><link rel="stylesheet" href="__BASE__/styles.css"></head><body><main class="setup-screen"><section class="dialog small setup-card"><div class="dialog-head"><div><h1>Set up RunPilot</h1><p>Create the local administrator account and choose where RunPilot stores its data.</p></div></div><p>Complete setup within 5 minutes of starting RunPilot. When the window expires, setup is locked until you restart the RunPilot service.</p><form id="setup" class="settings-form setup-form"><label>Administrator username<input name="username" value="admin" minlength="3" maxlength="64" autocomplete="username" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label>Confirm password<input name="confirm" type="password" minlength="12" autocomplete="new-password" required></label><label>RunPilot data directory<input name="dataDir" type="text" value="__DATA_DIR__" required></label><div id="error" class="form-error hidden" role="alert"></div><div class="dialog-actions"><button class="button primary">Create administrator</button></div></form></section></main><script>try{localStorage.removeItem('runpilot.token');sessionStorage.removeItem('runpilot.token')}catch{}const form=document.querySelector('#setup'),error=document.querySelector('#error');form.onsubmit=async e=>{e.preventDefault();error.textContent='';error.classList.add('hidden');if(form.password.value!==form.confirm.value){error.textContent='Passwords do not match.';error.classList.remove('hidden');return}try{const response=await fetch('__BASE__/api/v1/setup',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(Object.fromEntries(new FormData(form)))});if(!response.ok){const result=await response.json();throw Error(result.error||'Setup failed')}location.href='__BASE__/'}catch(x){error.textContent=x.message;error.classList.remove('hidden')}}</script></body></html>`
+const initialSetupHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Set up RunPilot</title><script>document.documentElement.dataset.scheme="system";document.documentElement.dataset.theme=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"</script><link rel="stylesheet" href="__BASE__/styles.css"></head><body><main class="setup-screen"><section class="dialog small setup-card"><div class="dialog-head"><div><h1>Set up RunPilot</h1><p>Create the local administrator account and choose where RunPilot stores its data.</p></div></div><p>Complete setup within 5 minutes of starting RunPilot. When the window expires, setup is locked until you restart the RunPilot service.</p><form id="setup" class="settings-form setup-form"><label>Administrator username<input name="username" value="admin" minlength="3" maxlength="64" autocomplete="username" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label>Confirm password<input name="confirm" type="password" minlength="12" autocomplete="new-password" required></label>__DATA_DIR_CONTROL__<div id="error" class="form-error hidden" role="alert"></div><div class="dialog-actions"><button class="button primary">Create administrator</button></div></form></section></main><script>try{localStorage.removeItem('runpilot.token');sessionStorage.removeItem('runpilot.token')}catch{}const form=document.querySelector('#setup'),error=document.querySelector('#error');form.onsubmit=async e=>{e.preventDefault();error.textContent='';error.classList.add('hidden');if(form.password.value!==form.confirm.value){error.textContent='Passwords do not match.';error.classList.remove('hidden');return}try{const response=await fetch('__BASE__/api/v1/setup',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(Object.fromEntries(new FormData(form)))});if(!response.ok){const result=await response.json();throw Error(result.error||'Setup failed')}location.href='__BASE__/'}catch(x){error.textContent=x.message;error.classList.remove('hidden')}}</script></body></html>`
 
 func (s *Server) writeInitialSetup(w http.ResponseWriter) {
 	staticPrefix := s.basePath
@@ -301,10 +301,33 @@ func (s *Server) writeInitialSetup(w http.ResponseWriter) {
 		staticPrefix = ""
 	}
 	page := strings.ReplaceAll(initialSetupHTML, "__BASE__", staticPrefix)
-	page = strings.ReplaceAll(page, "__DATA_DIR__", html.EscapeString(s.ctrl.DataDir()))
+	dataControl := `<label>RunPilot data directory<input name="dataDir" type="text" value="` + html.EscapeString(s.ctrl.DataDir()) + `" required></label>`
+	if !s.dataRootSwitchAllowed {
+		dataControl = `<p class="muted">RunPilot data directory: <code>` + html.EscapeString(s.ctrl.DataDir()) + `</code> (fixed by startup configuration)</p>`
+	}
+	page = strings.ReplaceAll(page, "__DATA_DIR_CONTROL__", dataControl)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = io.WriteString(w, page)
+}
+
+func (s *Server) writeExpiredSetup(w http.ResponseWriter) {
+	staticPrefix := s.basePath
+	if staticPrefix == "/" {
+		staticPrefix = ""
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusGone)
+	_, _ = io.WriteString(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Setup locked · RunPilot</title><script>document.documentElement.dataset.scheme="system";document.documentElement.dataset.theme=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"</script><link rel="stylesheet" href="`+html.EscapeString(staticPrefix)+`/styles.css"></head><body><main class="setup-screen"><section class="dialog small setup-card"><h1>Setup window expired</h1><p>The five-minute setup window has ended. Restart the RunPilot service to open a new setup window.</p></section></main></body></html>`)
+}
+
+func (s *Server) writeSetupPage(w http.ResponseWriter) {
+	if !s.setupWindowOpen() {
+		s.writeExpiredSetup(w)
+		return
+	}
+	s.writeInitialSetup(w)
 }
 
 func (s *Server) setupGate(next http.Handler) http.Handler {
@@ -316,7 +339,7 @@ func (s *Server) setupGate(next http.Handler) http.Handler {
 			return
 		}
 		if r.URL.Path == "/" || r.URL.Path == "/setup" {
-			s.writeInitialSetup(w)
+			s.writeSetupPage(w)
 			return
 		}
 		writeJSON(w, http.StatusPreconditionRequired, map[string]string{"error": "initial setup required", "setup": "/setup"})
@@ -334,7 +357,7 @@ func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, s.basePath+"/", http.StatusSeeOther)
 		return
 	}
-	s.writeInitialSetup(w)
+	s.writeSetupPage(w)
 }
 
 func (s *Server) handleInitialSetup(w http.ResponseWriter, r *http.Request) {
@@ -363,21 +386,28 @@ func (s *Server) handleInitialSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	selectedDir := s.ctrl.DataDir()
-	if strings.TrimSpace(input.DataDir) != "" {
+	if s.dataRootSwitchAllowed && strings.TrimSpace(input.DataDir) != "" {
 		selectedDir, err = config.ValidateDataRoot(input.DataDir)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
 	}
-	if filepath.Clean(selectedDir) != filepath.Clean(s.ctrl.DataDir()) && !s.dataRootSwitchAllowed {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "this RunPilot service uses an explicit --data-dir override; change it through that deployment setting"})
-		return
-	}
 	var accountStore interface{ ConfigureAdmin(string, string) error }
 	newRoot := false
 	if filepath.Clean(selectedDir) == filepath.Clean(s.ctrl.DataDir()) {
 		accountStore = s.ctrl
+	} else if filepath.Clean(s.ctrl.ConfigPath()) != filepath.Clean(filepath.Join(s.ctrl.DataDir(), "runpilot.yaml")) {
+		// With an explicitly separate config directory, the active Store remains
+		// authoritative while the data directory is selected. Relocate only the
+		// mutable data tree; configuration stays at its configured location.
+		accountStore = s.ctrl
+		selectedDir, err = config.ValidateNewDataRoot(selectedDir)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		newRoot = true
 	} else if _, statErr := os.Stat(filepath.Join(selectedDir, "runpilot.yaml")); statErr == nil {
 		accountStore, err = config.Open(selectedDir)
 		if err != nil {

@@ -71,12 +71,16 @@ const (
 )
 
 func Open(dataDir string) (*Controller, error) {
+	return OpenWithConfigDir(dataDir, "")
+}
+
+func OpenWithConfigDir(dataDir, configDir string) (*Controller, error) {
 	var err error
 	dataDir, err = config.ResolveDataDir(dataDir)
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := config.Open(dataDir)
+	cfg, err := config.OpenWithConfigDir(dataDir, configDir)
 	if err != nil {
 		return nil, err
 	}

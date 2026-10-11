@@ -52,6 +52,12 @@ func DefaultDataDir() string {
 }
 
 func Open(dataDir string) (*Store, error) {
+	return OpenWithConfigDir(dataDir, "")
+}
+
+// OpenWithConfigDir opens configuration from configDir when explicitly set;
+// otherwise configuration remains beside the application data for compatibility.
+func OpenWithConfigDir(dataDir, configDir string) (*Store, error) {
 	var err error
 	dataDir, err = ResolveDataDir(dataDir)
 	if err != nil {
@@ -60,7 +66,21 @@ func Open(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
 	}
-	s := &Store{path: filepath.Join(dataDir, "runpilot.yaml")}
+	if configDir == "" {
+		configDir = os.Getenv("RUNPILOT_CONFIG_DIR")
+	}
+	if configDir != "" {
+		if !filepath.IsAbs(configDir) {
+			return nil, errors.New("RunPilot config directory must be an absolute path")
+		}
+		configDir = filepath.Clean(configDir)
+		if err := os.MkdirAll(configDir, 0o755); err != nil {
+			return nil, err
+		}
+	} else {
+		configDir = dataDir
+	}
+	s := &Store{path: filepath.Join(configDir, "runpilot.yaml")}
 	if _, err := os.Stat(s.path); errors.Is(err, os.ErrNotExist) {
 		config, err := defaultConfig()
 		if err != nil {

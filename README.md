@@ -273,7 +273,11 @@ restart RunPilot to open another five-minute window. Choose a username and a
 password of at least 12 characters, confirm the password, and select the RunPilot
 data directory. The username defaults to `admin`, and the data directory
 defaults to the current RunPilot data root. RunPilot stores only a salted
-Argon2id password hash in `runpilot.yaml`.
+Argon2id password hash in `runpilot.yaml`. Use `--data-dir PATH` to pin the
+application data root, and `--config-dir PATH` to store `runpilot.yaml` in a
+separate configuration directory. An explicit `--data-dir` makes the data
+root fixed in setup. `--config-dir` only controls where `runpilot.yaml` is
+stored, and setup can still select the data root.
 
 Browser login uses server-managed HttpOnly sessions with CSRF protection,
 expiration, logout and revocation. Use HTTPS for credentials and session cookies

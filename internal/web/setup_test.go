@@ -135,6 +135,24 @@ func TestFirstRunCreatesSessionWithoutAuthorizationToken(t *testing.T) {
 	}
 }
 
+func TestSetupHidesEditableDataDirWhenStartupOverrideIsFixed(t *testing.T) {
+	ctrl, err := core.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	server, err := New(ctrl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.SetDataRootSwitchAllowed(false)
+	page := httptest.NewRecorder()
+	server.Handler().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/setup", nil))
+	if strings.Contains(page.Body.String(), `name="dataDir"`) || !strings.Contains(page.Body.String(), "fixed by startup configuration") {
+		t.Fatal("setup should display the fixed data directory without an editable field")
+	}
+}
+
 func mustConfig(t *testing.T, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -205,6 +223,13 @@ func TestExpiredSetupWindowRequiresServiceRestart(t *testing.T) {
 	if server.setupWindowOpen() {
 		t.Fatal("expired setup window remains open")
 	}
+	for _, target := range []string{"/", "/setup"} {
+		page := httptest.NewRecorder()
+		server.Handler().ServeHTTP(page, httptest.NewRequest(http.MethodGet, target, nil))
+		if page.Code != http.StatusGone || !strings.Contains(page.Body.String(), "Setup window expired") || strings.Contains(page.Body.String(), `id="setup"`) {
+			t.Fatalf("expired setup page %s status=%d body=%s", target, page.Code, page.Body.String())
+		}
+	}
 	response := httptest.NewRecorder()
 	body := strings.NewReader(`{"username":"admin","password":"correct horse battery staple","confirm":"correct horse battery staple"}`)
 	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/setup", body))
@@ -264,5 +289,50 @@ func TestInitialSetupCopiesToSelectedDataRootAndPersistsLocator(t *testing.T) {
 	resolved, err := config.ResolveDataDir("")
 	if err != nil || resolved != selected {
 		t.Fatalf("persistent locator resolved %q err=%v", resolved, err)
+	}
+}
+
+func TestConfigDirDoesNotPinSetupDataDirectory(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("RUNPILOT_DATA_ROOT_FILE", filepath.Join(base, "bootstrap", "data-root"))
+	source := filepath.Join(base, "source")
+	configDir := filepath.Join(base, "config")
+	if err := config.WriteDataRoot(source); err != nil {
+		t.Fatal(err)
+	}
+	ctrl, err := core.OpenWithConfigDir(source, configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(ctrl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := httptest.NewRecorder()
+	server.Handler().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/setup", nil))
+	if !strings.Contains(page.Body.String(), `name="dataDir"`) {
+		t.Fatal("--config-dir should leave the setup data-directory choice available")
+	}
+	selected := filepath.Join(base, "selected-data")
+	payload := map[string]string{"username": "admin", "password": "another correct horse battery", "confirm": "another correct horse battery", "dataDir": selected}
+	body, _ := json.Marshal(payload)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/setup", bytes.NewReader(body)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("setup status=%d body=%s", response.Code, response.Body.String())
+	}
+	if ctrl.ConfigPath() != filepath.Join(configDir, "runpilot.yaml") {
+		t.Fatalf("config path changed during data-directory setup: %s", ctrl.ConfigPath())
+	}
+	ctrl.Close()
+	if err := config.ApplyPendingDataRoot(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := config.OpenWithConfigDir(selected, configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Snapshot().Server.AdminUsername != "admin" {
+		t.Fatal("administrator configuration was not retained in the configured config directory")
 	}
 }

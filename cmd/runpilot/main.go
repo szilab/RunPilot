@@ -34,18 +34,20 @@ func run() error {
 	case "service-run":
 		fs := flag.NewFlagSet("service-run", flag.ContinueOnError)
 		dataDir := fs.String("data-dir", "", "RunPilot data directory override")
+		configDir := fs.String("config-dir", "", "RunPilot configuration directory override")
 		port := fs.Int("port", 0, "HTTP port (overrides YAML)")
 		bindAddress := fs.String("bind-address", "", "HTTP bind address (overrides YAML)")
 		basePath := fs.String("base-path", "", "URL base path, for example /runpilot (overrides YAML)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		return service.Run(*dataDir, daemon.Options{Port: *port, BindAddress: *bindAddress, BasePath: *basePath})
+		return service.Run(*dataDir, daemon.Options{Port: *port, BindAddress: *bindAddress, BasePath: *basePath, ConfigDir: *configDir})
 	case "service":
 		return runServiceCommand(args[1:])
 	case "reset-admin":
 		fs := flag.NewFlagSet("reset-admin", flag.ContinueOnError)
 		dataDir := fs.String("data-dir", "", "RunPilot data directory override")
+		configDir := fs.String("config-dir", "", "RunPilot configuration directory override")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -53,7 +55,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		store, err := config.Open(resolved)
+		store, err := config.OpenWithConfigDir(resolved, *configDir)
 		if err != nil {
 			return err
 		}
@@ -77,6 +79,7 @@ func run() error {
 func runForeground(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	dataDir := fs.String("data-dir", "", "RunPilot data directory override")
+	configDir := fs.String("config-dir", "", "RunPilot configuration directory override")
 	port := fs.Int("port", 0, "HTTP port (overrides YAML)")
 	bindAddress := fs.String("bind-address", "", "HTTP bind address (overrides YAML)")
 	basePath := fs.String("base-path", "", "URL base path, for example /runpilot (overrides YAML)")
@@ -85,7 +88,7 @@ func runForeground(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	option := daemon.Options{Port: *port, BindAddress: *bindAddress, BasePath: *basePath}
+	option := daemon.Options{Port: *port, BindAddress: *bindAddress, BasePath: *basePath, ConfigDir: *configDir}
 	for {
 		err := daemon.Run(ctx, *dataDir, option)
 		if errors.Is(err, daemon.ErrRestartRequested) {
@@ -104,6 +107,7 @@ func runServiceCommand(args []string) error {
 	case "install":
 		fs := flag.NewFlagSet("service install", flag.ContinueOnError)
 		dataDir := fs.String("data-dir", "", "RunPilot data directory override")
+		configDir := fs.String("config-dir", "", "RunPilot configuration directory override")
 		port := fs.Int("port", 0, "HTTP port (overrides YAML)")
 		bindAddress := fs.String("bind-address", "", "HTTP bind address (overrides YAML)")
 		basePath := fs.String("base-path", "", "URL base path, for example /runpilot (overrides YAML)")
@@ -121,7 +125,7 @@ func runServiceCommand(args []string) error {
 				return err
 			}
 		}
-		return service.Install(installDir, daemon.Options{Port: *port, BindAddress: *bindAddress, BasePath: *basePath})
+		return service.Install(installDir, daemon.Options{Port: *port, BindAddress: *bindAddress, BasePath: *basePath, ConfigDir: *configDir})
 	case "uninstall":
 		return service.Uninstall()
 	case "start":
@@ -137,14 +141,14 @@ func usage() {
 	fmt.Print(`RunPilot - cross-platform plugin host and management framework
 
 Usage:
-  runpilot run [--data-dir PATH] [--bind-address IP] [--port N] [--base-path PATH]
+  runpilot run [--data-dir PATH] [--config-dir PATH] [--bind-address IP] [--port N] [--base-path PATH]
                                                 Run in the foreground
-  runpilot service install [--data-dir PATH] [--bind-address IP] [--port N] [--base-path PATH]
+  runpilot service install [--data-dir PATH] [--config-dir PATH] [--bind-address IP] [--port N] [--base-path PATH]
                                                 Install the native service
   runpilot service start                     Start the native service
   runpilot service stop                      Stop the native service
   runpilot service uninstall                 Remove the native service
-  runpilot reset-admin [--data-dir PATH]    Reset admin; setup is available for five minutes after restart
+  runpilot reset-admin [--data-dir PATH] [--config-dir PATH]    Reset admin; setup is available for five minutes after restart
   runpilot version                           Print version
 
 With no arguments RunPilot starts in foreground mode.

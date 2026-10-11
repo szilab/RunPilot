@@ -28,6 +28,7 @@ type Options struct {
 	Port        int
 	BindAddress string
 	BasePath    string
+	ConfigDir   string
 }
 
 func Run(ctx context.Context, dataDir string, options ...Options) error {
@@ -35,7 +36,7 @@ func Run(ctx context.Context, dataDir string, options ...Options) error {
 	defer cancel()
 	var restartOnce sync.Once
 	restartRequested := make(chan struct{})
-	ctrl, err := core.Open(dataDir)
+	ctrl, err := core.OpenWithConfigDir(dataDir, optionConfigDir(options))
 	if err != nil {
 		return err
 	}
@@ -121,6 +122,13 @@ func Run(ctx context.Context, dataDir string, options ...Options) error {
 	default:
 	}
 	return nil
+}
+
+func optionConfigDir(options []Options) string {
+	if len(options) == 0 {
+		return ""
+	}
+	return options[0].ConfigDir
 }
 
 func listenAddr(bind string, configuredPort, overridePort int, overrideAddress string) (string, error) {
