@@ -2,21 +2,21 @@ package web
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/szilab/RunPilot/internal/config"
 	"github.com/szilab/RunPilot/internal/core"
-	"github.com/szilab/RunPilot/internal/model"
-	"github.com/szilab/RunPilot/internal/plugins"
 )
 
-func TestFirstRunGateAndTokenRotation(t *testing.T) {
+func TestFirstRunRequiresBootstrapAndCreatesSession(t *testing.T) {
+	t.Setenv("RUNPILOT_DATA_ROOT_FILE", filepath.Join(t.TempDir(), "deployment", "data-root"))
 	ctrl, err := core.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -28,81 +28,207 @@ func TestFirstRunGateAndTokenRotation(t *testing.T) {
 	}
 	h := server.Handler()
 	initial := ctrl.Snapshot().Server.Token
-	for _, target := range []string{"/api/v1/system", "/api/v1/ws/ticket", "/api/v1/plugins", "/api/v1/storage", "/api/v1/software/providers", "/api/v1/web-apps", "/api/v1/terminal"} {
+	for _, target := range []string{"/api/v1/system", "/api/v1/ws/ticket", "/api/v1/plugins", "/api/v1/storage"} {
 		r := httptest.NewRecorder()
 		h.ServeHTTP(r, httptest.NewRequest(http.MethodGet, target, nil))
 		if r.Code != http.StatusPreconditionRequired {
-			t.Errorf("%s status=%d body=%s", target, r.Code, r.Body.String())
+			t.Errorf("%s status=%d", target, r.Code)
 		}
 	}
 	page := httptest.NewRecorder()
 	h.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/", nil))
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "setup-token") {
-		t.Fatal("focused setup UI missing")
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Bootstrap token") {
+		t.Fatal("setup UI missing bootstrap authorization")
 	}
-	bad := httptest.NewRecorder()
-	h.ServeHTTP(bad, httptest.NewRequest(http.MethodPost, "/api/v1/setup/token", bytes.NewBufferString(`{"current":"wrong","next":"012345678901234567890123"}`)))
-	if bad.Code != http.StatusUnauthorized {
-		t.Fatalf("wrong initial token status=%d", bad.Code)
+	payload := map[string]string{"bootstrap": "wrong", "username": "admin", "password": "correct horse battery staple", "confirm": "correct horse battery staple"}
+	body, _ := json.Marshal(payload)
+	denied := httptest.NewRecorder()
+	h.ServeHTTP(denied, httptest.NewRequest(http.MethodPost, "/api/v1/setup", bytes.NewReader(body)))
+	if denied.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong bootstrap status=%d", denied.Code)
 	}
-	newToken := "brand-new-runpilot-token-0123456789"
-	body, _ := json.Marshal(map[string]string{"current": initial, "next": newToken})
-	changed := httptest.NewRecorder()
-	h.ServeHTTP(changed, httptest.NewRequest(http.MethodPost, "/api/v1/setup/token", bytes.NewReader(body)))
-	if changed.Code != http.StatusOK {
-		t.Fatalf("change status=%d body=%s", changed.Code, changed.Body.String())
+	payload["bootstrap"] = initial
+	body, _ = json.Marshal(payload)
+	setup := httptest.NewRecorder()
+	h.ServeHTTP(setup, httptest.NewRequest(http.MethodPost, "/api/v1/setup", bytes.NewReader(body)))
+	if setup.Code != http.StatusOK {
+		t.Fatalf("setup status=%d body=%s", setup.Code, setup.Body.String())
 	}
-	oldAuth := httptest.NewRequest(http.MethodGet, "/api/v1/system", nil)
-	oldAuth.Header.Set("Authorization", "Bearer "+initial)
-	oldResponse := httptest.NewRecorder()
-	h.ServeHTTP(oldResponse, oldAuth)
-	if oldResponse.Code != http.StatusUnauthorized {
-		t.Fatalf("old token remains valid: %d", oldResponse.Code)
+	if len(setup.Result().Cookies()) != 2 || setup.Result().Cookies()[0].Name != adminSessionCookie {
+		t.Fatal("setup did not issue HttpOnly session and CSRF cookies")
 	}
-	newAuth := httptest.NewRequest(http.MethodGet, "/api/v1/system", nil)
-	newAuth.Header.Set("Authorization", "Bearer "+newToken)
-	newResponse := httptest.NewRecorder()
-	h.ServeHTTP(newResponse, newAuth)
-	if newResponse.Code != http.StatusOK {
-		t.Fatalf("new token rejected: %d %s", newResponse.Code, newResponse.Body.String())
+	legacyBearer := httptest.NewRequest(http.MethodGet, "/api/v1/system", nil)
+	legacyBearer.Header.Set("Authorization", "Bearer "+initial)
+	legacyResponse := httptest.NewRecorder()
+	h.ServeHTTP(legacyResponse, legacyBearer)
+	if legacyResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("fresh install bearer auth status=%d", legacyResponse.Code)
+	}
+	if strings.Contains(string(mustConfig(t, ctrl.ConfigPath())), payload["password"]) {
+		t.Fatal("plaintext password persisted")
+	}
+	if !verifyPassword(ctrl.Snapshot().Server.AdminPasswordHash, payload["password"]) {
+		t.Fatal("stored Argon2id password hash did not verify")
+	}
+	login := httptest.NewRecorder()
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"correct horse battery staple"}`))
+	h.ServeHTTP(login, loginReq)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status=%d", login.Code)
+	}
+	cookies := login.Result().Cookies()
+	authReq := httptest.NewRequest(http.MethodGet, "/api/v1/system", nil)
+	authReq.AddCookie(cookies[0])
+	authResp := httptest.NewRecorder()
+	h.ServeHTTP(authResp, authReq)
+	if authResp.Code != http.StatusOK {
+		t.Fatalf("session auth status=%d", authResp.Code)
+	}
+	csrfDenied := httptest.NewRecorder()
+	csrfReq := httptest.NewRequest(http.MethodPut, "/api/v1/launcher", strings.NewReader(`{"items":[]}`))
+	csrfReq.AddCookie(cookies[0])
+	h.ServeHTTP(csrfDenied, csrfReq)
+	if csrfDenied.Code != http.StatusForbidden {
+		t.Fatalf("state change without CSRF token status=%d", csrfDenied.Code)
+	}
+	connectionClosed := false
+	unregister := server.registerSessionConnection(cookies[0].Value, func() { connectionClosed = true })
+	defer unregister()
+	changeReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password", strings.NewReader(`{"current":"correct horse battery staple","next":"a new correct horse battery","confirm":"a new correct horse battery"}`))
+	changeReq.AddCookie(cookies[0])
+	changeReq.AddCookie(cookies[1])
+	changeReq.Header.Set("X-RunPilot-CSRF", cookies[1].Value)
+	change := httptest.NewRecorder()
+	h.ServeHTTP(change, changeReq)
+	if change.Code != http.StatusOK {
+		t.Fatalf("password change status=%d body=%s", change.Code, change.Body.String())
+	}
+	if !connectionClosed {
+		t.Fatal("password change did not close session-bound connections")
+	}
+	deniedAfter := httptest.NewRecorder()
+	h.ServeHTTP(deniedAfter, authReq)
+	if deniedAfter.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked session status=%d", deniedAfter.Code)
+	}
+	loginNew := httptest.NewRecorder()
+	h.ServeHTTP(loginNew, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"a new correct horse battery"}`)))
+	if loginNew.Code != http.StatusOK {
+		t.Fatalf("new password login status=%d", loginNew.Code)
+	}
+	newCookies := loginNew.Result().Cookies()
+	logoutReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	logoutReq.AddCookie(newCookies[0])
+	logoutReq.AddCookie(newCookies[1])
+	logoutReq.Header.Set("X-RunPilot-CSRF", newCookies[1].Value)
+	logout := httptest.NewRecorder()
+	h.ServeHTTP(logout, logoutReq)
+	if logout.Code != http.StatusOK {
+		t.Fatalf("logout status=%d", logout.Code)
 	}
 }
 
-func TestPluginCallWorksAfterFirstRunSetup(t *testing.T) {
-	dataDir := t.TempDir()
-	if err := plugins.EnsureReferenceSystem(filepath.Join(dataDir, "plugins")); err != nil {
-		t.Fatal(err)
-	}
-	store, err := config.Open(dataDir)
+func mustConfig(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	enabled := true
-	if err := store.Update(func(cfg *model.Config) error {
-		cfg.Plugins = map[string]model.PluginSettings{}
-		cfg.Plugins["system"] = model.PluginSettings{Enabled: &enabled}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	ctrl, err := core.Open(dataDir)
+	return data
+}
+
+func TestLoginRateLimitAndSessionExpiry(t *testing.T) {
+	ctrl, err := core.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ctrl.Close()
-	initial := ctrl.Snapshot().Server.Token
-	if err := ctrl.ChangeInitialToken(initial, "new-token-for-plugin-setup-test-123"); err != nil {
+	hash, err := hashPassword("long enough test password")
+	if err != nil {
 		t.Fatal(err)
 	}
-	result, protocolErr := ctrl.PluginCall(context.Background(), "system", "status.get", json.RawMessage(`{}`))
-	if protocolErr != nil {
-		t.Fatalf("plugin call after setup: %v", protocolErr)
-	}
-	var status map[string]any
-	if err := json.Unmarshal(result, &status); err != nil {
+	token := ctrl.Snapshot().Server.Token
+	if err := ctrl.ConfigureAdmin("Bearer "+token, "admin", hash); err != nil {
 		t.Fatal(err)
 	}
-	if status["hostname"] == nil {
-		t.Fatalf("plugin returned no host status: %s", result)
+	server, err := New(ctrl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.loginFailures["192.0.2.1"] = loginFailure{start: time.Now(), count: 10}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"wrong password"}`))
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusTooManyRequests {
+		t.Fatalf("rate limit status=%d", resp.Code)
+	}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	id := server.issueSession(w, r)
+	if id == "" {
+		t.Fatal("session issue failed")
+	}
+	server.sessionMu.Lock()
+	item := server.sessions[id]
+	item.expires = time.Now().Add(-time.Second)
+	server.sessions[id] = item
+	server.sessionMu.Unlock()
+	auth := httptest.NewRequest(http.MethodGet, "/api/v1/system", nil)
+	auth.AddCookie(w.Result().Cookies()[0])
+	denied := httptest.NewRecorder()
+	server.Handler().ServeHTTP(denied, auth)
+	if denied.Code != http.StatusUnauthorized {
+		t.Fatalf("expired session status=%d", denied.Code)
+	}
+}
+
+func TestInitialSetupCopiesToSelectedDataRootAndPersistsLocator(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("RUNPILOT_DATA_ROOT_FILE", filepath.Join(base, "bootstrap", "data-root"))
+	source := filepath.Join(base, "source")
+	if err := config.WriteDataRoot(source); err != nil {
+		t.Fatal(err)
+	}
+	ctrl, err := core.Open(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "managed-state.txt"), []byte("retain me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(ctrl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.SetRestartHandler(func() {})
+	selected := filepath.Join(base, "volume", "RunPilot")
+	if err := os.Mkdir(filepath.Dir(selected), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	payload := map[string]string{"bootstrap": ctrl.Snapshot().Server.Token, "username": "admin", "password": "another correct horse battery", "confirm": "another correct horse battery", "dataDir": selected}
+	body, _ := json.Marshal(payload)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/setup", bytes.NewReader(body)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("selected-root setup status=%d body=%s", response.Code, response.Body.String())
+	}
+	ctrl.Close()
+	if err := config.ApplyPendingDataRoot(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(selected, "managed-state.txt"))
+	if err != nil || string(got) != "retain me" {
+		t.Fatalf("copied state=%q err=%v", got, err)
+	}
+	store, err := config.Open(selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Snapshot().Server.AdminUsername != "admin" || !verifyPassword(store.Snapshot().Server.AdminPasswordHash, payload["password"]) {
+		t.Fatal("selected root did not receive administrator credentials")
+	}
+	resolved, err := config.ResolveDataDir("")
+	if err != nil || resolved != selected {
+		t.Fatalf("persistent locator resolved %q err=%v", resolved, err)
 	}
 }

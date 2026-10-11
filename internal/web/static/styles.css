@@ -517,3 +517,7 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 .overview-stat strong { color:var(--rp-text-strong); font-size:22px; }
 .overview-stat span, .overview-widget-note { color:var(--rp-text-muted); font-size:11px; }
 .overview-widget-error { color:var(--rp-text-strong); }
+
+.setup-screen{min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box;background:var(--rp-background,#f8fafc)}
+.setup-card{box-sizing:border-box;max-height:92vh;overflow:auto;color:var(--rp-text,#0f172a)}
+.setup-card>p{margin:0 0 12px;line-height:1.55}

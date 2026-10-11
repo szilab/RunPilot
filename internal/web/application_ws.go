@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -48,30 +49,51 @@ func (s *Server) handleApplicationTicket(w http.ResponseWriter, r *http.Request)
 	}
 	ticket := hex.EncodeToString(raw[:])
 	s.applicationTicketMu.Lock()
-	s.applicationTickets[ticket] = time.Now().Add(applicationTicketTTL)
+	sessionID, _, _ := s.session(r)
+	s.applicationTickets[ticket] = applicationTicket{expires: time.Now().Add(applicationTicketTTL), sessionID: sessionID}
 	s.applicationTicketMu.Unlock()
 	writeJSON(w, http.StatusCreated, map[string]string{"ticket": ticket})
 }
 
-func (s *Server) consumeApplicationTicket(ticket string) bool {
+func (s *Server) consumeApplicationTicket(ticket string, sessionID string) bool {
 	s.applicationTicketMu.Lock()
 	defer s.applicationTicketMu.Unlock()
-	expires, ok := s.applicationTickets[ticket]
+	item, ok := s.applicationTickets[ticket]
 	delete(s.applicationTickets, ticket)
-	return ok && time.Now().Before(expires)
+	return ok && item.sessionID == sessionID && time.Now().Before(item.expires)
 }
 
 func (s *Server) handleApplicationWS(w http.ResponseWriter, r *http.Request) {
+	sessionID, session, hasSession := s.session(r)
 	grant, restricted := s.ctrl.ConsumeBrowserStreamTicket(r.URL.Query().Get("ticket"))
-	if !restricted && !s.consumeApplicationTicket(r.URL.Query().Get("ticket")) {
+	if restricted && !s.browserTicketAllowed(r.URL.Query().Get("ticket"), sessionID, hasSession) {
+		http.Error(w, "browser session expired", http.StatusUnauthorized)
+		return
+	}
+	if !restricted && !s.consumeApplicationTicket(r.URL.Query().Get("ticket"), sessionID) {
 		http.Error(w, "application connection expired", http.StatusUnauthorized)
 		return
+	}
+	if !restricted && hasSession {
+		origin, parseErr := url.Parse(r.Header.Get("Origin"))
+		if parseErr != nil || origin.Host == "" || !strings.EqualFold(origin.Host, r.Host) {
+			http.Error(w, "websocket origin rejected", http.StatusForbidden)
+			return
+		}
 	}
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
+	unregister := s.registerSessionConnection(sessionID, func() { _ = conn.Close(websocket.StatusPolicyViolation, "session revoked") })
+	defer unregister()
+	wsCtx := r.Context()
+	cancelWS := func() {}
+	if hasSession {
+		wsCtx, cancelWS = context.WithDeadline(r.Context(), session.expires)
+	}
+	defer cancelWS()
 	conn.SetReadLimit(websocketsecure.MaxEncryptedMessageSize)
 	mode := requestWebSocketPayloadMode(r, s.ctrl.Snapshot().Server.WebSocketPayloadMode)
 	if restricted {
@@ -123,7 +145,12 @@ func (s *Server) handleApplicationWS(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 	for {
-		kind, data, err := secure.Read(r.Context())
+		if hasSession {
+			if _, _, valid := s.session(r); !valid {
+				return
+			}
+		}
+		kind, data, err := secure.Read(wsCtx)
 		if err != nil {
 			return
 		}
@@ -239,6 +266,9 @@ func (s *Server) handleApplicationWS(w http.ResponseWriter, r *http.Request) {
 		response := plugins.Response{ID: request.ID, Result: result}
 		if protocolErr != nil {
 			response = plugins.Failure(request.ID, protocolErr.Code, protocolErr.Message)
+		}
+		if protocolErr == nil && sessionID != "" {
+			s.rememberSessionTickets(sessionID, result)
 		}
 		if err := write(r.Context(), response); err != nil {
 			return

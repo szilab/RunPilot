@@ -27,3 +27,11 @@
 - **Safely embedded Web Apps.** Investigate an isolated embedded view that can
   preserve the RunPilot shell without granting the application management
   authority; do not use a same-origin iframe.
+
+- **Docker data-root relocation remains manual.** RunPilot refuses to migrate while
+  Compose project definitions are stored under the active root, because relative
+  bind mounts may resolve to different host paths after a move. Relocate projects
+  with their original paths preserved before changing the RunPilot root.
+- **External managed data relocation remains feature-owned.** The core copies
+  RunPilot-owned files and plugin state, but data explicitly stored outside the
+  selected root must be moved by its owning application or plugin.

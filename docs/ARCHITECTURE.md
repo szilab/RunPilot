@@ -177,6 +177,19 @@ in [PLUGIN_API.md](PLUGIN_API.md).
 
 ## Migration direction
 
+Core authentication uses one local administrator account, Argon2id password
+hashes, HttpOnly server-managed browser sessions, CSRF checks and the common
+application WebSocket. Existing bearer API-token clients remain a separately
+controlled compatibility path. Bootstrap authorization comes from a unique
+installation token retrieved locally; setup is single-use.
+
+The mutable application data root is selected independently from executable
+binaries and process working directories. Explicit CLI override, environment,
+persisted deployment locator and platform default determine its location in that
+order. The locator is deployment metadata outside the selected root. Explicit
+root relocation is restart-bound and copy-verified; Docker Compose layouts with
+relative bind mounts require a separate manual migration.
+
 The next work is feature migration, not further expansion of the core plugin
 framework. Migrate one feature at a time and remove its legacy core/API code only
 after plugin parity and automated regression coverage.
@@ -275,8 +288,9 @@ application WebSocket, including when normal RunPilot payload encryption is
 disabled. Root-fragment bootstrap supports deployment through URL-sensitive
 proxies and security gateways. HTTPS serves
 package bootstrap/worker assets only. Target tabs receive only a single gateway
-capability; normal RunPilot bearer credentials migrate from localStorage into
-tab-scoped sessionStorage and target tabs launch with `noopener`. Web Apps can
+capability; old API tokens are cleared from browser storage and target tabs
+launch with `noopener`. Browser authentication credentials are never stored in
+localStorage or sessionStorage. Web Apps can
 avoid a dedicated integration when secure access to an application's existing
 GUI is sufficient; dedicated plugins remain appropriate for structured
 automation and control. RunPilot's own `basePath` remains supported. Arbitrary

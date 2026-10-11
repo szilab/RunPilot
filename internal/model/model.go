@@ -118,6 +118,9 @@ type ServerConfig struct {
 	BasePath             string `json:"basePath,omitempty" yaml:"basePath,omitempty"`
 	Token                string `json:"token" yaml:"token"`
 	SetupComplete        bool   `json:"setupComplete" yaml:"setupComplete"`
+	AdminUsername        string `json:"-" yaml:"adminUsername,omitempty"`
+	AdminPasswordHash    string `json:"-" yaml:"adminPasswordHash,omitempty"`
+	BearerAuthEnabled   bool   `json:"bearerAuthEnabled" yaml:"bearerAuthEnabled"`
 	WebSocketPayloadMode string `json:"websocketPayloadMode,omitempty" yaml:"websocketPayloadMode,omitempty"`
 }
 

@@ -63,7 +63,7 @@ func TestAppCentralLifecyclePreservesDataAcrossBinaryUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"-c admin:administrators", "-- run --data-dir " + h.dataDir + " --bind-address 0.0.0.0 --port 9070", "-s TERM"} {
+	for _, want := range []string{"-c admin:administrators", "-- run --bind-address 0.0.0.0 --port 9070", "-s TERM"} {
 		if !strings.Contains(string(callLog), want) {
 			t.Errorf("start-stop-daemon calls missing %q:\n%s", want, callLog)
 		}
@@ -101,12 +101,41 @@ func TestAppCentralLifecycleRefusesUnmarkedOrSymlinkData(t *testing.T) {
 	}
 }
 
+func TestAppCentralLifecycleUsesPersistedCustomDataRoot(t *testing.T) {
+	h := newLifecycleHarness(t)
+	h.installBinary("v1")
+	t.Cleanup(h.stop)
+	custom := filepath.Join(h.root, "volume2", "RunPilot")
+	if err := os.MkdirAll(custom, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(h.locator, []byte(custom+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if output := h.run("start"); output != "" {
+		t.Fatalf("start output=%q", output)
+	}
+	if _, err := os.Stat(filepath.Join(custom, ".mock-running")); err != nil {
+		t.Fatalf("custom root was not used: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(custom, ".runpilot-owned")); !os.IsNotExist(err) {
+		t.Fatalf("lifecycle changed custom-root ownership metadata: %v", err)
+	}
+	if output := h.run("stop"); output != "" {
+		t.Fatalf("stop output=%q", output)
+	}
+	if got, err := os.ReadFile(h.locator); err != nil || strings.TrimSpace(string(got)) != custom {
+		t.Fatalf("custom root locator=%q err=%v", got, err)
+	}
+}
+
 type lifecycleHarness struct {
 	t              *testing.T
 	root           string
 	appDir         string
 	dataRoot       string
 	dataDir        string
+	locator        string
 	callLog        string
 	binaryVersions string
 	control        string
@@ -120,10 +149,11 @@ func newLifecycleHarness(t *testing.T) *lifecycleHarness {
 	}
 	root := t.TempDir()
 	appDir := filepath.Join(root, "App Central package")
-	dataRoot := filepath.Join(root, "persistent data")
+	metaDir := filepath.Join(root, "persistent metadata")
+	dataRoot := filepath.Join(metaDir, "data")
 	dataDir := dataRoot
 	binDir := filepath.Join(root, "mock ADM commands")
-	for _, dir := range []string{filepath.Join(appDir, "bin"), binDir} {
+	for _, dir := range []string{filepath.Join(appDir, "bin"), binDir, metaDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -133,12 +163,12 @@ func newLifecycleHarness(t *testing.T) *lifecycleHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const originalRoot = "DATA_DIR=/volume1/.@plugins/AppCentral/runpilot/data"
+	const originalRoot = "META_DIR=/volume1/.@plugins/AppCentral/runpilot"
 	if !strings.Contains(string(control), originalRoot) {
 		t.Fatal("App Central hook data root changed without updating this test")
 	}
 	controlPath := filepath.Join(root, "start-stop.sh")
-	controlContents := strings.Replace(string(control), originalRoot, "DATA_DIR='"+dataDir+"'", 1)
+	controlContents := strings.Replace(string(control), originalRoot, "META_DIR='"+filepath.Dir(dataDir)+"'", 1)
 	if err := os.WriteFile(controlPath, []byte(controlContents), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -149,6 +179,7 @@ func newLifecycleHarness(t *testing.T) *lifecycleHarness {
 		appDir:         appDir,
 		dataRoot:       dataRoot,
 		dataDir:        dataDir,
+		locator:        filepath.Join(metaDir, "data-root"),
 		callLog:        filepath.Join(root, "daemon-calls.log"),
 		binaryVersions: filepath.Join(root, "binary-versions.log"),
 		control:        controlPath,

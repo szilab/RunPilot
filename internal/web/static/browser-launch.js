@@ -11,7 +11,7 @@
   let launch, restricted = params.has(marker) || globalThis.name?.startsWith(namePrefix);
   if (!restricted) { await load(new URL("overview-widgets.js", document.baseURI).href); await load(new URL("dashboard.js", document.baseURI).href); await load(new URL("app.js", document.baseURI).href); return; }
   // This tab must never migrate or acquire management credentials, even on errors.
-  RunPilotAuthStorage.clearShared(localStorage); sessionStorage.removeItem("runpilot.token");
+  localStorage.removeItem("runpilot.token"); sessionStorage.removeItem("runpilot.token");
   const title = document.createElement("h1"), status = document.createElement("p");
   title.textContent = "Opening application"; status.id = "status"; status.setAttribute("role", "status"); status.textContent = "Establishing the encrypted tunnel…";
   document.body.replaceChildren(title, status);

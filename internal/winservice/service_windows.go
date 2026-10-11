@@ -77,11 +77,14 @@ func Install(dataDir string, options ...daemon.Options) error {
 	if err != nil {
 		return err
 	}
-	dataDir, err = filepath.Abs(dataDir)
-	if err != nil {
-		return err
+	binPath := quoteSC(exe) + " service-run"
+	if dataDir != "" {
+		dataDir, err = filepath.Abs(dataDir)
+		if err != nil {
+			return err
+		}
+		binPath += " --data-dir " + quoteSC(dataDir)
 	}
-	binPath := quoteSC(exe) + " service-run --data-dir " + quoteSC(dataDir)
 	if len(options) > 0 {
 		if options[0].Port != 0 {
 			binPath += fmt.Sprintf(" --port %d", options[0].Port)

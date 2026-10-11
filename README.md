@@ -178,21 +178,21 @@ In ADM, open **App Central → Management → Manual Install** and select the AP
 App Central owns start-at-boot and shutdown lifecycle through the package's
 `CONTROL/start-stop.sh` hook. The ADM desktop icon opens `http://NAS:9070/`.
 RunPilot binds to all NAS interfaces on port 9070 so LAN clients can connect.
-RunPilot API routes require its API token, but plain HTTP does not protect that
-token or session traffic from network observers. Keep direct access on a
-trusted LAN. For remote access, configure an HTTPS reverse proxy in ADM and
+RunPilot routes require an administrator session or the separately enabled API
+token. Plain HTTP does not protect passwords, tokens or session traffic from
+network observers. Keep direct access on a trusted LAN. For remote access, configure an HTTPS reverse proxy in ADM and
 restrict access there. The App Central desktop privilege controls launcher
 visibility; it is not a substitute for RunPilot authentication. Package
 installation does not change ADM's reverse proxy, certificates, firewall or
 other network settings.
 
-Mutable state lives at
-`/volume1/.@plugins/AppCentral/runpilot/data/`, owned by `admin` with private
-permissions. It contains `runpilot.yaml`, installed plugin packages and data,
-plugin history, and logs. The path is independent of replaceable app binaries,
-so upgrades retain it. Uninstall stops RunPilot but deliberately leaves this
-directory and its data in place; remove it manually only after deciding the
-configuration and history are no longer needed.
+The default mutable state root is
+`/volume1/.@plugins/AppCentral/runpilot/data/`. Setup may select another
+absolute path on any available NAS volume. RunPilot does not change ownership or
+permissions on a selected custom directory; it must be writable by the `admin`
+service identity. The separate `data-root` locator, PID and lifecycle log remain
+under `/volume1/.@plugins/AppCentral/runpilot/`. Upgrades retain both. Uninstall
+stops RunPilot but deliberately leaves user data and locator metadata in place.
 
 RunPilot uses the normal published plugin catalog. These current catalog
 releases downloaded, installed, enabled, loaded at startup, and served their
@@ -255,7 +255,7 @@ install, upgrade, start and stop have been tested on an AS6702T running ADM
 ```bash
 go test ./...
 go vet ./...
-go run ./cmd/runpilot run --data-dir ./runpilot-data
+go run ./cmd/runpilot run --data-dir "$HOME/runpilot-data"
 ```
 
 On Linux, install and start the user service with `runpilot service install` and
@@ -267,20 +267,59 @@ without an interactive login, enable lingering for that user:
 sudo loginctl enable-linger <username>
 ```
 
-Open `http://127.0.0.1:9070`. New installations start locked in a focused setup
-screen. Retrieve the unique initial token locally with `runpilot setup-token`
-(run the command as the RunPilot service account and pass `--data-dir` if needed),
-then replace it with a new token of at least 24 characters. RunPilot stores the
-new token and setup completion atomically in `runpilot.yaml`. Existing installs
-with a valid token remain initialized across upgrades; upgrades never print or
-reset tokens. App Central does not document an authenticated mechanism for
-passing a unique secret to the package administrator, so its NAS package uses
-the same local `setup-token` command rather than first-client registration.
-ASUSTOR documents package configuration, hooks, and ADM session IDs, but not a
-supported package-admin secret delivery channel in its [App Central Developer
-Guide](https://downloadgb.asustor.com/developer/App_Central_Developer_Guide_5.1.0_20251010.pdf).
-For App Central, run `/usr/local/AppCentral/runpilot/bin/runpilot setup-token
---data-dir /volume1/.@plugins/AppCentral/runpilot/data` over SSH as `admin`.
+Open `http://127.0.0.1:9070`. A fresh installation stays locked until a local
+administrator claims it with the unique bootstrap token printed by
+`runpilot setup-token`. Create one username and a password of at least 12
+characters, confirm the password, and select the RunPilot data directory. The
+bootstrap token is accepted once; RunPilot stores only a salted Argon2id password
+hash in `runpilot.yaml`.
+
+Browser login uses server-managed HttpOnly sessions with CSRF protection,
+expiration, logout and revocation. Use HTTPS for credentials and session cookies
+when clients cross a network. Fresh installations disable bearer API-token auth;
+Settings can enable it for CLI or integrations. Existing token installations
+preserve that API path during migration, and their existing token authorizes
+creating the first administrator account. Upgrades never reset credentials.
+
+If the administrator password is lost, stop RunPilot and run
+`runpilot reset-admin` locally as the RunPilot service account, then retrieve a
+new setup token with `runpilot setup-token` and claim the setup page again. Pass
+`--data-dir` when RunPilot was deployed with an explicit data directory.
+
+The default application data directory is `%ProgramData%\RunPilot` on Windows,
+`$XDG_DATA_HOME/runpilot` or `~/.local/share/runpilot` on Linux, and
+`/volume1/.@plugins/AppCentral/runpilot/data` on ASUSTOR. The setup page accepts
+an absolute path accessible to the RunPilot service identity. It refuses symlink
+paths and unrelated destination contents, and does not change ownership or
+permissions. Data-root precedence is explicit `--data-dir`,
+`RUNPILOT_DATA_DIR`, the persisted deployment locator, then the platform default.
+The locator is stored outside the selected data root. App Central keeps it at
+`/volume1/.@plugins/AppCentral/runpilot/data-root`; PID and lifecycle logs stay
+beside it, while mutable RunPilot state can live on another volume.
+
+After setup, change the data root from **Settings → RunPilot data directory**.
+RunPilot shuts down its managed activity, copies and verifies state, then updates
+the locator and restarts. A failed copy leaves the original root active. The
+operation requires a new destination; it will not merge existing contents.
+Docker Compose projects require a manual move because relative bind mounts depend
+on their original paths. Data stored outside RunPilot's data root also needs its
+own migration plan. Deployments installed with an explicit `--data-dir` override
+must update that deployment setting directly.
+
+App Central does not document an authenticated mechanism for passing a unique
+secret to the package administrator. Use SSH as `admin` to run
+`RUNPILOT_DATA_ROOT_FILE=/volume1/.@plugins/AppCentral/runpilot/data-root
+/usr/local/AppCentral/runpilot/bin/runpilot setup-token` on a fresh default-root
+install. For credential recovery, stop the package first, then run
+`RUNPILOT_DATA_ROOT_FILE=/volume1/.@plugins/AppCentral/runpilot/data-root
+/usr/local/AppCentral/runpilot/bin/runpilot reset-admin` and retrieve the new
+token the same way. If RunPilot was installed with an explicit data directory,
+pass that path with `--data-dir` instead.
+The lifecycle hook reads and writes the separate persistent data-root locator;
+it does not depend on ADM desktop icon visibility for authentication. ASUSTOR's
+[App Central Developer Guide](https://downloadgb.asustor.com/developer/App_Central_Developer_Guide_5.1.0_20251010.pdf)
+documents package configuration, hooks, and ADM session IDs, but not a supported
+package-admin secret delivery channel.
 
 ## Web server and reverse proxy
 
@@ -346,8 +385,7 @@ and are never recorded as task history.
 
 Terminal access is equivalent to arbitrary command execution as the account
 running RunPilot. On Linux this is the installing user's normal account; on
-Windows it is the configured service identity. It is protected by the same API
-token boundary as process and job management. Plugin requests and session
+Windows it is the configured service identity. It is protected by the same administrator session as process and job management. Plugin requests and session
 events use the authenticated application WebSocket.
 
 ## Remote desktop plugins
@@ -379,7 +417,9 @@ On Windows, from an elevated terminal:
 .\runpilot.exe service start
 ```
 
-The default data directory is `%ProgramData%\RunPilot`.
+The default data directory is `%ProgramData%\RunPilot`. Its persistent locator
+is stored under `%ProgramData%\RunPilot\data-root`, independently of the
+selected root.
 
 ## Configuration model
 

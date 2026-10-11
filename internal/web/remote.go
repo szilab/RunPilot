@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -37,7 +38,8 @@ func (s *Server) handleRemoteClientTicket(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.remoteTicketMu.Lock()
-	s.remoteTickets[ticket] = remoteClientTicket{SessionID: id, ClientParams: params, Expires: time.Now().Add(4 * time.Hour)}
+	authSessionID, _, _ := s.session(r)
+	s.remoteTickets[ticket] = remoteClientTicket{SessionID: id, AuthSessionID: authSessionID, ClientParams: params, Expires: time.Now().Add(4 * time.Hour)}
 	s.remoteTicketMu.Unlock()
 	writeJSON(w, http.StatusCreated, map[string]string{"ticket": ticket})
 }
@@ -49,11 +51,22 @@ func (s *Server) handleRemoteClient(w http.ResponseWriter, r *http.Request) {
 			ticket = cookie.Value
 		}
 	}
-	clientTicket, ok := s.remoteTicket(ticket, id)
+	authSessionID, _, _ := s.session(r)
+	clientTicket, ok := s.remoteTicket(ticket, id, authSessionID)
 	if !ok {
 		http.Error(w, "remote client authorization required", http.StatusUnauthorized)
 		return
 	}
+	_, authSession, hasSession := s.session(r)
+	if !hasSession {
+		http.Error(w, "session expired", http.StatusUnauthorized)
+		return
+	}
+	ctx, cancel := context.WithDeadline(r.Context(), authSession.expires)
+	defer cancel()
+	unregister := s.registerSessionConnection(authSessionID, cancel)
+	defer unregister()
+	r = r.WithContext(ctx)
 	if r.URL.Query().Get("ticket") != "" {
 		path := s.basePath + "/api/v1/remote/sessions/" + id + "/client/"
 		if s.basePath == "/" {
@@ -111,14 +124,14 @@ func encodeClientParams(params map[string]string) string {
 	}
 	return query.Encode()
 }
-func (s *Server) remoteTicket(ticket, id string) (remoteClientTicket, bool) {
+func (s *Server) remoteTicket(ticket, id, authSessionID string) (remoteClientTicket, bool) {
 	if ticket == "" {
 		return remoteClientTicket{}, false
 	}
 	s.remoteTicketMu.Lock()
 	defer s.remoteTicketMu.Unlock()
 	item, ok := s.remoteTickets[ticket]
-	if !ok || item.SessionID != id || time.Now().After(item.Expires) {
+	if !ok || item.SessionID != id || item.AuthSessionID != authSessionID || time.Now().After(item.Expires) {
 		delete(s.remoteTickets, ticket)
 		return remoteClientTicket{}, false
 	}

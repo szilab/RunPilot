@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -10,16 +11,19 @@ import (
 	"io"
 	"io/fs"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/szilab/RunPilot/internal/config"
 	"github.com/szilab/RunPilot/internal/core"
 	"github.com/szilab/RunPilot/internal/dockercompose"
 	"github.com/szilab/RunPilot/internal/model"
@@ -35,33 +39,54 @@ import (
 var staticFS embed.FS
 
 type Server struct {
-	ctrl                *core.Controller
-	basePath            string
-	restartHandler      func()
-	tickets             map[string]downloadTicket
-	ticketMu            sync.Mutex
-	dockerTerminal      *terminal.Manager
-	dockerAttachTickets map[string]dockerAttachTicket
-	dockerAttachMu      sync.Mutex
-	remoteTickets       map[string]remoteClientTicket
-	remoteTicketMu      sync.Mutex
-	applicationTickets  map[string]time.Time
-	applicationTicketMu sync.Mutex
-	docker              *dockercompose.Manager
+	ctrl                  *core.Controller
+	basePath              string
+	restartHandler        func()
+	tickets               map[string]downloadTicket
+	ticketMu              sync.Mutex
+	dockerTerminal        *terminal.Manager
+	dockerAttachTickets   map[string]dockerAttachTicket
+	dockerAttachMu        sync.Mutex
+	remoteTickets         map[string]remoteClientTicket
+	remoteTicketMu        sync.Mutex
+	applicationTickets    map[string]applicationTicket
+	applicationTicketMu   sync.Mutex
+	docker                *dockercompose.Manager
+	sessionMu             sync.Mutex
+	sessions              map[string]authSession
+	sessionConnections    map[string]map[uint64]func()
+	nextSessionConnection uint64
+	browserTicketMu       sync.Mutex
+	browserTickets        map[string]sessionTicket
+	loginMu               sync.Mutex
+	loginFailures         map[string]loginFailure
+	loginVerify           chan struct{}
+	dataRootSwitchAllowed bool
 }
 type dockerAttachTicket struct {
 	DockerExecID string
+	SessionID    string
 	Cols, Rows   uint16
 	Expires      time.Time
 }
 type downloadTicket struct {
 	StorageID, Path string
+	SessionID       string
 	Expires         time.Time
 }
 type remoteClientTicket struct {
-	SessionID    string
-	ClientParams map[string]string
-	Expires      time.Time
+	SessionID     string
+	AuthSessionID string
+	ClientParams  map[string]string
+	Expires       time.Time
+}
+type applicationTicket struct {
+	expires   time.Time
+	sessionID string
+}
+type sessionTicket struct {
+	sessionID string
+	expires   time.Time
 }
 
 func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
@@ -76,7 +101,7 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err := ctrl.SetBrowserBasePath(basePath); err != nil {
 		return nil, err
 	}
-	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, dockerTerminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), dockerAttachTickets: map[string]dockerAttachTicket{}, remoteTickets: map[string]remoteClientTicket{}, applicationTickets: map[string]time.Time{}, docker: ctrl.Docker()}, nil
+	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, dockerTerminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), dockerAttachTickets: map[string]dockerAttachTicket{}, remoteTickets: map[string]remoteClientTicket{}, applicationTickets: map[string]applicationTicket{}, docker: ctrl.Docker(), sessions: map[string]authSession{}, sessionConnections: map[string]map[uint64]func(){}, browserTickets: map[string]sessionTicket{}, loginFailures: map[string]loginFailure{}, loginVerify: make(chan struct{}, 2), dataRootSwitchAllowed: true}, nil
 }
 
 func (s *Server) BasePath() string { return s.basePath }
@@ -84,6 +109,8 @@ func (s *Server) BasePath() string { return s.basePath }
 // SetRestartHandler registers the daemon callback used by the authenticated
 // application restart endpoint.
 func (s *Server) SetRestartHandler(handler func()) { s.restartHandler = handler }
+
+func (s *Server) SetDataRootSwitchAllowed(allowed bool) { s.dataRootSwitchAllowed = allowed }
 
 func (s *Server) handleRestartApplication(w http.ResponseWriter, r *http.Request) {
 	if s.restartHandler == nil {
@@ -107,13 +134,20 @@ func (s *Server) Handler() http.Handler {
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/v1/system", s.handleSystem)
 	mux.HandleFunc("GET /api/v1/setup", s.handleSetupStatus)
-	mux.HandleFunc("POST /api/v1/setup/token", s.handleInitialTokenChange)
+	mux.HandleFunc("POST /api/v1/setup", s.handleInitialSetup)
+	mux.HandleFunc("GET /setup", s.handleSetupPage)
+	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
+	mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
+	mux.HandleFunc("POST /api/v1/auth/password", s.handlePasswordChange)
 	api.HandleFunc("GET /api/v1/dashboard/status", s.handleDashboardStatus)
 	api.HandleFunc("GET /api/v1/launcher", s.handleLauncherGet)
 	api.HandleFunc("PUT /api/v1/launcher", s.handleLauncherPut)
 	api.HandleFunc("POST /api/v1/ws/ticket", s.handleApplicationTicket)
 	api.HandleFunc("GET /api/v1/plugins", s.handlePlugins)
 	api.HandleFunc("POST /api/v1/restart", s.handleRestartApplication)
+	api.HandleFunc("GET /api/v1/admin/data-root", s.handleDataRootGet)
+	api.HandleFunc("POST /api/v1/admin/data-root", s.handleDataRootChange)
+	api.HandleFunc("PUT /api/v1/admin/bearer-auth", s.handleBearerAuthChange)
 	api.HandleFunc("GET /api/v1/plugins/catalog", s.handlePluginCatalog)
 	api.HandleFunc("POST /api/v1/plugins/{id}/install", s.handlePluginInstall)
 	api.HandleFunc("DELETE /api/v1/plugins/{id}", s.handlePluginUninstall)
@@ -231,17 +265,29 @@ func normalizeBasePath(value string) (string, error) {
 	return clean, nil
 }
 
-const initialSetupHTML = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Set up RunPilot</title><style>body{font:16px system-ui;max-width:34rem;margin:12vh auto;padding:0 1rem;background:#101820;color:#edf3f7}h1{font-size:2rem}label{display:block;margin:1rem 0}input{box-sizing:border-box;width:100%;padding:.75rem;margin-top:.4rem}button{padding:.8rem 1.2rem;background:#68b4a5;border:0;border-radius:.4rem;font-weight:700}#error{color:#ff9d9d}</style><h1>Set up RunPilot</h1><p>RunPilot is locked until you replace this installation’s unique initial token. On the NAS or host, run <code>runpilot setup-token</code> and enter the printed token below. This local command is the administrator-only retrieval path.</p><form id="f"><label>Initial token<input name="current" type="password" required autocomplete="current-password"></label><label>New token (at least 24 characters)<input name="next" type="password" minlength="24" required autocomplete="new-password"></label><label>Confirm new token<input name="confirm" type="password" minlength="24" required autocomplete="new-password"></label><p id="error"></p><button>Change token and continue</button></form><script>f.onsubmit=async e=>{e.preventDefault();error.textContent="";if(f.next.value!==f.confirm.value){error.textContent="The new tokens do not match.";return}try{const r=await fetch("api/v1/setup/token",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({current:f.current.value,next:f.next.value})});if(!r.ok)throw Error("Token change failed. Check the initial token and try again.");sessionStorage.setItem("runpilot.token",f.next.value);location.href="."}catch(x){error.textContent=x.message}}</script></html>`
+const initialSetupHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Set up RunPilot</title><link rel="stylesheet" href="__STATIC__/styles.css"></head><body><main class="setup-screen"><section class="dialog small setup-card"><div class="dialog-head"><div><h1>Set up RunPilot</h1><p>Create the local administrator account and choose where RunPilot stores its data.</p></div></div><p>Authorize setup with the unique bootstrap token retrieved locally using <code>runpilot setup-token</code>. For an existing token installation, enter its current API token.</p><form id="setup" class="settings-form"><label>Administrator username<input name="username" minlength="3" maxlength="64" autocomplete="username" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label>Confirm password<input name="confirm" type="password" minlength="12" autocomplete="new-password" required></label><label>RunPilot data directory<input name="dataDir" type="text" placeholder="Leave blank to use the current directory"></label><label>Bootstrap token<input name="bootstrap" type="password" autocomplete="off" required></label><div id="error" class="form-error hidden" role="alert"></div><div class="dialog-actions"><button class="button primary">Create administrator</button></div></form></section></main><script>try{localStorage.removeItem('runpilot.token');sessionStorage.removeItem('runpilot.token')}catch{}const form=document.querySelector('#setup'),error=document.querySelector('#error');form.onsubmit=async e=>{e.preventDefault();error.textContent='';error.classList.add('hidden');if(form.password.value!==form.confirm.value){error.textContent='Passwords do not match.';error.classList.remove('hidden');return}try{const response=await fetch('__BASE__/api/v1/setup',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(Object.fromEntries(new FormData(form)))});if(!response.ok){const result=await response.json();throw Error(result.error||'Setup failed')}location.href='__BASE__/'}catch(x){error.textContent=x.message;error.classList.remove('hidden')}}</script></body></html>`
+
+func (s *Server) writeInitialSetup(w http.ResponseWriter) {
+	staticPrefix := s.basePath
+	if staticPrefix == "/" {
+		staticPrefix = ""
+	}
+	page := strings.ReplaceAll(initialSetupHTML, "__STATIC__", staticPrefix+"/static")
+	page = strings.ReplaceAll(page, "__BASE__", staticPrefix)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = io.WriteString(w, page)
+}
 
 func (s *Server) setupGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.ctrl.Snapshot().Server.SetupComplete || r.URL.Path == "/healthz" || r.URL.Path == "/api/v1/setup" || r.URL.Path == "/api/v1/setup/token" || strings.HasPrefix(r.URL.Path, "/static/") {
+		serverConfig := s.ctrl.Snapshot().Server
+		if serverConfig.SetupComplete || r.URL.Path == "/healthz" || r.URL.Path == "/api/v1/setup" || r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/setup" || strings.HasPrefix(r.URL.Path, "/static/") {
 			next.ServeHTTP(w, r)
 			return
 		}
 		if r.URL.Path == "/" || r.URL.Path == "/setup" {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = io.WriteString(w, initialSetupHTML)
+			s.writeInitialSetup(w)
 			return
 		}
 		writeJSON(w, http.StatusPreconditionRequired, map[string]string{"error": "initial setup required", "setup": "/setup"})
@@ -249,30 +295,352 @@ func (s *Server) setupGate(next http.Handler) http.Handler {
 }
 
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{"required": !s.ctrl.Snapshot().Server.SetupComplete})
+	cfg := s.ctrl.Snapshot().Server
+	writeJSON(w, http.StatusOK, map[string]any{"required": cfg.AdminUsername == "" || cfg.AdminPasswordHash == "", "fresh": !cfg.SetupComplete})
 }
 
-func (s *Server) handleInitialTokenChange(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
+	cfg := s.ctrl.Snapshot().Server
+	if cfg.AdminUsername != "" && cfg.AdminPasswordHash != "" {
+		http.Redirect(w, r, s.basePath+"/", http.StatusSeeOther)
+		return
+	}
+	s.writeInitialSetup(w)
+}
+
+func (s *Server) handleInitialSetup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	var input struct {
-		Current string `json:"current"`
-		Next    string `json:"next"`
+		Bootstrap string `json:"bootstrap"`
+		Username  string `json:"username"`
+		Password  string `json:"password"`
+		Confirm   string `json:"confirm"`
+		DataDir   string `json:"dataDir"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if input.Password != input.Confirm {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password confirmation does not match"})
+		return
+	}
+	if err := validCredentials(input.Username, input.Password); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	cred := strings.TrimSpace(r.Header.Get("Authorization"))
+	var err error
+	if input.Bootstrap != "" {
+		cred = "Bearer " + input.Bootstrap
+	}
+	selectedDir := s.ctrl.DataDir()
+	if strings.TrimSpace(input.DataDir) != "" {
+		selectedDir, err = config.ValidateDataRoot(input.DataDir)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if filepath.Clean(selectedDir) != filepath.Clean(s.ctrl.DataDir()) && !s.dataRootSwitchAllowed {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "this RunPilot service uses an explicit --data-dir override; change it through that deployment setting"})
+		return
+	}
+	var accountStore interface {
+		CanConfigureAdmin(string) bool
+		ConfigureAdmin(string, string, string) error
+	}
+	newRoot := false
+	if filepath.Clean(selectedDir) == filepath.Clean(s.ctrl.DataDir()) {
+		accountStore = s.ctrl
+	} else if _, statErr := os.Stat(filepath.Join(selectedDir, "runpilot.yaml")); statErr == nil {
+		accountStore, err = config.Open(selectedDir)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "existing RunPilot data directory cannot be opened"})
+			return
+		}
+	} else if errors.Is(statErr, os.ErrNotExist) {
+		if _, rootErr := os.Lstat(selectedDir); rootErr == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "an existing destination must contain a recognized RunPilot configuration"})
+			return
+		} else if !errors.Is(rootErr, os.ErrNotExist) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "selected data directory cannot be inspected"})
+			return
+		}
+		selectedDir, err = config.ValidateNewDataRoot(selectedDir)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		newRoot = true
+	} else {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "selected data directory cannot be inspected"})
+		return
+	}
+
+	if newRoot {
+		if s.hasComposeProjects(s.ctrl.DataDir()) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "the current root contains Docker Compose projects; choose the current directory or migrate those projects manually first"})
+			return
+		}
+		if !s.ctrl.CanConfigureAdmin(cred) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "setup authorization rejected"})
+			return
+		}
+	} else if !accountStore.CanConfigureAdmin(cred) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "setup authorization rejected"})
+		return
+	}
+	passwordHash, err := hashPassword(input.Password)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not secure password"})
+		return
+	}
+	if newRoot {
+		// Claim the installation token in the active store first. Concurrent
+		// requests selecting different roots cannot each claim the installation.
+		if err := s.ctrl.ConfigureAdmin(cred, strings.TrimSpace(input.Username), passwordHash); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "setup authorization rejected"})
+			return
+		}
+		if err = config.QueueDataRootMigration(s.ctrl.DataDir(), selectedDir); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "administrator account was created in the current directory, but selected data-root migration could not be queued: " + err.Error()})
+			return
+		}
+	} else {
+		if err := accountStore.ConfigureAdmin(cred, strings.TrimSpace(input.Username), passwordHash); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "setup authorization rejected"})
+			return
+		}
+	}
+	if !newRoot {
+		if err := config.WriteDataRoot(selectedDir); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "administrator created but data-root locator could not be saved"})
+			return
+		}
+	}
+	if s.issueSession(w, r) == "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not create session"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"complete": true})
+	if filepath.Clean(selectedDir) != filepath.Clean(s.ctrl.DataDir()) && s.restartHandler != nil {
+		go s.restartHandler()
+	}
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if origin := r.Header.Get("Origin"); origin != "" {
+		parsed, err := url.Parse(origin)
+		if err != nil || !strings.EqualFold(parsed.Host, r.Host) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "login origin rejected"})
+			return
+		}
+	}
+	key := clientAddress(r)
+	if !s.loginAllowed(key) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many login attempts"})
+		return
+	}
+	var input struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
-	if err := s.ctrl.ChangeInitialToken(input.Current, input.Next); err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "token change rejected"})
+	cfg := s.ctrl.Snapshot().Server
+	select {
+	case s.loginVerify <- struct{}{}:
+		defer func() { <-s.loginVerify }()
+	default:
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "login service is busy"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"complete": true})
+	passwordOK := verifyPassword(cfg.AdminPasswordHash, input.Password)
+	usernameOK := len(input.Username) == len(cfg.AdminUsername) && subtle.ConstantTimeCompare([]byte(input.Username), []byte(cfg.AdminUsername)) == 1
+	if !usernameOK || !passwordOK {
+		s.recordLoginFailure(key)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid username or password"})
+		return
+	}
+	s.clearLoginFailures(key)
+	if s.issueSession(w, r) == "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not create session"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": true})
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if !s.csrfValid(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "csrf validation failed"})
+		return
+	}
+	s.clearSession(w, r)
+	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
+}
+
+func (s *Server) revokeAllSessions() {
+	s.sessionMu.Lock()
+	connections := s.sessionConnections
+	s.sessions = map[string]authSession{}
+	s.sessionConnections = map[string]map[uint64]func(){}
+	s.sessionMu.Unlock()
+	for _, set := range connections {
+		for _, closeConnection := range set {
+			closeConnection()
+		}
+	}
+}
+
+func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if !s.csrfValid(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "csrf validation failed"})
+		return
+	}
+	var input struct {
+		Current string `json:"current"`
+		Next    string `json:"next"`
+		Confirm string `json:"confirm"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if input.Next != input.Confirm {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password confirmation does not match"})
+		return
+	}
+	if err := validCredentials(s.ctrl.Snapshot().Server.AdminUsername, input.Next); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	cfg := s.ctrl.Snapshot().Server
+	if !verifyPassword(cfg.AdminPasswordHash, input.Current) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "current password rejected"})
+		return
+	}
+	hash, err := hashPassword(input.Next)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not secure password"})
+		return
+	}
+	if err = s.ctrl.ChangeAdminPassword(cfg.AdminUsername, cfg.AdminPasswordHash, hash); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "account changed during request"})
+		return
+	}
+	s.revokeAllSessions()
+	s.clearSession(w, r)
+	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
+}
+
+func (s *Server) handleBearerAuthChange(w http.ResponseWriter, r *http.Request) {
+	if !s.csrfValid(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "csrf validation failed"})
+		return
+	}
+	var input struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if err := s.ctrl.SetBearerAuth(input.Enabled); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not save API token setting"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": input.Enabled})
+}
+
+func (s *Server) handleDataRootGet(w http.ResponseWriter, r *http.Request) {
+	status := ""
+	if path := config.LocatorPath(); path != "" {
+		if value, err := os.ReadFile(path + ".status"); err == nil {
+			status = strings.TrimSpace(string(value))
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"dataDir": s.ctrl.DataDir(), "migrationStatus": status})
+}
+
+func (s *Server) handleDataRootChange(w http.ResponseWriter, r *http.Request) {
+	if !s.dataRootSwitchAllowed {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "this RunPilot service uses an explicit --data-dir override; change its deployment setting"})
+		return
+	}
+	if s.restartHandler == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "graceful restart is unavailable"})
+		return
+	}
+	var input struct {
+		Destination string `json:"destination"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if _, err := config.ValidateDataRoot(input.Destination); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if s.hasComposeProjects(s.ctrl.DataDir()) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "Docker Compose projects use path-relative data and need a manual migration before moving the RunPilot data directory"})
+		return
+	}
+	if err := config.QueueDataRootMigration(s.ctrl.DataDir(), input.Destination); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+	_, _ = io.WriteString(w, `{"status":"restarting"}`)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	go s.restartHandler()
+}
+
+func (s *Server) hasComposeProjects(root string) bool {
+	for _, path := range []string{filepath.Join(root, "compose"), filepath.Join(root, "plugins", "docker", "data", "workspace", "projects")} {
+		entries, err := os.ReadDir(path)
+		if err == nil && len(entries) > 0 {
+			return true
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+	}
+	return false
+}
+
+func clientAddress(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := s.ctrl.Snapshot().Server.Token
+		if _, _, ok := s.session(r); ok {
+			if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+				if !s.csrfValid(r) {
+					writeJSON(w, http.StatusForbidden, map[string]string{"error": "csrf validation failed"})
+					return
+				}
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+		cfg := s.ctrl.Snapshot().Server
+		token := cfg.Token
 		auth := strings.TrimSpace(r.Header.Get("Authorization"))
-		if token == "" || auth != "Bearer "+token {
+		if !cfg.BearerAuthEnabled || token == "" || auth != "Bearer "+token {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
 			return
 		}
@@ -361,6 +729,7 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 		"name":                 "RunPilot",
 		"version":              version.Version,
 		"dataDir":              s.ctrl.DataDir(),
+		"bearerAuthEnabled":    cfg.Server.BearerAuthEnabled,
 		"configPath":           s.ctrl.ConfigPath(),
 		"bind":                 cfg.Server.Bind,
 		"capabilities":         platform.CurrentCapabilities(),
@@ -541,7 +910,8 @@ func (s *Server) handleDockerContainerAttachTicket(w http.ResponseWriter, r *htt
 		return
 	}
 	s.dockerAttachMu.Lock()
-	s.dockerAttachTickets[ticket] = dockerAttachTicket{DockerExecID: r.PathValue("id"), Cols: request.Cols, Rows: request.Rows, Expires: time.Now().Add(time.Minute)}
+	sessionID, _, _ := s.session(r)
+	s.dockerAttachTickets[ticket] = dockerAttachTicket{DockerExecID: r.PathValue("id"), SessionID: sessionID, Cols: request.Cols, Rows: request.Rows, Expires: time.Now().Add(time.Minute)}
 	s.dockerAttachMu.Unlock()
 	writeJSON(w, http.StatusCreated, map[string]string{"ticket": ticket})
 }
@@ -653,7 +1023,16 @@ func (s *Server) handleDockerAttach(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(websocketsecure.MaxEncryptedMessageSize)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	ticket, ok := s.consumeDockerAttachTicket(r.URL.Query().Get("ticket"))
+	sessionID, authSession, hasSession := s.session(r)
+	if !hasSession {
+		_ = conn.Close(websocket.StatusPolicyViolation, "session expired")
+		return
+	}
+	ctx, cancel = context.WithDeadline(ctx, authSession.expires)
+	defer cancel()
+	unregister := s.registerSessionConnection(sessionID, func() { _ = conn.Close(websocket.StatusPolicyViolation, "session revoked") })
+	defer unregister()
+	ticket, ok := s.consumeDockerAttachTicket(r.URL.Query().Get("ticket"), sessionID)
 	if !ok || ticket.DockerExecID == "" {
 		_ = conn.Close(websocket.StatusPolicyViolation, "terminal connection expired or already used")
 		return
@@ -712,14 +1091,14 @@ func (s *Server) handleDockerAttach(w http.ResponseWriter, r *http.Request) {
 	<-done
 }
 
-func (s *Server) consumeDockerAttachTicket(value string) (dockerAttachTicket, bool) {
+func (s *Server) consumeDockerAttachTicket(value, sessionID string) (dockerAttachTicket, bool) {
 	s.dockerAttachMu.Lock()
 	defer s.dockerAttachMu.Unlock()
 	ticket, ok := s.dockerAttachTickets[value]
 	if ok {
 		delete(s.dockerAttachTickets, value)
 	}
-	if !ok || time.Now().After(ticket.Expires) {
+	if !ok || ticket.SessionID != sessionID || time.Now().After(ticket.Expires) {
 		return dockerAttachTicket{}, false
 	}
 	return ticket, true
@@ -849,8 +1228,9 @@ func (s *Server) handleDownloadTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := fmt.Sprintf("%x", b)
+	sessionID, _, _ := s.session(r)
 	s.ticketMu.Lock()
-	s.tickets[t] = downloadTicket{r.PathValue("id"), v.Path, time.Now().Add(2 * time.Minute)}
+	s.tickets[t] = downloadTicket{StorageID: r.PathValue("id"), Path: v.Path, SessionID: sessionID, Expires: time.Now().Add(2 * time.Minute)}
 	s.ticketMu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]string{"url": s.downloadTicketURL(t)})
 }
@@ -869,7 +1249,8 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 		delete(s.tickets, r.PathValue("ticket"))
 	}
 	s.ticketMu.Unlock()
-	if !ok || time.Now().After(t.Expires) {
+	sessionID, _, _ := s.session(r)
+	if !ok || t.SessionID != sessionID || time.Now().After(t.Expires) {
 		http.NotFound(w, r)
 		return
 	}

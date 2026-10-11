@@ -211,7 +211,9 @@ func validateAPK(path, wantVersion string) error {
 	}
 	lifecycle := string(controlFiles["start-stop.sh"].data)
 	for _, requirement := range []string{
-		"DATA_DIR=/volume1/.@plugins/AppCentral/runpilot/data",
+		"META_DIR=/volume1/.@plugins/AppCentral/runpilot",
+		"DATA_ROOT_FILE=$META_DIR/data-root",
+		"DEFAULT_DATA_DIR=$META_DIR/data",
 		"-c admin:administrators",
 		"-s TERM",
 		"-s KILL",

@@ -7,11 +7,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/szilab/RunPilot/internal/config"
 	"github.com/szilab/RunPilot/internal/core"
 	webui "github.com/szilab/RunPilot/internal/web"
 )
@@ -37,7 +39,12 @@ func Run(ctx context.Context, dataDir string, options ...Options) error {
 	if err != nil {
 		return err
 	}
-	defer ctrl.Close()
+	ctrlClosed := false
+	defer func() {
+		if !ctrlClosed {
+			ctrl.Close()
+		}
+	}()
 
 	cfg := ctrl.Snapshot()
 	option := Options{}
@@ -56,13 +63,19 @@ func Run(ctx context.Context, dataDir string, options ...Options) error {
 	if err != nil {
 		return err
 	}
+	ui.SetDataRootSwitchAllowed(dataDir == "" && os.Getenv("RUNPILOT_DATA_DIR") == "")
 	ui.SetRestartHandler(func() {
 		restartOnce.Do(func() {
 			close(restartRequested)
 			cancel()
 		})
 	})
-	defer ui.Close()
+	uiClosed := false
+	defer func() {
+		if !uiClosed {
+			_ = ui.Close()
+		}
+	}()
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           ui.Handler(),
@@ -95,10 +108,19 @@ func Run(ctx context.Context, dataDir string, options ...Options) error {
 	}
 	select {
 	case <-restartRequested:
+		if err := ui.Close(); err != nil {
+			log.Printf("RunPilot web shutdown: %v", err)
+		}
+		uiClosed = true
+		ctrl.Close()
+		ctrlClosed = true
+		if err := config.ApplyPendingDataRoot(); err != nil {
+			log.Printf("RunPilot data-root relocation failed; retaining source data: %v", err)
+		}
 		return ErrRestartRequested
 	default:
-		return nil
 	}
+	return nil
 }
 
 func listenAddr(bind string, configuredPort, overridePort int, overrideAddress string) (string, error) {

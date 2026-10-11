@@ -14,7 +14,11 @@ func openReadyController(t *testing.T, dataDir string) (*core.Controller, error)
 	if err != nil {
 		return nil, err
 	}
-	if err := store.Update(func(c *model.Config) error { c.Server.SetupComplete = true; return nil }); err != nil {
+	if err := store.Update(func(c *model.Config) error {
+		c.Server.SetupComplete = true
+		c.Server.BearerAuthEnabled = true
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	return core.Open(dataDir)

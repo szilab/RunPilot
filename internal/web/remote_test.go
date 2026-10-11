@@ -47,9 +47,12 @@ func TestXpraClientTicketRedirectStaysOnTheScopedProxyPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.remoteTickets["ticket"] = remoteClientTicket{SessionID: "session", Expires: time.Now().Add(time.Minute)}
+	server.sessions["auth"] = authSession{expires: time.Now().Add(time.Hour)}
+	server.remoteTickets["ticket"] = remoteClientTicket{SessionID: "session", AuthSessionID: "auth", Expires: time.Now().Add(time.Minute)}
 	response := httptest.NewRecorder()
-	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/runpilot/api/v1/remote/sessions/session/client/?ticket=ticket", nil))
+	request := httptest.NewRequest(http.MethodGet, "/runpilot/api/v1/remote/sessions/session/client/?ticket=ticket", nil)
+	request.AddCookie(&http.Cookie{Name: adminSessionCookie, Value: "auth"})
+	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusFound {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -68,9 +71,12 @@ func TestXpraProxyRedirectUsesOnlySessionSnapshotParameters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.remoteTickets["ticket"] = remoteClientTicket{SessionID: "session", ClientParams: map[string]string{"encoding": "webp", "video": "no", "toolbar_position": "top-left"}, Expires: time.Now().Add(time.Minute)}
+	server.sessions["auth"] = authSession{expires: time.Now().Add(time.Hour)}
+	server.remoteTickets["ticket"] = remoteClientTicket{SessionID: "session", AuthSessionID: "auth", ClientParams: map[string]string{"encoding": "webp", "video": "no", "toolbar_position": "top-left"}, Expires: time.Now().Add(time.Minute)}
 	response := httptest.NewRecorder()
-	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/remote/sessions/session/client/?ticket=ticket&encoding=rgb", nil))
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/remote/sessions/session/client/?ticket=ticket&encoding=rgb", nil)
+	request.AddCookie(&http.Cookie{Name: adminSessionCookie, Value: "auth"})
+	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusFound {
 		t.Fatalf("status=%d", response.Code)
 	}

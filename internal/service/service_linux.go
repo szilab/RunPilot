@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/szilab/RunPilot/internal/config"
 	"github.com/szilab/RunPilot/internal/daemon"
 )
 
@@ -41,9 +42,6 @@ var (
 )
 
 func Install(dataDir string, options ...daemon.Options) error {
-	if dataDir == "" {
-		return fmt.Errorf("data directory is unavailable; set --data-dir or RUNPILOT_DATA_DIR")
-	}
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
@@ -52,12 +50,21 @@ func Install(dataDir string, options ...daemon.Options) error {
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
-	dataDir, err = filepath.Abs(dataDir)
-	if err != nil {
-		return fmt.Errorf("resolve data directory: %w", err)
+	workingDir := dataDir
+	if dataDir == "" {
+		workingDir, err = config.ResolveDataDir("")
+		if err != nil {
+			return err
+		}
 	}
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		return fmt.Errorf("create data directory: %w", err)
+	if workingDir != "" {
+		workingDir, err = filepath.Abs(workingDir)
+		if err != nil {
+			return fmt.Errorf("resolve data directory: %w", err)
+		}
+		if err := os.MkdirAll(workingDir, 0o755); err != nil {
+			return fmt.Errorf("create data directory: %w", err)
+		}
 	}
 	var option daemon.Options
 	if len(options) > 0 {
@@ -71,7 +78,7 @@ func Install(dataDir string, options ...daemon.Options) error {
 		return fmt.Errorf("create systemd user directory: %w", err)
 	}
 	path := filepath.Join(dir, systemdUnit)
-	if err := os.WriteFile(path, []byte(unitContents(exe, dataDir, option)), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(unitContents(exe, dataDir, workingDir, option)), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	if err := systemctl("daemon-reload"); err != nil {
@@ -164,8 +171,11 @@ func printLingerNotice() {
 	fmt.Printf("RunPilot was installed as a systemd user service.\n\nTo let it start at boot and continue running without an interactive login, enable lingering for this user:\n\n  sudo loginctl enable-linger %s\n", username)
 }
 
-func unitContents(executable, dataDir string, option daemon.Options) string {
-	args := []string{unitQuote(executable), "service-run", "--data-dir", unitQuote(dataDir)}
+func unitContents(executable, dataDir, workingDir string, option daemon.Options) string {
+	args := []string{unitQuote(executable), "service-run"}
+	if dataDir != "" {
+		args = append(args, "--data-dir", unitQuote(dataDir))
+	}
 	if option.Port != 0 {
 		args = append(args, "--port", strconv.Itoa(option.Port))
 	}
@@ -175,7 +185,7 @@ func unitContents(executable, dataDir string, option daemon.Options) string {
 	if option.BasePath != "" {
 		args = append(args, "--base-path", unitQuote(option.BasePath))
 	}
-	return "[Unit]\nDescription=RunPilot Process Manager\n\n[Service]\nType=simple\nWorkingDirectory=" + dataDir + "\nExecStart=" + strings.Join(args, " ") + "\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"
+	return "[Unit]\nDescription=RunPilot Process Manager\n\n[Service]\nType=simple\nWorkingDirectory=" + workingDir + "\nExecStart=" + strings.Join(args, " ") + "\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"
 }
 
 func unitQuote(value string) string {

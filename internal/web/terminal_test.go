@@ -39,13 +39,13 @@ func TestDockerAttachTicketIsSingleUseAndExpires(t *testing.T) {
 		"fresh":   {DockerExecID: "container", Expires: time.Now().Add(time.Minute)},
 		"expired": {DockerExecID: "container", Expires: time.Now().Add(-time.Second)},
 	}}
-	if _, ok := server.consumeDockerAttachTicket("fresh"); !ok {
+	if _, ok := server.consumeDockerAttachTicket("fresh", ""); !ok {
 		t.Fatal("fresh Docker attach ticket was rejected")
 	}
-	if _, ok := server.consumeDockerAttachTicket("fresh"); ok {
+	if _, ok := server.consumeDockerAttachTicket("fresh", ""); ok {
 		t.Fatal("Docker attach ticket was accepted twice")
 	}
-	if _, ok := server.consumeDockerAttachTicket("expired"); ok {
+	if _, ok := server.consumeDockerAttachTicket("expired", ""); ok {
 		t.Fatal("expired Docker attach ticket was accepted")
 	}
 }

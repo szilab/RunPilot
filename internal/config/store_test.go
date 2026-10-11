@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -231,41 +232,6 @@ func containsStorageSection(value string) bool {
 	return false
 }
 
-func TestFreshSetupTokenRotationIsAtomicAndPersistent(t *testing.T) {
-	dir := t.TempDir()
-	store, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	initial := store.Snapshot().Server.Token
-	if store.Snapshot().Server.SetupComplete || initial == "" {
-		t.Fatal("fresh install did not require setup with a token")
-	}
-	const next = "a-new-token-that-is-at-least-24-bytes-long"
-	var successes atomic.Int32
-	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if store.ChangeInitialToken(initial, next) == nil {
-				successes.Add(1)
-			}
-		}()
-	}
-	wg.Wait()
-	if successes.Load() != 1 {
-		t.Fatalf("successful rotations = %d", successes.Load())
-	}
-	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := reopened.Snapshot().Server; got.Token != next || !got.SetupComplete {
-		t.Fatalf("reopened server config = %#v", got)
-	}
-}
-
 func TestExistingConfigWithoutSetupMarkerIsUpgrade(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "runpilot.yaml")
@@ -321,5 +287,32 @@ jobs:
 	}
 	if cfg.Server.Token != "retained-token" || !cfg.Server.SetupComplete {
 		t.Fatal("upgrade auth state changed")
+	}
+}
+
+func TestConfigureAdminConcurrentClaimIsSingleUse(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential := "Bearer " + store.Snapshot().Server.Token
+	var successes atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if store.ConfigureAdmin(credential, fmt.Sprintf("admin%d", i), "argon-hash") == nil {
+				successes.Add(1)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if successes.Load() != 1 {
+		t.Fatalf("successful setup claims=%d", successes.Load())
+	}
+	cfg := store.Snapshot().Server
+	if cfg.AdminUsername == "" || cfg.AdminPasswordHash != "argon-hash" || !cfg.SetupComplete {
+		t.Fatalf("admin setup state was not persisted: %#v", cfg)
 	}
 }

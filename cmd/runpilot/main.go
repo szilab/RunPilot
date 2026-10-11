@@ -33,7 +33,7 @@ func run() error {
 		return runForeground(args[1:])
 	case "service-run":
 		fs := flag.NewFlagSet("service-run", flag.ContinueOnError)
-		dataDir := fs.String("data-dir", config.DefaultDataDir(), "RunPilot data directory")
+		dataDir := fs.String("data-dir", "", "RunPilot data directory override")
 		port := fs.Int("port", 0, "HTTP port (overrides YAML)")
 		bindAddress := fs.String("bind-address", "", "HTTP bind address (overrides YAML)")
 		basePath := fs.String("base-path", "", "URL base path, for example /runpilot (overrides YAML)")
@@ -45,19 +45,42 @@ func run() error {
 		return runServiceCommand(args[1:])
 	case "setup-token":
 		fs := flag.NewFlagSet("setup-token", flag.ContinueOnError)
-		dataDir := fs.String("data-dir", config.DefaultDataDir(), "RunPilot data directory")
+		dataDir := fs.String("data-dir", "", "RunPilot data directory override")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		store, err := config.Open(*dataDir)
+		resolved, err := config.ResolveDataDir(*dataDir)
+		if err != nil {
+			return err
+		}
+		store, err := config.Open(resolved)
 		if err != nil {
 			return err
 		}
 		cfg := store.Snapshot()
-		if cfg.Server.SetupComplete {
+		if cfg.Server.AdminUsername != "" && cfg.Server.AdminPasswordHash != "" {
 			return fmt.Errorf("first-run setup is already complete")
 		}
 		fmt.Println(cfg.Server.Token)
+		return nil
+	case "reset-admin":
+		fs := flag.NewFlagSet("reset-admin", flag.ContinueOnError)
+		dataDir := fs.String("data-dir", "", "RunPilot data directory override")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		resolved, err := config.ResolveDataDir(*dataDir)
+		if err != nil {
+			return err
+		}
+		store, err := config.Open(resolved)
+		if err != nil {
+			return err
+		}
+		if err := store.ResetAdmin(); err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, "Administrator account reset. Stop RunPilot first, then run runpilot setup-token locally and create a new administrator in the setup page.")
 		return nil
 	case "version", "--version", "-v":
 		fmt.Println("RunPilot", version.Version)
@@ -73,7 +96,7 @@ func run() error {
 
 func runForeground(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", config.DefaultDataDir(), "RunPilot data directory")
+	dataDir := fs.String("data-dir", "", "RunPilot data directory override")
 	port := fs.Int("port", 0, "HTTP port (overrides YAML)")
 	bindAddress := fs.String("bind-address", "", "HTTP bind address (overrides YAML)")
 	basePath := fs.String("base-path", "", "URL base path, for example /runpilot (overrides YAML)")
@@ -100,14 +123,25 @@ func runServiceCommand(args []string) error {
 	switch args[0] {
 	case "install":
 		fs := flag.NewFlagSet("service install", flag.ContinueOnError)
-		dataDir := fs.String("data-dir", config.DefaultDataDir(), "RunPilot data directory")
+		dataDir := fs.String("data-dir", "", "RunPilot data directory override")
 		port := fs.Int("port", 0, "HTTP port (overrides YAML)")
 		bindAddress := fs.String("bind-address", "", "HTTP bind address (overrides YAML)")
 		basePath := fs.String("base-path", "", "URL base path, for example /runpilot (overrides YAML)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		return service.Install(*dataDir, daemon.Options{Port: *port, BindAddress: *bindAddress, BasePath: *basePath})
+		installDir := *dataDir
+		if installDir == "" && os.Getenv("RUNPILOT_DATA_DIR") != "" {
+			installDir = os.Getenv("RUNPILOT_DATA_DIR")
+		}
+		if installDir != "" {
+			var err error
+			installDir, err = config.ResolveDataDir(installDir)
+			if err != nil {
+				return err
+			}
+		}
+		return service.Install(installDir, daemon.Options{Port: *port, BindAddress: *bindAddress, BasePath: *basePath})
 	case "uninstall":
 		return service.Uninstall()
 	case "start":
@@ -130,7 +164,8 @@ Usage:
   runpilot service start                     Start the native service
   runpilot service stop                      Stop the native service
   runpilot service uninstall                 Remove the native service
-  runpilot setup-token [--data-dir PATH]    Print the unique initial token before setup
+  runpilot setup-token [--data-dir PATH]    Print the local setup authorization token
+  runpilot reset-admin [--data-dir PATH]    Require local setup to create a new administrator
   runpilot version                           Print version
 
 With no arguments RunPilot starts in foreground mode.

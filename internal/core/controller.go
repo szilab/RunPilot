@@ -71,8 +71,10 @@ const (
 )
 
 func Open(dataDir string) (*Controller, error) {
-	if dataDir == "" {
-		dataDir = config.DefaultDataDir()
+	var err error
+	dataDir, err = config.ResolveDataDir(dataDir)
+	if err != nil {
+		return nil, err
 	}
 	cfg, err := config.Open(dataDir)
 	if err != nil {
@@ -635,9 +637,19 @@ func (c *Controller) pluginStorageSet(pluginID, key string, value json.RawMessag
 func (c *Controller) DataDir() string        { return c.dataDir }
 func (c *Controller) ConfigPath() string     { return c.config.Path() }
 func (c *Controller) Snapshot() model.Config { return c.config.Snapshot() }
-func (c *Controller) ChangeInitialToken(current, next string) error {
-	return c.config.ChangeInitialToken(current, next)
+func (c *Controller) ConfigureAdmin(credential, username, passwordHash string) error {
+	return c.config.ConfigureAdmin(credential, username, passwordHash)
 }
+
+func (c *Controller) CanConfigureAdmin(credential string) bool {
+	return c.config.CanConfigureAdmin(credential)
+}
+
+func (c *Controller) ChangeAdminPassword(username, currentHash, nextHash string) error {
+	return c.config.ChangeAdminPassword(username, currentHash, nextHash)
+}
+
+func (c *Controller) SetBearerAuth(enabled bool) error { return c.config.SetBearerAuth(enabled) }
 
 func (c *Controller) StorageLocations(ctx context.Context) []storage.Descriptor {
 	return c.storage.List(ctx)

@@ -1,5 +1,7 @@
+try { localStorage.removeItem("runpilot.token"); } catch {}
+try { sessionStorage.removeItem("runpilot.token"); } catch {}
 const $ = (id) => document.getElementById(id);
-let token = RunPilotAuthStorage.migrate(sessionStorage, localStorage);
+let authenticated = false;
 let currentPage = "overview";
 let storage = [], storageLocation = null, storagePath = "";
 let softwareProviders = [], softwareProviderID = "", softwarePackages = [], softwareUpdates = [], softwareSearchResults = [], softwareBuckets = [], softwareTab = "installed", softwareBusy = false, softwareBusyLabel = "", softwareLoading = false, softwareLoadingKey = "", softwareLoadedKey = "", softwareLoadSequence = 0, softwareRootDrafts = {};
@@ -172,9 +174,10 @@ function registerPluginSettings(extension, entry) { if(!entry||typeof entry.id!=
 
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
-  headers.set("Authorization", `Bearer ${token}`);
+  const csrf = document.cookie.split(";").map(value => value.trim()).find(value => value.startsWith("runpilot_csrf="))?.split("=").slice(1).join("=");
+  if (csrf && options.method && !["GET", "HEAD", "OPTIONS"].includes(options.method.toUpperCase())) headers.set("X-RunPilot-CSRF", decodeURIComponent(csrf));
   if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  const res = await fetch(path, {...options, headers});
+  const res = await fetch(path, {...options, headers, credentials:"same-origin"});
   if (res.status === 401) {
     const error = new Error("Unauthorized"); error.serverReachable = true;
     throw error;
@@ -304,7 +307,7 @@ function escapeHtml(value) {
 }
 
 async function refresh() {
-  if (refreshing || !token) return;
+  if (refreshing || !authenticated) return;
   refreshing = true;
   try {
     const [pluginSnapshot, frontendSnapshot] = await Promise.all([
@@ -437,7 +440,7 @@ async function probeConnection() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3500);
   try {
-    await fetch("api/v1/system", {headers:{Authorization:`Bearer ${token}`}, signal:controller.signal});
+    await fetch("api/v1/system", {credentials:"same-origin", signal:controller.signal});
     setConnected(true);
   } catch {
     setConnected(false);
@@ -625,6 +628,7 @@ async function loadSystemInfo() {
   $("systemVersion").textContent = systemInfo?.version ? `v${systemInfo.version}` : "";
   window.runPilotWebSocketPayloadMode = systemInfo?.websocketPayloadMode || "disabled";
   if (connectionOnline) setConnected(true);
+  $("bearerAuthEnabled").checked=!!systemInfo.bearerAuthEnabled;
 
 }
 
@@ -671,12 +675,10 @@ $("textEditorContent").addEventListener("scroll",e=>{ $("textHighlight").scrollT
 
 $("loginForm").addEventListener("submit", async e => {
   e.preventDefault();
-  const candidate = $("tokenInput").value.trim();
-  const old = token;
-  token = candidate;
   try {
-    await api("api/v1/system");
-    RunPilotAuthStorage.save(sessionStorage, localStorage, token);
+    const response = await fetch("api/v1/auth/login", {method:"POST", credentials:"same-origin", headers:{"Content-Type":"application/json"}, body:JSON.stringify({username:$("loginUsername").value,password:$("loginPassword").value})});
+    if (!response.ok) throw new Error("The username or password was rejected.");
+    authenticated = true;
     $("loginError").classList.add("hidden");
     $("loginDialog").close();
     setConnected(true);
@@ -686,20 +688,27 @@ $("loginForm").addEventListener("submit", async e => {
     hostDashboard.setActive(currentPage === "overview");
     startAutoRefresh();
     startConnectionMonitor();
-  } catch {
-    token = old;
-    $("loginError").textContent = "The token was rejected.";
+  } catch (error) {
+    $("loginError").textContent = error.message || "The username or password was rejected.";
     $("loginError").classList.remove("hidden");
   }
 });
 
+$("passwordChangeForm").addEventListener("submit",async e=>{e.preventDefault();const message=$("passwordChangeError");message.classList.add("hidden");try{await api("api/v1/auth/password",{method:"POST",body:JSON.stringify({current:$("currentPassword").value,next:$("nextPassword").value,confirm:$("confirmPassword").value})});authenticated=false;location.reload();}catch(error){message.textContent=error.message;message.classList.remove("hidden");}});
+$("logoutButton").addEventListener("click",async()=>{try{await api("api/v1/auth/logout",{method:"POST"});}finally{authenticated=false;location.reload();}});
+$("bearerAuthEnabled").addEventListener("change",async()=>{try{const result=await api("api/v1/admin/bearer-auth",{method:"PUT",body:JSON.stringify({enabled:$("bearerAuthEnabled").checked})});$("bearerAuthEnabled").checked=result.enabled;}catch(error){$("bearerAuthEnabled").checked=!$("bearerAuthEnabled").checked;toast(error.message);}});
+
+$("dataRootChangeForm").addEventListener("submit",async e=>{e.preventDefault();const error=$("dataRootError");if(!confirm("RunPilot will restart and move its stored state. Continue?"))return;error.classList.add("hidden");try{await api("api/v1/admin/data-root",{method:"POST",body:JSON.stringify({destination:$("dataRootDestination").value})});error.textContent="RunPilot is restarting. Sign in again when it is ready.";error.classList.remove("hidden");}catch(reason){error.textContent=reason.message;error.classList.remove("hidden");}});
+
 (async function init() {
   initializeSidebar();
   initializeTheme();
-  if (!token) {
+  try { const setup = await fetch("api/v1/setup", {credentials:"same-origin"}).then(response=>response.json()); if (setup.required) { location.replace("setup"); return; } } catch {}
+  try { await api("api/v1/system"); authenticated = true; } catch {
     $("loginDialog").showModal();
     return;
   }
+  try { const root=await api("api/v1/admin/data-root");$("dataRootCurrent").textContent=`Current: ${root.dataDir}${root.migrationStatus?` · Last relocation ${root.migrationStatus}`:""}`; } catch {}
   setConnected(false);
   startConnectionMonitor();
   try { await connectApplicationSocket(); } catch (e) { toast(e.message); }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -45,11 +46,10 @@ func DefaultDataDir() string {
 }
 
 func Open(dataDir string) (*Store, error) {
-	if dataDir == "" {
-		dataDir = DefaultDataDir()
-		if dataDir == "" {
-			return nil, fmt.Errorf("resolve default data directory: home directory is unavailable")
-		}
+	var err error
+	dataDir, err = ResolveDataDir(dataDir)
+	if err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
@@ -87,14 +87,20 @@ func Open(dataDir string) (*Store, error) {
 	_, hadLegacyProcesses := raw["processes"]
 	serverRaw, _ := raw["server"].(map[string]any)
 	_, hadSetupMarker := serverRaw["setupComplete"]
+	_, hadBearerAuthSetting := serverRaw["bearerAuthEnabled"]
 	if !hadSetupMarker && s.cfg.Server.Token != "" {
 		s.cfg.Server.SetupComplete = true
+	}
+	// Preserve the established API-token integration path on upgrades. Fresh
+	// configurations persist false, so bearer use remains an explicit choice.
+	if !hadBearerAuthSetting && s.cfg.Server.SetupComplete {
+		s.cfg.Server.BearerAuthEnabled = true
 	}
 	before := clone(s.cfg)
 	normalize(&s.cfg)
 	if before.Server.Token == "" {
 	}
-	if hadLegacyStorage || hadLegacyProcesses || !reflect.DeepEqual(before, s.cfg) {
+	if hadLegacyStorage || hadLegacyProcesses || !hadBearerAuthSetting || !reflect.DeepEqual(before, s.cfg) {
 		if err := s.saveLocked(); err != nil {
 			return nil, err
 		}
@@ -129,25 +135,58 @@ func (s *Store) Update(fn func(*model.Config) error) error {
 	return nil
 }
 
-// ChangeInitialToken completes first-run setup while checking and rotating the
-// unique installation token under the same lock.
-func (s *Store) ChangeInitialToken(current, next string) error {
+// ConfigureAdmin claims first-run or token-only installations exactly once.
+func (s *Store) ConfigureAdmin(credential, username, passwordHash string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.cfg.Server.SetupComplete || current == "" || s.cfg.Server.Token != current {
-		return errors.New("initial token change rejected")
-	}
-	if len(next) < 24 || next == current {
-		return errors.New("new token must be different and at least 24 characters")
+	want := "Bearer " + s.cfg.Server.Token
+	if s.cfg.Server.AdminUsername != "" || s.cfg.Server.AdminPasswordHash != "" || len(credential) != len(want) || subtle.ConstantTimeCompare([]byte(credential), []byte(want)) != 1 {
+		return errors.New("setup authorization rejected")
 	}
 	prev := s.cfg
-	s.cfg.Server.Token = next
+	s.cfg.Server.AdminUsername = username
+	s.cfg.Server.AdminPasswordHash = passwordHash
 	s.cfg.Server.SetupComplete = true
 	if err := s.saveLocked(); err != nil {
 		s.cfg = prev
 		return err
 	}
 	return nil
+}
+
+func (s *Store) CanConfigureAdmin(credential string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	want := "Bearer " + s.cfg.Server.Token
+	return s.cfg.Server.AdminUsername == "" && s.cfg.Server.AdminPasswordHash == "" && len(credential) == len(want) && subtle.ConstantTimeCompare([]byte(credential), []byte(want)) == 1
+}
+
+func (s *Store) ChangeAdminPassword(username, currentHash, nextHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cfg.Server.AdminUsername != username || s.cfg.Server.AdminPasswordHash != currentHash || nextHash == "" {
+		return errors.New("administrator account changed")
+	}
+	prev := s.cfg
+	s.cfg.Server.AdminPasswordHash = nextHash
+	if err := s.saveLocked(); err != nil {
+		s.cfg = prev
+		return err
+	}
+	return nil
+}
+
+func (s *Store) SetBearerAuth(enabled bool) error {
+	return s.Update(func(cfg *model.Config) error { cfg.Server.BearerAuthEnabled = enabled; return nil })
+}
+
+func (s *Store) ResetAdmin() error {
+	return s.Update(func(cfg *model.Config) error {
+		cfg.Server.AdminUsername = ""
+		cfg.Server.AdminPasswordHash = ""
+		cfg.Server.SetupComplete = false
+		return nil
+	})
 }
 
 func (s *Store) saveLocked() error {
@@ -204,6 +243,10 @@ func normalize(c *model.Config) error {
 			return err
 		}
 		c.Server.Token = token
+	}
+	if c.Server.AdminUsername == "" || c.Server.AdminPasswordHash == "" {
+		c.Server.AdminUsername = ""
+		c.Server.AdminPasswordHash = ""
 	}
 	if c.Plugins == nil {
 		c.Plugins = map[string]model.PluginSettings{}

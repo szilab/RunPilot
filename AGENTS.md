@@ -16,9 +16,13 @@ architecture description elsewhere.
   implementation. Remove legacy code only after plugin parity and tests.
 - New feature semantics belong in plugins, not in core. Core may expose narrow,
   reusable host capabilities.
-- New installations require a locally retrieved unique token and a server-side
-  first-run token rotation before privileged APIs, WebSockets, plugins, or Web Apps
-  are available. Existing valid tokens remain initialized across upgrades.
+- New installations require the unique local bootstrap token to create the first
+  administrator. Browser management uses password authentication and revocable
+  server sessions. Bearer API access is a separate setting; preserve it for
+  existing token integrations during upgrades.
+- Resolve the mutable application data root from explicit CLI override, environment,
+  persisted deployment locator, then platform default. Keep the locator independent
+  from the selected data root; never infer the root from process workingDirectory.
 - Plugin history stays owner-scoped under plugin data. Retained Backup diagnostics
   use `<dataDir>/internal/runs`; never recreate the obsolete `<dataDir>/legacy`
   layout or delete existing data through an implicit startup cleanup.
