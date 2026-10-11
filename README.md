@@ -168,9 +168,11 @@ form used in ASUSTOR's own package examples. App Central Ref. 6001 reports that
 the uploaded package version is already installed; the developer guide defines
 `general.version` as the package version but does not document that error code
 or its comparison algorithm. Earlier hash-suffixed development versions were
-not monotonic. The new numeric revision scheme removes that ordering ambiguity,
-but a future ADM upgrade check is still needed to confirm how Ref. 6001 is
-handled by the current ADM release.
+not monotonic. On the AS6702T running ADM 5.1.4, App Central installed
+`1.0.5.r121` and accepted an upgrade to `1.0.5.r122`; the installed app list
+reported `1.0.5.r122` and Ref. 6001 did not occur. Reinstalling an identical
+package version was not tested. CI's increasing workflow run number now supplies
+the numeric revision, separate from the embedded RunPilot core version.
 
 In ADM, open **App Central → Management → Manual Install** and select the APK.
 App Central owns start-at-boot and shutdown lifecycle through the package's
