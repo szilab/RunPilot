@@ -5,35 +5,27 @@ set -eu
 APP_NAME=${APKG_PKG_NAME:-runpilot}
 APP_DIR=${APKG_PKG_DIR:-${APKG_REPO_DIR:-/usr/local/AppCentral}/$APP_NAME}
 BIN=$APP_DIR/bin/runpilot
-DATA_ROOT=/volume1/.@plugins/AppCentral/runpilot
-DATA_DIR=$DATA_ROOT/data
-PID_FILE=$DATA_ROOT/runpilot.pid
+DATA_DIR=/volume1/.@plugins/AppCentral/runpilot/data
+PID_FILE=$DATA_DIR/runpilot.pid
 LOG_FILE=$DATA_DIR/runpilot.log
 
-owned_data_root() {
-	if [ -e "$DATA_ROOT" ]; then
-		[ ! -L "$DATA_ROOT" ] && [ -d "$DATA_ROOT" ] &&
-			[ ! -L "$DATA_ROOT/.runpilot-owned" ] && [ -f "$DATA_ROOT/.runpilot-owned" ] || {
-			echo "Refusing to use unmarked data directory: $DATA_ROOT" >&2
-			return 1
-		}
-	else
-		mkdir -m 700 "$DATA_ROOT"
-		: > "$DATA_ROOT/.runpilot-owned"
-		chown admin:administrators "$DATA_ROOT" "$DATA_ROOT/.runpilot-owned"
-		chmod 700 "$DATA_ROOT"
-	fi
+owned_data_dir() {
 	if [ -e "$DATA_DIR" ]; then
-		[ ! -L "$DATA_DIR" ] && [ -d "$DATA_DIR" ] || {
-			echo "Refusing to use invalid data directory: $DATA_DIR" >&2
+		[ ! -L "$DATA_DIR" ] && [ -d "$DATA_DIR" ] &&
+			[ ! -L "$DATA_DIR/.runpilot-owned" ] && [ -f "$DATA_DIR/.runpilot-owned" ] || {
+			echo "Refusing to use unmarked data directory: $DATA_DIR" >&2
 			return 1
 		}
 	else
 		mkdir -m 700 "$DATA_DIR"
+		: > "$DATA_DIR/.runpilot-owned"
+		chown admin:administrators "$DATA_DIR/.runpilot-owned"
 		chown admin:administrators "$DATA_DIR"
 	fi
 	chown admin:administrators "$DATA_DIR"
 	chmod 700 "$DATA_DIR"
+	chown admin:administrators "$DATA_DIR/.runpilot-owned"
+	chmod 600 "$DATA_DIR/.runpilot-owned"
 }
 
 is_running() {
@@ -43,7 +35,7 @@ is_running() {
 
 start_app() {
 	[ -x "$BIN" ] || { echo "RunPilot executable not found: $BIN" >&2; return 1; }
-	owned_data_root
+	owned_data_dir
 	if is_running; then
 		echo "RunPilot is already running"
 		return 0

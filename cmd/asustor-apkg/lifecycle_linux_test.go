@@ -121,7 +121,7 @@ func newLifecycleHarness(t *testing.T) *lifecycleHarness {
 	root := t.TempDir()
 	appDir := filepath.Join(root, "App Central package")
 	dataRoot := filepath.Join(root, "persistent data")
-	dataDir := filepath.Join(dataRoot, "data")
+	dataDir := dataRoot
 	binDir := filepath.Join(root, "mock ADM commands")
 	for _, dir := range []string{filepath.Join(appDir, "bin"), binDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -133,12 +133,12 @@ func newLifecycleHarness(t *testing.T) *lifecycleHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const originalRoot = "DATA_ROOT=/volume1/.@plugins/AppCentral/runpilot"
+	const originalRoot = "DATA_DIR=/volume1/.@plugins/AppCentral/runpilot/data"
 	if !strings.Contains(string(control), originalRoot) {
 		t.Fatal("App Central hook data root changed without updating this test")
 	}
 	controlPath := filepath.Join(root, "start-stop.sh")
-	controlContents := strings.Replace(string(control), originalRoot, "DATA_ROOT='"+dataRoot+"'", 1)
+	controlContents := strings.Replace(string(control), originalRoot, "DATA_DIR='"+dataDir+"'", 1)
 	if err := os.WriteFile(controlPath, []byte(controlContents), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func newLifecycleHarness(t *testing.T) *lifecycleHarness {
 	writeExecutable(t, filepath.Join(binDir, "chown"), "#!/bin/sh\nexit 0\n")
 	writeExecutable(t, filepath.Join(binDir, "start-stop-daemon"), mockStartStopDaemon)
 	t.Setenv("CALL_LOG", h.callLog)
-	t.Setenv("DATA_ROOT", h.dataRoot)
+	t.Setenv("DATA_DIR", h.dataDir)
 	t.Setenv("BINARY_VERSIONS", h.binaryVersions)
 	return h
 }
@@ -187,15 +187,15 @@ case "$mode" in
 	-S)
 		"$executable" "$@" &
 		printf '%s\n' "$!" > "$pid_file"
-		: > "$DATA_ROOT/.mock-running"
+		: > "$DATA_DIR/.mock-running"
 		;;
 	-K)
-		[ -f "$DATA_ROOT/.mock-running" ] && [ -f "$pid_file" ] || exit 1
+		[ -f "$DATA_DIR/.mock-running" ] && [ -f "$pid_file" ] || exit 1
 		pid=$(cat "$pid_file")
-		kill -0 "$pid" 2>/dev/null || { [ "$query" = false ] && exit 1; rm -f "$DATA_ROOT/.mock-running"; exit 1; }
+		kill -0 "$pid" 2>/dev/null || { [ "$query" = false ] && exit 1; rm -f "$DATA_DIR/.mock-running"; exit 1; }
 		if [ "$query" = false ]; then
 			kill -s "$signal" "$pid" 2>/dev/null || true
-			rm -f "$DATA_ROOT/.mock-running"
+			rm -f "$DATA_DIR/.mock-running"
 		fi
 		;;
 	*) exit 2 ;;
