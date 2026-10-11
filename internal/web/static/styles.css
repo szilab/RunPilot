@@ -40,6 +40,7 @@ input:disabled { cursor: not-allowed; opacity: .55; }
   color: var(--rp-text);
   background: var(--rp-surface);
   font-synthesis: none;
+  color-scheme: light;
 }
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; }
@@ -336,6 +337,7 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 .toast { position:fixed; z-index:50; right:24px; bottom:24px; display:flex; align-items:flex-start; gap:16px; width:min(420px,calc(100vw - 32px)); padding:13px 14px; border:1px solid #334155; border-radius:10px; background:#172235; color:#f8fafc; box-shadow:0 12px 30px rgba(15,23,42,.25); font-size:13px; line-height:1.4; }.toast > div { display:grid; gap:3px; min-width:0; }.toast strong { font-size:12px; letter-spacing:.04em; text-transform:uppercase; }.toast span { overflow-wrap:anywhere; }.toast-error { border-color:#ef4444; background:#450f16; color:#fee2e2; }.toast-error strong { color:#fca5a5; }.toast-close { flex:0 0 auto; margin:-4px -5px -4px 0; border:0; border-radius:5px; padding:2px 6px; background:transparent; color:inherit; font-size:19px; line-height:1; }.toast-close:hover { background:rgba(255,255,255,.14); }
 
 :root[data-theme="dark"] {
+  color-scheme: dark;
   color: #e5e7eb; background: #111827;
   --rp-surface: #111827;
   --rp-surface-elevated: #172235;
@@ -518,6 +520,7 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 .overview-stat span, .overview-widget-note { color:var(--rp-text-muted); font-size:11px; }
 .overview-widget-error { color:var(--rp-text-strong); }
 
-.setup-screen{min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box;background:var(--rp-background,#f8fafc)}
+.setup-screen{min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box;background:var(--rp-surface,#f8fafc)}
 .setup-card{box-sizing:border-box;max-height:92vh;overflow:auto;color:var(--rp-text,#0f172a)}
-.setup-card>p{margin:0 0 12px;line-height:1.55}
+.setup-card>p{margin:0 0 18px;line-height:1.55}
+.setup-form{display:grid;gap:12px}

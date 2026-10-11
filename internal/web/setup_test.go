@@ -37,11 +37,14 @@ func TestFirstRunRequiresBootstrapAndCreatesSession(t *testing.T) {
 	}
 	page := httptest.NewRecorder()
 	h.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/", nil))
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Bootstrap token") {
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Authorization token") {
 		t.Fatal("setup UI missing bootstrap authorization")
 	}
 	if !strings.Contains(page.Body.String(), `href="/styles.css"`) {
 		t.Fatal("setup UI does not reference the embedded RunPilot stylesheet")
+	}
+	if !strings.Contains(page.Body.String(), `prefers-color-scheme: dark`) || strings.Contains(page.Body.String(), "bootstrap token") {
+		t.Fatal("setup theme preference or authorization wording is missing")
 	}
 	stylesheet := httptest.NewRecorder()
 	h.ServeHTTP(stylesheet, httptest.NewRequest(http.MethodGet, "/styles.css", nil))
