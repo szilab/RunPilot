@@ -120,7 +120,7 @@ type ServerConfig struct {
 	SetupComplete        bool   `json:"setupComplete" yaml:"setupComplete"`
 	AdminUsername        string `json:"-" yaml:"adminUsername,omitempty"`
 	AdminPasswordHash    string `json:"-" yaml:"adminPasswordHash,omitempty"`
-	BearerAuthEnabled   bool   `json:"bearerAuthEnabled" yaml:"bearerAuthEnabled"`
+	BearerAuthEnabled    bool   `json:"bearerAuthEnabled" yaml:"bearerAuthEnabled"`
 	WebSocketPayloadMode string `json:"websocketPayloadMode,omitempty" yaml:"websocketPayloadMode,omitempty"`
 }
 
