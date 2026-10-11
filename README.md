@@ -195,7 +195,9 @@ host metrics, and clean shutdown with the native binary. These checks did not
 install the APK through App Central or verify its package registry and lifecycle
 hooks. Repository tests cover plugin contracts and lifecycle behavior; feature
 connectivity against Docker, guacd, VNC, or configured Web Apps still requires
-the corresponding service and permissions.
+the corresponding service and permissions. The App Central hook tests simulate
+ADM process supervision, binary replacement, persistent data retention, and
+refusal to follow unmarked or symlinked data paths.
 
 For troubleshooting, check the App Central app state and read
 `/volume1/.@plugins/AppCentral/runpilot/data/runpilot.log` over SSH. The package
