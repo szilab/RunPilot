@@ -190,14 +190,23 @@ running as the package's `admin` service account:
 | VNC | 1.0.1 | Loaded; session connectivity was not tested because no VNC target was available. Configure a reachable external VNC server. |
 | Web Apps | 0.4.1 | Loaded; proxying was not exercised because no upstream was configured. Upstreams must be reachable over HTTP/HTTPS, including their WebSocket endpoints where used. |
 
-The isolated NAS run also verified the UI, health endpoint, authenticated API,
-host metrics, and clean shutdown with the native binary. These checks did not
-install the APK through App Central or verify its package registry and lifecycle
-hooks. Repository tests cover plugin contracts and lifecycle behavior; feature
-connectivity against Docker, guacd, VNC, or configured Web Apps still requires
-the corresponding service and permissions. The App Central hook tests simulate
-ADM process supervision, binary replacement, persistent data retention, and
-refusal to follow unmarked or symlinked data paths.
+The package was installed and upgraded through **App Central → Management →
+Manual Install** on the AS6702T. App Central registered the package, showed its
+port requirement, and started it through the lifecycle hook. The installed
+service ran as `admin`, served HTTP on port 9070, and stopped and started
+successfully through the App Central enable switch. A second manual upgrade
+also completed with the service running afterward. The upgrade test confirmed
+that App Central replaces the package mount while the hook keeps mutable data
+in its separate `data/` directory. Repository lifecycle tests additionally
+exercise preservation of configuration, plugin state and execution history
+across binary replacement, and refusal to follow unmarked or symlinked data
+paths.
+
+Feature connectivity against Docker, guacd, VNC, or configured Web Apps still
+requires the corresponding service and permissions. The isolated NAS run
+verified the UI, health endpoint, authenticated API, host metrics and clean
+shutdown with the native binary. These feature checks used an isolated RunPilot
+instance; they did not change existing NAS services or Docker state.
 
 For troubleshooting, check the App Central app state and read
 `/volume1/.@plugins/AppCentral/runpilot/data/runpilot.log` over SSH. The package
@@ -205,10 +214,9 @@ hook supports `start`, `stop`, `restart` and `status`; App Central itself should
 own normal lifecycle changes. Check that port 9070 is unused before installing
 and that ADM's account permissions allow the selected plugin's operations.
 
-APKG building, package archive validation, and the native binary have been
-tested on an AS6702T running ADM 5.1.4. Installing or upgrading through App
-Central requires a separate validation because it changes ADM's package
-registry and invokes system lifecycle hooks.
+APKG building, package archive validation, the native binary, and App Central
+install, upgrade, start and stop have been tested on an AS6702T running ADM
+5.1.4.
 
 ## Development
 
