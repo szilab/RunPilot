@@ -270,5 +270,5 @@ func validID(id string) bool {
 }
 func permissionText(s string) bool {
 	s = strings.ToLower(s)
-	return strings.Contains(s, "permission denied") || strings.Contains(s, "permissiondenied") || strings.Contains(s, "access is denied")
+	return strings.Contains(s, "permission denied") || strings.Contains(s, "permissiondenied") || strings.Contains(s, "operation not permitted") || strings.Contains(s, "access is denied")
 }

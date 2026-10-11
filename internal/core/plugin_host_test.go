@@ -13,6 +13,7 @@ import (
 
 	"github.com/szilab/RunPilot/internal/history"
 	"github.com/szilab/RunPilot/internal/plugins"
+	"github.com/szilab/RunPilot/internal/version"
 )
 
 type recordedPluginEvent struct {
@@ -65,6 +66,28 @@ func waitExit(t *testing.T, events <-chan recordedPluginEvent) recordedPluginEve
 func isHostFailure(err error, code string) bool {
 	var failure *plugins.HostFailure
 	return errors.As(err, &failure) && failure.Code == code
+}
+
+func TestPluginSystemIdentityIncludesBuildDeploymentWhenSet(t *testing.T) {
+	previous := version.Deployment
+	version.Deployment = "asustor-appcentral"
+	t.Cleanup(func() { version.Deployment = previous })
+
+	raw, err := (controllerPluginHost{}).SystemIdentity(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identity struct {
+		Username   string `json:"username"`
+		UID        string `json:"uid"`
+		Deployment string `json:"deployment"`
+	}
+	if err := json.Unmarshal(raw, &identity); err != nil {
+		t.Fatal(err)
+	}
+	if identity.Username == "" || identity.UID == "" || identity.Deployment != "asustor-appcentral" {
+		t.Fatalf("identity = %+v", identity)
+	}
 }
 
 func TestPluginProcessCapturesOutputIntoOwnedHistory(t *testing.T) {

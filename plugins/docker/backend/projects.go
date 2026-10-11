@@ -8,11 +8,13 @@ import (
 )
 
 type dockerRuntime struct {
-	Supported bool   `json:"supported"`
-	Available bool   `json:"available"`
-	State     string `json:"state"`
-	Message   string `json:"message"`
-	Identity  string `json:"identity,omitempty"`
+	Supported  bool   `json:"supported"`
+	Available  bool   `json:"available"`
+	State      string `json:"state"`
+	Message    string `json:"message"`
+	Diagnostic string `json:"diagnostic,omitempty"`
+	Deployment string `json:"deployment,omitempty"`
+	Identity   string `json:"identity,omitempty"`
 }
 type container struct {
 	ID      string `json:"id"`
@@ -39,36 +41,73 @@ func (p *plugin) init() { _ = workspace("mkdir", "projects", nil, nil) }
 func (p *plugin) runtime() dockerRuntime {
 	rt := dockerRuntime{Supported: true, State: "ready", Message: "Docker Compose is ready."}
 	var identity struct {
-		Username string `json:"username"`
-		UID      string `json:"uid"`
+		Username   string `json:"username"`
+		UID        string `json:"uid"`
+		Deployment string `json:"deployment"`
 	}
 	_ = callHost("system.identity", map[string]any{}, &identity)
 	rt.Identity = identity.Username
+	rt.Deployment = identity.Deployment
 	if rt.Identity == "" {
 		rt.Identity = identity.UID
 	}
 	_, e := run([]string{"compose", "version"}, "", 8192)
 	if e != nil {
-		rt.State = "compose-missing"
-		rt.Message = "Docker Compose v2 is not available."
 		if e.Code == "not_found" {
 			rt.State = "cli-missing"
 			rt.Message = "Docker CLI is not installed."
+			rt.Diagnostic = "docker executable not found"
+		} else if permissionText(e.Message) {
+			rt.State = "cli-permission-denied"
+			rt.Message = "RunPilot cannot execute the Docker CLI with its current account."
+			rt.Diagnostic = "Docker CLI execution permission denied"
+		} else if e.Code == "timed_out" {
+			rt.State = "compose-unavailable"
+			rt.Message = "Docker Compose did not respond in time."
+			rt.Diagnostic = "Docker Compose version check timed out"
+		} else {
+			rt.State = "compose-missing"
+			rt.Message = "Docker Compose v2 is not available."
+			rt.Diagnostic = "Docker CLI does not provide the Compose v2 command"
 		}
 		return rt
 	}
 	_, e = run([]string{"info"}, "", 8192)
 	if e != nil {
-		rt.State = "daemon-unavailable"
-		rt.Message = "Docker daemon is unavailable."
-		if permissionText(e.Message) {
-			rt.State = "permission-denied"
-			rt.Message = "RunPilot cannot access the Docker daemon."
-		}
+		failure := classifyDockerFailure(e)
+		rt.State = failure.State
+		rt.Message = failure.Message
+		rt.Diagnostic = failure.Diagnostic
 		return rt
 	}
 	rt.Available = true
 	return rt
+}
+
+type dockerFailure struct {
+	State      string
+	Message    string
+	Diagnostic string
+}
+
+func classifyDockerFailure(err *rpcError) dockerFailure {
+	message := strings.ToLower(strings.TrimSpace(err.Message))
+	switch {
+	case permissionText(message):
+		return dockerFailure{"permission-denied", "Docker Engine access was denied to the RunPilot service account (permission denied).", "Docker endpoint permission denied (EACCES)"}
+	case strings.Contains(message, "no such file or directory") && (strings.Contains(message, "docker.sock") || strings.Contains(message, "unix socket") || strings.Contains(message, "unix://") || strings.Contains(message, "endpoint socket")):
+		return dockerFailure{"socket-missing", "The configured Docker Engine socket does not exist.", "Unix socket path not found (ENOENT)"}
+	case strings.Contains(message, "invalid endpoint"), strings.Contains(message, "unable to resolve docker endpoint"), strings.Contains(message, "unsupported protocol scheme"), strings.Contains(message, "invalid bind address"), strings.Contains(message, "no such host"):
+		return dockerFailure{"endpoint-invalid", "The configured Docker Engine endpoint is invalid.", "Docker endpoint configuration rejected by the CLI"}
+	case strings.Contains(message, "client version") && (strings.Contains(message, "too old") || strings.Contains(message, "too new")), strings.Contains(message, "maximum supported api version"), strings.Contains(message, "client api version"):
+		return dockerFailure{"api-incompatible", "The Docker CLI and Engine API versions are incompatible.", "Docker Engine API version mismatch"}
+	case err.Code == "timed_out", strings.Contains(message, "connection refused"), strings.Contains(message, "cannot connect to the docker daemon"), strings.Contains(message, "is the docker daemon running"):
+		return dockerFailure{"daemon-unavailable", "Docker daemon is unavailable at the configured endpoint.", "Docker Engine connection refused, unavailable, or timed out"}
+	case strings.Contains(message, "no route to host"), strings.Contains(message, "network is unreachable"), strings.Contains(message, "connection reset"), strings.Contains(message, "i/o timeout"), strings.Contains(message, "tls handshake timeout"):
+		return dockerFailure{"connection-failed", "The configured Docker Engine endpoint could not be reached.", "Docker Engine network connection failed"}
+	default:
+		return dockerFailure{"daemon-error", "Docker Engine returned an error while checking its status.", "Unclassified Docker CLI status error; run docker info as the RunPilot service account for local details"}
+	}
 }
 func (p *plugin) managedProjects() ([]project, *rpcError) {
 	entries, e := listDir("projects")

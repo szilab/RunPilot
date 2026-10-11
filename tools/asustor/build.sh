@@ -15,6 +15,6 @@ trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 cd "$ROOT"
 mkdir -p dist
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
-	-ldflags "-s -w -X github.com/szilab/RunPilot/internal/version.Version=$CORE_VERSION" \
+	-ldflags "-s -w -X github.com/szilab/RunPilot/internal/version.Version=$CORE_VERSION -X github.com/szilab/RunPilot/internal/version.Deployment=asustor-appcentral" \
 	-o "$TMP/runpilot" ./cmd/runpilot
 go run ./cmd/asustor-apkg -version "$APK_VERSION" -binary "$TMP/runpilot" -source packaging/asustor -out dist

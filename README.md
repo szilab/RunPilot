@@ -233,6 +233,11 @@ verifies a persistent, ADM-supported access-control mechanism and accepts that
 impact. Do not run all of RunPilot as root or loosen socket permissions to
 enable the Docker plugin.
 
+When Docker Engine returns a permission-denied error, the Docker plugin links
+to the [ASUSTOR Docker permission guide](docs/platforms/asustor-docker-permissions.md)
+only on the App Central build. Other endpoint failures keep their own status
+and do not show ASUSTOR-specific instructions.
+
 For troubleshooting, check the App Central app state and read
 `/volume1/.@plugins/AppCentral/runpilot/data/runpilot.log` over SSH. The package
 hook supports `start`, `stop`, `restart` and `status`; App Central itself should

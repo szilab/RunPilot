@@ -12,15 +12,17 @@ import (
 )
 
 type fakeHost struct {
-	files    map[string]string
-	dirs     map[string]bool
-	outputs  map[string]runResult
-	commands [][]string
-	sessions []map[string]any
+	files         map[string]string
+	dirs          map[string]bool
+	outputs       map[string]runResult
+	commandErrors map[string]error
+	commands      [][]string
+	sessions      []map[string]any
+	deployment    string
 }
 
 func newFake() *fakeHost {
-	return &fakeHost{files: map[string]string{}, dirs: map[string]bool{"projects": true}, outputs: map[string]runResult{}}
+	return &fakeHost{files: map[string]string{}, dirs: map[string]bool{"projects": true}, outputs: map[string]runResult{}, commandErrors: map[string]error{}}
 }
 func (f *fakeHost) set(args []string, out string) {
 	f.outputs[strings.Join(args, "\x00")] = runResult{Success: true, Stdout: out}
@@ -39,7 +41,7 @@ func (f *fakeHost) call(method string, params any, result any) error {
 	raw, _ := json.Marshal(params)
 	switch method {
 	case "system.identity":
-		return assign(result, map[string]string{"username": "alice"})
+		return assign(result, map[string]string{"username": "alice", "deployment": f.deployment})
 	case "process.run":
 		var q struct {
 			Command            string   `json:"command"`
@@ -56,6 +58,10 @@ func (f *fakeHost) call(method string, params any, result any) error {
 			return errors.New("unexpected executable")
 		}
 		f.commands = append(f.commands, q.Args)
+		key := q.Command + "\x00" + strings.Join(q.Args, "\x00")
+		if err, ok := f.commandErrors[key]; ok {
+			return err
+		}
 		out, ok := f.outputs[strings.Join(q.Args, "\x00")]
 		if !ok {
 			return errors.New("unexpected Docker command: " + strings.Join(q.Args, " "))
@@ -167,23 +173,86 @@ func mustSuccess(t *testing.T, operation func() (any, *rpcError)) any {
 }
 func TestDockerRuntimeStates(t *testing.T) {
 	p, f := fakePlugin(t)
-	if rt := p.runtime(); !rt.Available || rt.Identity != "alice" {
+	if rt := p.runtime(); !rt.Available || rt.Identity != "alice" || rt.Deployment != "" {
 		t.Fatalf("ready: %+v", rt)
 	}
 	f.outputs["compose\x00version"] = runResult{Success: false, Stderr: "missing"}
-	if rt := p.runtime(); rt.State != "compose-missing" {
+	if rt := p.runtime(); rt.State != "compose-missing" || rt.Diagnostic == "" {
 		t.Fatalf("compose: %+v", rt)
 	}
 	f.set([]string{"compose", "version"}, "v2")
-	f.outputs["info"] = runResult{Success: false, Stderr: "permission denied"}
-	if rt := p.runtime(); rt.State != "permission-denied" {
-		t.Fatalf("permission: %+v", rt)
+	for _, test := range []struct {
+		name       string
+		stderr     string
+		code       string
+		state      string
+		diagnostic string
+	}{
+		{"socket permission", "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock", "command_failed", "permission-denied", "Docker endpoint permission denied (EACCES)"},
+		{"operation permission", "operation not permitted", "command_failed", "permission-denied", "Docker endpoint permission denied (EACCES)"},
+		{"missing socket", "dial unix /var/run/docker.sock: connect: no such file or directory", "command_failed", "socket-missing", "Unix socket path not found (ENOENT)"},
+		{"daemon down", "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?", "command_failed", "daemon-unavailable", "Docker Engine connection refused, unavailable, or timed out"},
+		{"invalid endpoint", "unable to resolve docker endpoint: invalid endpoint", "command_failed", "endpoint-invalid", "Docker endpoint configuration rejected by the CLI"},
+		{"api mismatch", "client version 1.20 is too old. Maximum supported API version is 1.41", "command_failed", "api-incompatible", "Docker Engine API version mismatch"},
+		{"network failure", "dial tcp 192.0.2.1:2376: i/o timeout", "command_failed", "connection-failed", "Docker Engine network connection failed"},
+		{"unclassified", "daemon-specific diagnostic", "command_failed", "daemon-error", "Unclassified Docker CLI status error; run docker info as the RunPilot service account for local details"},
+		{"timed out", "Docker command timed out", "timed_out", "daemon-unavailable", "Docker Engine connection refused, unavailable, or timed out"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f.outputs["info"] = runResult{Success: false, Stderr: test.stderr}
+			if test.code == "timed_out" {
+				// run() derives this code from the host timeout result.
+				f.outputs["info"] = runResult{TimedOut: true}
+			}
+			rt := p.runtime()
+			if rt.State != test.state || rt.Diagnostic != test.diagnostic {
+				t.Fatalf("runtime = %+v, want state %q and diagnostic %q", rt, test.state, test.diagnostic)
+			}
+			if strings.Contains(rt.Message, test.stderr) || strings.Contains(rt.Diagnostic, test.stderr) {
+				t.Fatalf("raw Docker output escaped into diagnostics: %+v", rt)
+			}
+		})
 	}
-	f.outputs["info"] = runResult{Success: false, Stderr: "unavailable"}
-	if rt := p.runtime(); rt.State != "daemon-unavailable" {
-		t.Fatalf("daemon: %+v", rt)
+	f.deployment = "asustor-appcentral"
+	f.outputs["info"] = runResult{Success: false, Stderr: "permission denied while opening unix:///var/run/docker.sock"}
+	if rt := p.runtime(); rt.Deployment != "asustor-appcentral" || rt.State != "permission-denied" {
+		t.Fatalf("ASUSTOR permission state: %+v", rt)
 	}
 }
+
+func TestDockerRuntimeKeepsSocketPermissionFailureVisibleInSnapshot(t *testing.T) {
+	p, f := fakePlugin(t)
+	f.deployment = "asustor-appcentral"
+	f.outputs["info"] = runResult{Success: false, Stderr: "permission denied while connecting to unix:///var/run/docker.sock"}
+	value := mustSuccess(t, func() (any, *rpcError) { return p.snapshot() }).(map[string]any)
+	runtime := value["runtime"].(dockerRuntime)
+	if runtime.Available || runtime.State != "permission-denied" || runtime.Deployment != "asustor-appcentral" || runtime.Diagnostic == "" {
+		t.Fatalf("runtime: %+v", runtime)
+	}
+	if len(value["projects"].([]project)) != 0 || len(value["volumes"].([]volume)) != 0 || len(value["networks"].([]network)) != 0 {
+		t.Fatalf("failed Docker status was presented as healthy: %#v", value)
+	}
+}
+
+func TestDockerCLIAndComposeFailuresRemainDistinct(t *testing.T) {
+	p, f := fakePlugin(t)
+	f.commandErrors["docker\x00compose\x00version"] = &pluginapi.Error{Code: "not_found", Message: "executable not found"}
+	if rt := p.runtime(); rt.State != "cli-missing" {
+		t.Fatalf("missing CLI: %+v", rt)
+	}
+
+	delete(f.commandErrors, "docker\x00compose\x00version")
+	f.outputs["compose\x00version"] = runResult{Success: false, Stderr: "docker: 'compose' is not a docker command"}
+	if rt := p.runtime(); rt.State != "compose-missing" {
+		t.Fatalf("missing Compose: %+v", rt)
+	}
+
+	f.commandErrors["docker\x00compose\x00version"] = &pluginapi.Error{Code: "failed", Message: "fork/exec /usr/bin/docker: permission denied"}
+	if rt := p.runtime(); rt.State != "cli-permission-denied" {
+		t.Fatalf("inaccessible CLI: %+v", rt)
+	}
+}
+
 func TestDockerProjectsAndFiles(t *testing.T) {
 	p, f := fakePlugin(t)
 	mustSuccess(t, func() (any, *rpcError) { return p.createProject("jellyfin") })

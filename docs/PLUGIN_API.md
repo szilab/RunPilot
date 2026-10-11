@@ -252,7 +252,10 @@ workspace.remove {path,recursive?}       -> {}
 
 `workspace.remove` never removes the workspace root. Recursive removal treats
 symlinks as links and cannot descend outside the owner root. `system.identity`
-returns `{username,uid}` for diagnostic display; it accepts no parameters.
+returns `{username,uid}` for diagnostic display and may include a build-provided
+`deployment` identifier for platform-specific runtime guidance; it accepts no
+parameters. Ordinary builds omit `deployment`. This value identifies the
+packaged host deployment, not the user account or operating system.
 
 ### History
 

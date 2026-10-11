@@ -49,3 +49,38 @@ test("Docker Overview maps container state and health", () => {
   const summary=dockerOverviewSummary({projects:[{containers:[{state:"running",health:"healthy"},{state:"running",health:"unhealthy",name:"bad"},{state:"exited"}]}]});
   assert.equal(summary.total,3);assert.equal(summary.running,2);assert.equal(summary.stopped,1);assert.equal(summary.unhealthy,1);assert.equal(summary.problems[0].name,"bad");
 });
+
+async function renderRuntime(runtime) {
+  let nav;
+  const runpilot = {
+    overview:{register:()=>{}},
+    ui:{escape:value=>String(value).replaceAll("&","&amp;").replaceAll('"',"&quot;").replaceAll("<","&lt;"),toast:()=>{}},
+    navigation:{register:value=>{nav=value;}},
+    ws:{call:async ()=>({runtime,projects:[],volumes:[],networks:[]}),on:()=>()=>{}},
+  };
+  const deactivate=await activate(runpilot);
+  const root={innerHTML:"",addEventListener(){},removeEventListener(){}};
+  nav.render(root);
+  await new Promise(resolve=>setTimeout(resolve,0));
+  deactivate();
+  return root.innerHTML;
+}
+
+test("ASUSTOR socket permission error links to the targeted guidance", async () => {
+  const html=await renderRuntime({available:false,state:"permission-denied",deployment:"asustor-appcentral",message:"Docker Engine access was denied to the RunPilot service account (permission denied)."});
+  assert.match(html,/permission denied/);
+  assert.match(html,/href="https:\/\/github\.com\/szilab\/RunPilot\/blob\/feature\/asustor-appcentral\/docs\/platforms\/asustor-docker-permissions\.md"/);
+  assert.match(html,/target="_blank" rel="noopener noreferrer">ASUSTOR Docker permission guidance/);
+});
+
+test("ASUSTOR guidance stays hidden for other platforms and non-permission errors", async () => {
+  for (const runtime of [
+    {available:false,state:"permission-denied",deployment:"linux-native",message:"permission denied"},
+    {available:false,state:"cli-permission-denied",deployment:"asustor-appcentral",message:"Docker CLI permission denied"},
+    {available:false,state:"daemon-unavailable",deployment:"asustor-appcentral",message:"Docker daemon is unavailable"},
+    {available:false,state:"socket-missing",deployment:"asustor-appcentral",message:"Docker socket is missing"},
+  ]) {
+    const html=await renderRuntime(runtime);
+    assert.doesNotMatch(html,/asustor-docker-permissions\.md/);
+  }
+});

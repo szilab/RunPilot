@@ -28,6 +28,7 @@ import (
 	"github.com/szilab/RunPilot/internal/scheduler"
 	"github.com/szilab/RunPilot/internal/software"
 	"github.com/szilab/RunPilot/internal/storage"
+	"github.com/szilab/RunPilot/internal/version"
 )
 
 type Controller struct {
@@ -456,7 +457,12 @@ func (h controllerPluginHost) SystemIdentity(context.Context) (json.RawMessage, 
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(map[string]string{"username": current.Username, "uid": current.Uid})
+	identity := struct {
+		Username   string `json:"username"`
+		UID        string `json:"uid"`
+		Deployment string `json:"deployment,omitempty"`
+	}{Username: current.Username, UID: current.Uid, Deployment: version.Deployment}
+	return json.Marshal(identity)
 }
 func (h controllerPluginHost) StorageGet(_ context.Context, pluginID, key string) (json.RawMessage, error) {
 	return h.controller.pluginStorageGet(pluginID, key)
