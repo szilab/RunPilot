@@ -40,6 +40,14 @@ func TestFirstRunRequiresBootstrapAndCreatesSession(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Bootstrap token") {
 		t.Fatal("setup UI missing bootstrap authorization")
 	}
+	if !strings.Contains(page.Body.String(), `href="/styles.css"`) {
+		t.Fatal("setup UI does not reference the embedded RunPilot stylesheet")
+	}
+	stylesheet := httptest.NewRecorder()
+	h.ServeHTTP(stylesheet, httptest.NewRequest(http.MethodGet, "/styles.css", nil))
+	if stylesheet.Code != http.StatusOK || !strings.Contains(stylesheet.Body.String(), ".setup-screen") {
+		t.Fatalf("setup stylesheet unavailable before setup: status=%d", stylesheet.Code)
+	}
 	payload := map[string]string{"bootstrap": "wrong", "username": "admin", "password": "correct horse battery staple", "confirm": "correct horse battery staple"}
 	body, _ := json.Marshal(payload)
 	denied := httptest.NewRecorder()
