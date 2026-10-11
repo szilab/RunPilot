@@ -267,23 +267,23 @@ without an interactive login, enable lingering for that user:
 sudo loginctl enable-linger <username>
 ```
 
-Open `http://127.0.0.1:9070`. A fresh installation stays locked until a local
-administrator claims it with the unique bootstrap token printed by
-`runpilot setup-token`. Create one username and a password of at least 12
-characters, confirm the password, and select the RunPilot data directory. The
-bootstrap token is accepted once; RunPilot stores only a salted Argon2id password
-hash in `runpilot.yaml`.
+Open `http://127.0.0.1:9070`. A fresh installation allows administrator setup
+for five minutes after startup. If setup is not complete when that window ends,
+RunPilot restarts and opens another five-minute window. Choose a username and a
+password of at least 12 characters, confirm the password, and select the
+RunPilot data directory. The username defaults to `admin`, and the data
+directory defaults to the current RunPilot data root. RunPilot stores only a
+salted Argon2id password hash in `runpilot.yaml`.
 
 Browser login uses server-managed HttpOnly sessions with CSRF protection,
 expiration, logout and revocation. Use HTTPS for credentials and session cookies
 when clients cross a network. Fresh installations disable bearer API-token auth;
 Settings can enable it for CLI or integrations. Existing token installations
-preserve that API path during migration, and their existing token authorizes
-creating the first administrator account. Upgrades never reset credentials.
+preserve that API path during migration. Upgrades never reset credentials.
 
 If the administrator password is lost, stop RunPilot and run
-`runpilot reset-admin` locally as the RunPilot service account, then retrieve a
-new setup token with `runpilot setup-token` and claim the setup page again. Pass
+`runpilot reset-admin` locally as the RunPilot service account, then restart
+RunPilot and create a new administrator within the setup window. Pass
 `--data-dir` when RunPilot was deployed with an explicit data directory.
 
 The default application data directory is `%ProgramData%\RunPilot` on Windows,
@@ -306,17 +306,15 @@ on their original paths. Data stored outside RunPilot's data root also needs its
 own migration plan. Deployments installed with an explicit `--data-dir` override
 must update that deployment setting directly.
 
-App Central does not document an authenticated mechanism for passing a unique
-secret to the package administrator. Use SSH as `admin` to run
+The App Central setup page is available during the five-minute window after the
+package starts. No ADM desktop authentication integration is used. For
+credential recovery, stop the package, run
 `RUNPILOT_DATA_ROOT_FILE=/volume1/.@plugins/AppCentral/runpilot/data-root
-/usr/local/AppCentral/runpilot/bin/runpilot setup-token` on a fresh default-root
-install. For credential recovery, stop the package first, then run
-`RUNPILOT_DATA_ROOT_FILE=/volume1/.@plugins/AppCentral/runpilot/data-root
-/usr/local/AppCentral/runpilot/bin/runpilot reset-admin` and retrieve the new
-token the same way. If RunPilot was installed with an explicit data directory,
-pass that path with `--data-dir` instead.
-The lifecycle hook reads and writes the separate persistent data-root locator;
-it does not depend on ADM desktop icon visibility for authentication. ASUSTOR's
+/usr/local/AppCentral/runpilot/bin/runpilot reset-admin` over SSH as `admin`,
+then start the package and complete setup within five minutes. If RunPilot was
+installed with an explicit data directory, pass that path with `--data-dir`.
+The lifecycle hook reads and writes the separate persistent data-root locator.
+ASUSTOR's
 [App Central Developer Guide](https://downloadgb.asustor.com/developer/App_Central_Developer_Guide_5.1.0_20251010.pdf)
 documents package configuration, hooks, and ADM session IDs, but not a supported
 package-admin secret delivery channel.

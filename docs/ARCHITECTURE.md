@@ -180,8 +180,9 @@ in [PLUGIN_API.md](PLUGIN_API.md).
 Core authentication uses one local administrator account, Argon2id password
 hashes, HttpOnly server-managed browser sessions, CSRF checks and the common
 application WebSocket. Existing bearer API-token clients remain a separately
-controlled compatibility path. Bootstrap authorization comes from a unique
-installation token retrieved locally; setup is single-use.
+controlled compatibility path. Fresh installations allow administrator setup
+for five minutes after startup; if setup remains incomplete, the application
+restarts and opens another setup window.
 
 The mutable application data root is selected independently from executable
 binaries and process working directories. Explicit CLI override, environment,

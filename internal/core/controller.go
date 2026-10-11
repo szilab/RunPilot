@@ -637,12 +637,8 @@ func (c *Controller) pluginStorageSet(pluginID, key string, value json.RawMessag
 func (c *Controller) DataDir() string        { return c.dataDir }
 func (c *Controller) ConfigPath() string     { return c.config.Path() }
 func (c *Controller) Snapshot() model.Config { return c.config.Snapshot() }
-func (c *Controller) ConfigureAdmin(credential, username, passwordHash string) error {
-	return c.config.ConfigureAdmin(credential, username, passwordHash)
-}
-
-func (c *Controller) CanConfigureAdmin(credential string) bool {
-	return c.config.CanConfigureAdmin(credential)
+func (c *Controller) ConfigureAdmin(username, passwordHash string) error {
+	return c.config.ConfigureAdmin(username, passwordHash)
 }
 
 func (c *Controller) ChangeAdminPassword(username, currentHash, nextHash string) error {

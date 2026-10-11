@@ -21,5 +21,10 @@ func openReadyController(t *testing.T, dataDir string) (*core.Controller, error)
 	}); err != nil {
 		return nil, err
 	}
+	if cfg := store.Snapshot().Server; cfg.AdminUsername == "" || cfg.AdminPasswordHash == "" {
+		if err := store.ConfigureAdmin("admin", "test-password-hash"); err != nil {
+			return nil, err
+		}
+	}
 	return core.Open(dataDir)
 }

@@ -295,14 +295,13 @@ func TestConfigureAdminConcurrentClaimIsSingleUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credential := "Bearer " + store.Snapshot().Server.Token
 	var successes atomic.Int32
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			if store.ConfigureAdmin(credential, fmt.Sprintf("admin%d", i), "argon-hash") == nil {
+			if store.ConfigureAdmin(fmt.Sprintf("admin%d", i), "argon-hash") == nil {
 				successes.Add(1)
 			}
 		}(i)

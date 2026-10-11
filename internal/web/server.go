@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"mime"
@@ -42,6 +43,9 @@ type Server struct {
 	ctrl                  *core.Controller
 	basePath              string
 	restartHandler        func()
+	setupWindowMu         sync.Mutex
+	setupWindowDeadline   time.Time
+	setupWindowTimer      *time.Timer
 	tickets               map[string]downloadTicket
 	ticketMu              sync.Mutex
 	dockerTerminal        *terminal.Manager
@@ -106,9 +110,44 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 
 func (s *Server) BasePath() string { return s.basePath }
 
-// SetRestartHandler registers the daemon callback used by the authenticated
-// application restart endpoint.
-func (s *Server) SetRestartHandler(handler func()) { s.restartHandler = handler }
+// SetRestartHandler registers the daemon callback used by restart requests and
+// the incomplete first-run setup window.
+func (s *Server) SetRestartHandler(handler func()) {
+	s.restartHandler = handler
+	if handler != nil && s.setupRequired() {
+		s.startSetupWindow(setupWindowDuration)
+	}
+}
+
+const setupWindowDuration = 5 * time.Minute
+
+func (s *Server) setupRequired() bool {
+	server := s.ctrl.Snapshot().Server
+	return server.AdminUsername == "" || server.AdminPasswordHash == ""
+}
+
+func (s *Server) startSetupWindow(duration time.Duration) {
+	s.setupWindowMu.Lock()
+	s.setupWindowDeadline = time.Now().Add(duration)
+	s.setupWindowTimer = time.AfterFunc(duration, s.expireSetupWindow)
+	s.setupWindowMu.Unlock()
+}
+
+func (s *Server) setupWindowOpen() bool {
+	s.setupWindowMu.Lock()
+	deadline := s.setupWindowDeadline
+	s.setupWindowMu.Unlock()
+	return deadline.IsZero() || time.Now().Before(deadline)
+}
+
+func (s *Server) expireSetupWindow() {
+	s.setupWindowMu.Lock()
+	expired := !s.setupWindowDeadline.IsZero() && !time.Now().Before(s.setupWindowDeadline)
+	s.setupWindowMu.Unlock()
+	if expired && s.setupRequired() && s.restartHandler != nil {
+		s.restartHandler()
+	}
+}
 
 func (s *Server) SetDataRootSwitchAllowed(allowed bool) { s.dataRootSwitchAllowed = allowed }
 
@@ -248,7 +287,14 @@ func (s *Server) Handler() http.Handler {
 }
 
 // Close releases all interactive shell sessions during RunPilot shutdown.
-func (s *Server) Close() error { return s.dockerTerminal.Close() }
+func (s *Server) Close() error {
+	s.setupWindowMu.Lock()
+	if s.setupWindowTimer != nil {
+		s.setupWindowTimer.Stop()
+	}
+	s.setupWindowMu.Unlock()
+	return s.dockerTerminal.Close()
+}
 
 func normalizeBasePath(value string) (string, error) {
 	value = strings.TrimSpace(value)
@@ -265,7 +311,7 @@ func normalizeBasePath(value string) (string, error) {
 	return clean, nil
 }
 
-const initialSetupHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Set up RunPilot</title><script>document.documentElement.dataset.scheme="system";document.documentElement.dataset.theme=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"</script><link rel="stylesheet" href="__BASE__/styles.css"></head><body><main class="setup-screen"><section class="dialog small setup-card"><div class="dialog-head"><div><h1>Set up RunPilot</h1><p>Create the local administrator account and choose where RunPilot stores its data.</p></div></div><p>To authorize account creation, run <code>runpilot setup-token</code> locally and enter the code it prints. If this is an existing installation, enter the API token you already use.</p><form id="setup" class="settings-form setup-form"><label>Administrator username<input name="username" minlength="3" maxlength="64" autocomplete="username" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label>Confirm password<input name="confirm" type="password" minlength="12" autocomplete="new-password" required></label><label>RunPilot data directory<input name="dataDir" type="text" placeholder="Leave blank to use the current directory"></label><label>Authorization token<input name="bootstrap" type="password" autocomplete="off" required></label><div id="error" class="form-error hidden" role="alert"></div><div class="dialog-actions"><button class="button primary">Create administrator</button></div></form></section></main><script>try{localStorage.removeItem('runpilot.token');sessionStorage.removeItem('runpilot.token')}catch{}const form=document.querySelector('#setup'),error=document.querySelector('#error');form.onsubmit=async e=>{e.preventDefault();error.textContent='';error.classList.add('hidden');if(form.password.value!==form.confirm.value){error.textContent='Passwords do not match.';error.classList.remove('hidden');return}try{const response=await fetch('__BASE__/api/v1/setup',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(Object.fromEntries(new FormData(form)))});if(!response.ok){const result=await response.json();throw Error(result.error||'Setup failed')}location.href='__BASE__/'}catch(x){error.textContent=x.message;error.classList.remove('hidden')}}</script></body></html>`
+const initialSetupHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Set up RunPilot</title><script>document.documentElement.dataset.scheme="system";document.documentElement.dataset.theme=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"</script><link rel="stylesheet" href="__BASE__/styles.css"></head><body><main class="setup-screen"><section class="dialog small setup-card"><div class="dialog-head"><div><h1>Set up RunPilot</h1><p>Create the local administrator account and choose where RunPilot stores its data.</p></div></div><p>Complete setup within 5 minutes of starting RunPilot. If time expires before you finish, RunPilot restarts and opens a new setup window.</p><form id="setup" class="settings-form setup-form"><label>Administrator username<input name="username" value="admin" minlength="3" maxlength="64" autocomplete="username" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label>Confirm password<input name="confirm" type="password" minlength="12" autocomplete="new-password" required></label><label>RunPilot data directory<input name="dataDir" type="text" value="__DATA_DIR__" required></label><div id="error" class="form-error hidden" role="alert"></div><div class="dialog-actions"><button class="button primary">Create administrator</button></div></form></section></main><script>try{localStorage.removeItem('runpilot.token');sessionStorage.removeItem('runpilot.token')}catch{}const form=document.querySelector('#setup'),error=document.querySelector('#error');form.onsubmit=async e=>{e.preventDefault();error.textContent='';error.classList.add('hidden');if(form.password.value!==form.confirm.value){error.textContent='Passwords do not match.';error.classList.remove('hidden');return}try{const response=await fetch('__BASE__/api/v1/setup',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(Object.fromEntries(new FormData(form)))});if(!response.ok){const result=await response.json();throw Error(result.error||'Setup failed')}location.href='__BASE__/'}catch(x){error.textContent=x.message;error.classList.remove('hidden')}}</script></body></html>`
 
 func (s *Server) writeInitialSetup(w http.ResponseWriter) {
 	staticPrefix := s.basePath
@@ -273,6 +319,7 @@ func (s *Server) writeInitialSetup(w http.ResponseWriter) {
 		staticPrefix = ""
 	}
 	page := strings.ReplaceAll(initialSetupHTML, "__BASE__", staticPrefix)
+	page = strings.ReplaceAll(page, "__DATA_DIR__", html.EscapeString(s.ctrl.DataDir()))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = io.WriteString(w, page)
@@ -281,7 +328,8 @@ func (s *Server) writeInitialSetup(w http.ResponseWriter) {
 func (s *Server) setupGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		serverConfig := s.ctrl.Snapshot().Server
-		if serverConfig.SetupComplete || r.URL.Path == "/healthz" || r.URL.Path == "/api/v1/setup" || r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/setup" || r.URL.Path == "/styles.css" || r.URL.Path == "/runpilot-logo.png" {
+		setupComplete := serverConfig.AdminUsername != "" && serverConfig.AdminPasswordHash != ""
+		if setupComplete || r.URL.Path == "/healthz" || r.URL.Path == "/api/v1/setup" || r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/setup" || r.URL.Path == "/styles.css" || r.URL.Path == "/runpilot-logo.png" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -309,12 +357,16 @@ func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleInitialSetup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	if !s.setupWindowOpen() {
+		s.expireSetupWindow()
+		writeJSON(w, http.StatusGone, map[string]string{"error": "setup window expired; RunPilot is restarting"})
+		return
+	}
 	var input struct {
-		Bootstrap string `json:"bootstrap"`
-		Username  string `json:"username"`
-		Password  string `json:"password"`
-		Confirm   string `json:"confirm"`
-		DataDir   string `json:"dataDir"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Confirm  string `json:"confirm"`
+		DataDir  string `json:"dataDir"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
@@ -328,11 +380,7 @@ func (s *Server) handleInitialSetup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	cred := strings.TrimSpace(r.Header.Get("Authorization"))
 	var err error
-	if input.Bootstrap != "" {
-		cred = "Bearer " + input.Bootstrap
-	}
 	selectedDir := s.ctrl.DataDir()
 	if strings.TrimSpace(input.DataDir) != "" {
 		selectedDir, err = config.ValidateDataRoot(input.DataDir)
@@ -345,10 +393,7 @@ func (s *Server) handleInitialSetup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "this RunPilot service uses an explicit --data-dir override; change it through that deployment setting"})
 		return
 	}
-	var accountStore interface {
-		CanConfigureAdmin(string) bool
-		ConfigureAdmin(string, string, string) error
-	}
+	var accountStore interface{ ConfigureAdmin(string, string) error }
 	newRoot := false
 	if filepath.Clean(selectedDir) == filepath.Clean(s.ctrl.DataDir()) {
 		accountStore = s.ctrl
@@ -382,13 +427,6 @@ func (s *Server) handleInitialSetup(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "the current root contains Docker Compose projects; choose the current directory or migrate those projects manually first"})
 			return
 		}
-		if !s.ctrl.CanConfigureAdmin(cred) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "setup authorization rejected"})
-			return
-		}
-	} else if !accountStore.CanConfigureAdmin(cred) {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "setup authorization rejected"})
-		return
 	}
 	passwordHash, err := hashPassword(input.Password)
 	if err != nil {
@@ -396,10 +434,10 @@ func (s *Server) handleInitialSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if newRoot {
-		// Claim the installation token in the active store first. Concurrent
+		// Claim the administrator account in the active store first. Concurrent
 		// requests selecting different roots cannot each claim the installation.
-		if err := s.ctrl.ConfigureAdmin(cred, strings.TrimSpace(input.Username), passwordHash); err != nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "setup authorization rejected"})
+		if err := s.ctrl.ConfigureAdmin(strings.TrimSpace(input.Username), passwordHash); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "administrator account is already configured"})
 			return
 		}
 		if err = config.QueueDataRootMigration(s.ctrl.DataDir(), selectedDir); err != nil {
@@ -407,8 +445,8 @@ func (s *Server) handleInitialSetup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		if err := accountStore.ConfigureAdmin(cred, strings.TrimSpace(input.Username), passwordHash); err != nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "setup authorization rejected"})
+		if err := accountStore.ConfigureAdmin(strings.TrimSpace(input.Username), passwordHash); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "administrator account is already configured"})
 			return
 		}
 	}

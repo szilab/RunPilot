@@ -43,26 +43,6 @@ func run() error {
 		return service.Run(*dataDir, daemon.Options{Port: *port, BindAddress: *bindAddress, BasePath: *basePath})
 	case "service":
 		return runServiceCommand(args[1:])
-	case "setup-token":
-		fs := flag.NewFlagSet("setup-token", flag.ContinueOnError)
-		dataDir := fs.String("data-dir", "", "RunPilot data directory override")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-		resolved, err := config.ResolveDataDir(*dataDir)
-		if err != nil {
-			return err
-		}
-		store, err := config.Open(resolved)
-		if err != nil {
-			return err
-		}
-		cfg := store.Snapshot()
-		if cfg.Server.AdminUsername != "" && cfg.Server.AdminPasswordHash != "" {
-			return fmt.Errorf("first-run setup is already complete")
-		}
-		fmt.Println(cfg.Server.Token)
-		return nil
 	case "reset-admin":
 		fs := flag.NewFlagSet("reset-admin", flag.ContinueOnError)
 		dataDir := fs.String("data-dir", "", "RunPilot data directory override")
@@ -80,7 +60,7 @@ func run() error {
 		if err := store.ResetAdmin(); err != nil {
 			return err
 		}
-		fmt.Fprintln(os.Stdout, "Administrator account reset. Stop RunPilot first, then run runpilot setup-token locally and create a new administrator in the setup page.")
+		fmt.Fprintln(os.Stdout, "Administrator account reset. Stop RunPilot first, restart it, then complete administrator setup within five minutes.")
 		return nil
 	case "version", "--version", "-v":
 		fmt.Println("RunPilot", version.Version)
@@ -164,8 +144,7 @@ Usage:
   runpilot service start                     Start the native service
   runpilot service stop                      Stop the native service
   runpilot service uninstall                 Remove the native service
-  runpilot setup-token [--data-dir PATH]    Print the local setup authorization token
-  runpilot reset-admin [--data-dir PATH]    Require local setup to create a new administrator
+  runpilot reset-admin [--data-dir PATH]    Reset admin; setup is available for five minutes after restart
   runpilot version                           Print version
 
 With no arguments RunPilot starts in foreground mode.

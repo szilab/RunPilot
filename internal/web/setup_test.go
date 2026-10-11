@@ -15,7 +15,7 @@ import (
 	"github.com/szilab/RunPilot/internal/core"
 )
 
-func TestFirstRunRequiresBootstrapAndCreatesSession(t *testing.T) {
+func TestFirstRunCreatesSessionWithoutAuthorizationToken(t *testing.T) {
 	t.Setenv("RUNPILOT_DATA_ROOT_FILE", filepath.Join(t.TempDir(), "deployment", "data-root"))
 	ctrl, err := core.Open(t.TempDir())
 	if err != nil {
@@ -37,29 +37,25 @@ func TestFirstRunRequiresBootstrapAndCreatesSession(t *testing.T) {
 	}
 	page := httptest.NewRecorder()
 	h.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/", nil))
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Authorization token") {
-		t.Fatal("setup UI missing bootstrap authorization")
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "within 5 minutes") {
+		t.Fatal("setup UI is missing the setup-window instructions")
 	}
 	if !strings.Contains(page.Body.String(), `href="/styles.css"`) {
 		t.Fatal("setup UI does not reference the embedded RunPilot stylesheet")
 	}
-	if !strings.Contains(page.Body.String(), `prefers-color-scheme: dark`) || strings.Contains(page.Body.String(), "bootstrap token") {
+	if !strings.Contains(page.Body.String(), `prefers-color-scheme: dark`) || strings.Contains(page.Body.String(), "authorization token") {
 		t.Fatal("setup theme preference or authorization wording is missing")
+	}
+	if !strings.Contains(page.Body.String(), `name="username" value="admin"`) || !strings.Contains(page.Body.String(), `name="dataDir" type="text" value="`+ctrl.DataDir()+`"`) {
+		t.Fatal("setup UI does not prefill the administrator and current data directory")
 	}
 	stylesheet := httptest.NewRecorder()
 	h.ServeHTTP(stylesheet, httptest.NewRequest(http.MethodGet, "/styles.css", nil))
 	if stylesheet.Code != http.StatusOK || !strings.Contains(stylesheet.Body.String(), ".setup-screen") {
 		t.Fatalf("setup stylesheet unavailable before setup: status=%d", stylesheet.Code)
 	}
-	payload := map[string]string{"bootstrap": "wrong", "username": "admin", "password": "correct horse battery staple", "confirm": "correct horse battery staple"}
+	payload := map[string]string{"username": "admin", "password": "correct horse battery staple", "confirm": "correct horse battery staple"}
 	body, _ := json.Marshal(payload)
-	denied := httptest.NewRecorder()
-	h.ServeHTTP(denied, httptest.NewRequest(http.MethodPost, "/api/v1/setup", bytes.NewReader(body)))
-	if denied.Code != http.StatusUnauthorized {
-		t.Fatalf("wrong bootstrap status=%d", denied.Code)
-	}
-	payload["bootstrap"] = initial
-	body, _ = json.Marshal(payload)
 	setup := httptest.NewRecorder()
 	h.ServeHTTP(setup, httptest.NewRequest(http.MethodPost, "/api/v1/setup", bytes.NewReader(body)))
 	if setup.Code != http.StatusOK {
@@ -158,8 +154,7 @@ func TestLoginRateLimitAndSessionExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := ctrl.Snapshot().Server.Token
-	if err := ctrl.ConfigureAdmin("Bearer "+token, "admin", hash); err != nil {
+	if err := ctrl.ConfigureAdmin("admin", hash); err != nil {
 		t.Fatal(err)
 	}
 	server, err := New(ctrl)
@@ -193,6 +188,27 @@ func TestLoginRateLimitAndSessionExpiry(t *testing.T) {
 	}
 }
 
+func TestSetupWindowRestartsIncompleteInstallation(t *testing.T) {
+	ctrl, err := core.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	server, err := New(ctrl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	restarted := make(chan struct{}, 1)
+	server.restartHandler = func() { restarted <- struct{}{} }
+	server.startSetupWindow(20 * time.Millisecond)
+	select {
+	case <-restarted:
+	case <-time.After(time.Second):
+		t.Fatal("incomplete setup did not restart after the setup window")
+	}
+}
+
 func TestInitialSetupCopiesToSelectedDataRootAndPersistsLocator(t *testing.T) {
 	base := t.TempDir()
 	t.Setenv("RUNPILOT_DATA_ROOT_FILE", filepath.Join(base, "bootstrap", "data-root"))
@@ -216,7 +232,7 @@ func TestInitialSetupCopiesToSelectedDataRootAndPersistsLocator(t *testing.T) {
 	if err := os.Mkdir(filepath.Dir(selected), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	payload := map[string]string{"bootstrap": ctrl.Snapshot().Server.Token, "username": "admin", "password": "another correct horse battery", "confirm": "another correct horse battery", "dataDir": selected}
+	payload := map[string]string{"username": "admin", "password": "another correct horse battery", "confirm": "another correct horse battery", "dataDir": selected}
 	body, _ := json.Marshal(payload)
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/setup", bytes.NewReader(body)))

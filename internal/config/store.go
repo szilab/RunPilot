@@ -2,7 +2,6 @@ package config
 
 import (
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -135,13 +134,12 @@ func (s *Store) Update(fn func(*model.Config) error) error {
 	return nil
 }
 
-// ConfigureAdmin claims first-run or token-only installations exactly once.
-func (s *Store) ConfigureAdmin(credential, username, passwordHash string) error {
+// ConfigureAdmin creates the single local administrator exactly once.
+func (s *Store) ConfigureAdmin(username, passwordHash string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	want := "Bearer " + s.cfg.Server.Token
-	if s.cfg.Server.AdminUsername != "" || s.cfg.Server.AdminPasswordHash != "" || len(credential) != len(want) || subtle.ConstantTimeCompare([]byte(credential), []byte(want)) != 1 {
-		return errors.New("setup authorization rejected")
+	if s.cfg.Server.AdminUsername != "" || s.cfg.Server.AdminPasswordHash != "" {
+		return errors.New("administrator account is already configured")
 	}
 	prev := s.cfg
 	s.cfg.Server.AdminUsername = username
@@ -152,13 +150,6 @@ func (s *Store) ConfigureAdmin(credential, username, passwordHash string) error 
 		return err
 	}
 	return nil
-}
-
-func (s *Store) CanConfigureAdmin(credential string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	want := "Bearer " + s.cfg.Server.Token
-	return s.cfg.Server.AdminUsername == "" && s.cfg.Server.AdminPasswordHash == "" && len(credential) == len(want) && subtle.ConstantTimeCompare([]byte(credential), []byte(want)) == 1
 }
 
 func (s *Store) ChangeAdminPassword(username, currentHash, nextHash string) error {
