@@ -169,6 +169,9 @@ func unitContents(executable, dataDir string, option daemon.Options) string {
 	if option.Port != 0 {
 		args = append(args, "--port", strconv.Itoa(option.Port))
 	}
+	if option.BindAddress != "" {
+		args = append(args, "--bind-address", unitQuote(option.BindAddress))
+	}
 	if option.BasePath != "" {
 		args = append(args, "--base-path", unitQuote(option.BasePath))
 	}

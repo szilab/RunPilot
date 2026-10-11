@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,8 +23,9 @@ var ErrRestartRequested = errors.New("RunPilot restart requested")
 // Options override the corresponding YAML server settings for this run.
 // Zero-value fields leave the YAML setting unchanged.
 type Options struct {
-	Port     int
-	BasePath string
+	Port        int
+	BindAddress string
+	BasePath    string
 }
 
 func Run(ctx context.Context, dataDir string, options ...Options) error {
@@ -43,7 +45,7 @@ func Run(ctx context.Context, dataDir string, options ...Options) error {
 	if len(options) > 0 {
 		option = options[0]
 	}
-	addr, err := listenAddr(cfg.Server.Bind, cfg.Server.Port, option.Port)
+	addr, err := listenAddr(cfg.Server.Bind, cfg.Server.Port, option.Port, option.BindAddress)
 	if err != nil {
 		return err
 	}
@@ -103,23 +105,40 @@ func Run(ctx context.Context, dataDir string, options ...Options) error {
 	}
 }
 
-func listenAddr(bind string, configuredPort, overridePort int) (string, error) {
+func listenAddr(bind string, configuredPort, overridePort int, overrideAddress string) (string, error) {
 	port := configuredPort
 	if overridePort != 0 {
 		port = overridePort
 	}
-	if port == 0 {
+	if port == 0 && overrideAddress == "" {
 		return bind, nil // Legacy server.bind values include the port.
 	}
-	if port < 1 || port > 65535 {
+	if port != 0 && (port < 1 || port > 65535) {
 		return "", fmt.Errorf("server port must be between 1 and 65535")
 	}
 	host, _, err := net.SplitHostPort(bind)
 	if err != nil {
 		host = bind
 	}
+	if overrideAddress != "" {
+		if strings.TrimSpace(overrideAddress) != overrideAddress || net.ParseIP(strings.Trim(overrideAddress, "[]")) == nil {
+			return "", fmt.Errorf("invalid bind address %q", overrideAddress)
+		}
+		host = strings.Trim(overrideAddress, "[]")
+	}
 	if host == "" {
 		host = "127.0.0.1"
+	}
+	if port == 0 {
+		_, portText, splitErr := net.SplitHostPort(bind)
+		if splitErr != nil {
+			return "", fmt.Errorf("server port is required when overriding the bind address")
+		}
+		portNumber, parseErr := strconv.Atoi(portText)
+		if parseErr != nil || portNumber < 1 || portNumber > 65535 {
+			return "", fmt.Errorf("server port must be between 1 and 65535")
+		}
+		port = portNumber
 	}
 	return net.JoinHostPort(host, strconv.Itoa(port)), nil
 }

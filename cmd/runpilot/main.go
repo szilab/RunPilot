@@ -35,11 +35,12 @@ func run() error {
 		fs := flag.NewFlagSet("service-run", flag.ContinueOnError)
 		dataDir := fs.String("data-dir", config.DefaultDataDir(), "RunPilot data directory")
 		port := fs.Int("port", 0, "HTTP port (overrides YAML)")
+		bindAddress := fs.String("bind-address", "", "HTTP bind address (overrides YAML)")
 		basePath := fs.String("base-path", "", "URL base path, for example /runpilot (overrides YAML)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		return service.Run(*dataDir, daemon.Options{Port: *port, BasePath: *basePath})
+		return service.Run(*dataDir, daemon.Options{Port: *port, BindAddress: *bindAddress, BasePath: *basePath})
 	case "service":
 		return runServiceCommand(args[1:])
 	case "version", "--version", "-v":
@@ -58,13 +59,14 @@ func runForeground(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	dataDir := fs.String("data-dir", config.DefaultDataDir(), "RunPilot data directory")
 	port := fs.Int("port", 0, "HTTP port (overrides YAML)")
+	bindAddress := fs.String("bind-address", "", "HTTP bind address (overrides YAML)")
 	basePath := fs.String("base-path", "", "URL base path, for example /runpilot (overrides YAML)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	option := daemon.Options{Port: *port, BasePath: *basePath}
+	option := daemon.Options{Port: *port, BindAddress: *bindAddress, BasePath: *basePath}
 	for {
 		err := daemon.Run(ctx, *dataDir, option)
 		if errors.Is(err, daemon.ErrRestartRequested) {
@@ -84,11 +86,12 @@ func runServiceCommand(args []string) error {
 		fs := flag.NewFlagSet("service install", flag.ContinueOnError)
 		dataDir := fs.String("data-dir", config.DefaultDataDir(), "RunPilot data directory")
 		port := fs.Int("port", 0, "HTTP port (overrides YAML)")
+		bindAddress := fs.String("bind-address", "", "HTTP bind address (overrides YAML)")
 		basePath := fs.String("base-path", "", "URL base path, for example /runpilot (overrides YAML)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		return service.Install(*dataDir, daemon.Options{Port: *port, BasePath: *basePath})
+		return service.Install(*dataDir, daemon.Options{Port: *port, BindAddress: *bindAddress, BasePath: *basePath})
 	case "uninstall":
 		return service.Uninstall()
 	case "start":
@@ -104,9 +107,9 @@ func usage() {
 	fmt.Print(`RunPilot - cross-platform process manager and task scheduler
 
 Usage:
-  runpilot run [--data-dir PATH] [--port N] [--base-path PATH]
+  runpilot run [--data-dir PATH] [--bind-address IP] [--port N] [--base-path PATH]
                                                 Run in the foreground
-  runpilot service install [--data-dir PATH] [--port N] [--base-path PATH]
+  runpilot service install [--data-dir PATH] [--bind-address IP] [--port N] [--base-path PATH]
                                                 Install the native service
   runpilot service start                     Start the native service
   runpilot service stop                      Stop the native service

@@ -86,6 +86,9 @@ func Install(dataDir string, options ...daemon.Options) error {
 		if options[0].Port != 0 {
 			binPath += fmt.Sprintf(" --port %d", options[0].Port)
 		}
+		if options[0].BindAddress != "" {
+			binPath += " --bind-address " + quoteSC(options[0].BindAddress)
+		}
 		if options[0].BasePath != "" {
 			binPath += " --base-path " + quoteSC(options[0].BasePath)
 		}

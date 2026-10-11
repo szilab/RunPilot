@@ -62,6 +62,9 @@ architecture description elsewhere.
   complexity or correctness risk.
 - Keep platform-specific behavior behind small adapters/build constraints and
   preserve Windows SCM and Linux systemd user-service behavior.
+- Native ASUSTOR APKG packaging lives in `packaging/asustor` and
+  `cmd/asustor-apkg`; keep ADM lifecycle handling in the package hooks and do
+  not make systemd a requirement on ADM.
 - When touching unmigrated Docker, Backup or Xpra code, preserve its
   existing safety boundaries and regression tests rather than expanding the
   legacy core domain.

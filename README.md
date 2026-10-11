@@ -146,6 +146,57 @@ the restart fails. Keep another way to reach the host, such as SSH, local consol
 access, or a separate systemd user session, before enabling an unattended update
 task.
 
+## Install On ASUSTOR ADM
+
+RunPilot has a native x86-64 App Central package for AS67 models, including the
+AS6702T. It requires ADM 5.0 or newer, runs as the ADM `admin` account, and does
+not use Docker to run RunPilot. Build the APKG 2.0 package from the repository:
+
+```bash
+./tools/asustor/build.sh 1.0.4
+```
+
+The builder creates `dist/runpilot_1.0.4_x86-64.apk` and its SHA-256 file. In
+ADM, open **App Central → Management → Manual Install** and select the APK. App
+Central owns start-at-boot and shutdown lifecycle through the package's
+`CONTROL/start-stop.sh` hook. The ADM desktop icon opens `http://NAS:9070/`.
+RunPilot binds to the NAS LAN interfaces on port 9070 and still requires the
+RunPilot API token to use the application. Keep direct access on a trusted LAN;
+HTTP does not protect the token in transit. For remote access, configure an
+HTTPS reverse proxy in ADM yourself and restrict access there. Package install
+does not change ADM's reverse proxy, certificates, firewall or other network
+settings.
+
+Mutable state lives at
+`/volume1/.@plugins/AppCentral/runpilot/data/`, owned by `admin` with private
+permissions. It contains `runpilot.yaml`, installed plugin packages and data,
+plugin history, and logs. The path is independent of replaceable app binaries,
+so upgrades retain it. Uninstall stops RunPilot but deliberately leaves this
+directory and its data in place; remove it manually only after deciding the
+configuration and history are no longer needed.
+
+RunPilot uses the normal published plugin catalog for Tasks, Terminal, Docker,
+RDP, VNC and Web Apps. Docker management follows the NAS Docker CLI and daemon
+permissions. ADM's Docker socket may be restricted to root; RunPilot runs as
+`admin` and does not broaden those permissions, so Docker control requires an
+administrator to grant the account access outside this package. Tasks and
+Terminal use commands and shells available to `admin`. RDP needs an externally
+reachable guacd service; VNC needs a reachable VNC target. Remote desktop
+targets and guacd are not bundled or installed by RunPilot. Web Apps needs
+reachable HTTP/HTTPS upstreams, including their WebSocket endpoints where
+used. The plugin catalog can be used without those host integrations.
+
+For troubleshooting, check the App Central app state and read
+`/volume1/.@plugins/AppCentral/runpilot/data/runpilot.log` over SSH. The package
+hook supports `start`, `stop`, `restart` and `status`; App Central itself should
+own normal lifecycle changes. Check that port 9070 is unused before installing
+and that ADM's account permissions allow the selected plugin's operations.
+
+App Central package building and the native binary have been tested on an
+AS6702T running ADM 5.1.4. Installing or upgrading through App Central requires
+a separate validation because it changes ADM's package registry and invokes
+system lifecycle hooks.
+
 ## Development
 
 ```bash

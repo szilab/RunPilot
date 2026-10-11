@@ -1,0 +1,1 @@
+RunPilot is a native process and task management application for ASUSTOR ADM. It runs directly on ADM Linux and provides its web interface on the NAS LAN. Configuration and plugin data are retained across upgrades and left in place when the app is removed.
