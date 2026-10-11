@@ -38,7 +38,6 @@ func Run(ctx context.Context, dataDir string, options ...Options) error {
 		return err
 	}
 	defer ctrl.Close()
-	ctrl.Start()
 
 	cfg := ctrl.Snapshot()
 	option := Options{}

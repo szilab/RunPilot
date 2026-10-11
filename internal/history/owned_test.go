@@ -7,9 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
-
-	"github.com/szilab/RunPilot/internal/model"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -31,9 +28,8 @@ func TestExecutionLifecycleAndOwnerIsolation(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(store.dataDir, "plugins", "tasks", "data", "history.db")); err != nil {
 		t.Fatalf("task history database is missing: %v", err)
 	}
-	var legacyCount int
-	if err := store.db.QueryRow(`SELECT count(*) FROM runs`).Scan(&legacyCount); err != nil || legacyCount != 0 {
-		t.Fatalf("plugin execution leaked into legacy history: %d, %v", legacyCount, err)
+	if _, err := os.Stat(filepath.Join(store.dataDir, "legacy")); !os.IsNotExist(err) {
+		t.Fatalf("legacy directory exists: %v", err)
 	}
 	if _, err := store.GetExecution("other", e.ID); !errors.Is(err, ErrExecutionNotFound) {
 		t.Fatalf("other owner read = %v", err)
@@ -60,20 +56,6 @@ func TestExecutionLifecycleAndOwnerIsolation(t *testing.T) {
 	}
 	if other, _ := store.ListExecutions("other", "", 10); len(other) != 0 {
 		t.Fatalf("other owner list = %#v", other)
-	}
-}
-
-func TestExecutionsAreInvisibleToLegacyHistory(t *testing.T) {
-	store := openTestStore(t)
-	if _, err := store.BeginExecution("tasks", "process", "task-1", "One"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Append(model.RunRecord{ID: "run-legacy", Kind: "process", TargetID: "task-1", TargetName: "Legacy", StartedAt: time.Now()}); err != nil {
-		t.Fatal(err)
-	}
-	runs, err := store.Recent("", 50)
-	if err != nil || len(runs) != 1 || runs[0].ID != "run-legacy" {
-		t.Fatalf("legacy runs = %#v, %v", runs, err)
 	}
 }
 

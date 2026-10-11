@@ -10,9 +10,6 @@
   the hidden legacy Software UI and backend.
 - **Migrate Backup separately.** Preserve typed backup jobs and history until
   a Backup plugin has parity; do not fold them into Tasks.
-- **Decide legacy Tasks migration and cleanup.** Legacy definitions in
-  `runpilot.yaml` and Run history remain separate from plugin state. Decide if
-  and how to migrate them before removing legacy Tasks UI, code and APIs.
 - **Add host metrics widgets.** Design CPU, memory, disk and issue presentation
   as plugin/widget contributions to Overview; do not expand the System fixture.
 

@@ -22,8 +22,8 @@ func TestStorePersists(t *testing.T) {
 	if token == "" {
 		t.Fatal("missing token")
 	}
-	if !s.TokenCreated() {
-		t.Fatal("new configuration did not report a generated token")
+	if s.Snapshot().Server.SetupComplete {
+		t.Fatal("fresh config should require first-run setup")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "runpilot.yaml")); err != nil {
 		t.Fatalf("YAML configuration was not created: %v", err)
@@ -40,9 +40,6 @@ func TestStorePersists(t *testing.T) {
 	}
 	if got := s2.Snapshot().Server.Bind; got != "127.0.0.1:9999" {
 		t.Fatalf("bind = %q", got)
-	}
-	if s2.TokenCreated() {
-		t.Fatal("existing configuration unexpectedly generated a token")
 	}
 }
 
@@ -281,5 +278,48 @@ func TestExistingConfigWithoutSetupMarkerIsUpgrade(t *testing.T) {
 	}
 	if !store.Snapshot().Server.SetupComplete || store.Snapshot().Server.Token != "existing-valid-token" {
 		t.Fatal("upgrade forced setup or changed token")
+	}
+}
+
+func TestOpeningConfigRemovesObsoleteTaskDefinitionsAndKeepsBackup(t *testing.T) {
+	dir := t.TempDir()
+	contents := `server:
+  token: retained-token
+processes:
+  - id: old-process
+    name: Old process
+    command: {path: sh}
+jobs:
+  - id: old-command-job
+    name: Old command job
+    type: command
+    command: {path: sh}
+  - id: backup-job
+    name: Backup job
+    type: backup
+    backup:
+      engine: robocopy
+      robocopy: {source: /src, destination: /dst, mode: copy, retries: 1, retryWaitSeconds: 1}
+`
+	if err := os.WriteFile(filepath.Join(dir, "runpilot.yaml"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := store.Snapshot()
+	if len(cfg.Jobs) != 1 || cfg.Jobs[0].ID != "backup-job" {
+		t.Fatalf("retained jobs = %#v", cfg.Jobs)
+	}
+	b, err := os.ReadFile(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "old-process") || strings.Contains(string(b), "old-command-job") {
+		t.Fatalf("obsolete task config remains: %s", b)
+	}
+	if cfg.Server.Token != "retained-token" || !cfg.Server.SetupComplete {
+		t.Fatal("upgrade auth state changed")
 	}
 }

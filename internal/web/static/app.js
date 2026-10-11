@@ -1,9 +1,6 @@
 const $ = (id) => document.getElementById(id);
 let token = RunPilotAuthStorage.migrate(sessionStorage, localStorage);
 let currentPage = "overview";
-let processes = [];
-let jobs = [];
-let taskFilter = "all";
 let storage = [], storageLocation = null, storagePath = "";
 let softwareProviders = [], softwareProviderID = "", softwarePackages = [], softwareUpdates = [], softwareSearchResults = [], softwareBuckets = [], softwareTab = "installed", softwareBusy = false, softwareBusyLabel = "", softwareLoading = false, softwareLoadingKey = "", softwareLoadedKey = "", softwareLoadSequence = 0, softwareRootDrafts = {};
 let storageClipboard = null, editingTextPath = null, storageShowHidden = false, storagePathCapabilities = null;
@@ -19,8 +16,7 @@ const hostDashboard = new RunPilotDashboard.HostDashboard($("hostDashboard"), ap
 const pluginThemeListeners = new Set();
 let applicationSocket = null, applicationSocketPromise = null, applicationSequence = 0;
 const applicationPending = new Map(), applicationListeners = new Map(), applicationStreams = new Map();
-let logTimer = null, toastTimer = null;
-let logSource = null;
+let toastTimer = null;
 let refreshTimer = null;
 let refreshing = false;
 let connectionTimer = null, connectionOnline = false, connectionChecked = false, connectionWasLost = false, reloadingAfterReconnect = false;
@@ -264,129 +260,6 @@ function toast(message, level = "info") {
 }
 function toastError(message) { toast(message,"error"); }
 
-function splitArgs(text) {
-  const out = [];
-  let cur = "", quote = null, escape = false;
-  for (const ch of text.trim()) {
-    if (escape) { cur += ch; escape = false; continue; }
-    if (ch === "\\") { escape = true; continue; }
-    if (quote) {
-      if (ch === quote) quote = null; else cur += ch;
-    } else if (ch === '"' || ch === "'") quote = ch;
-    else if (/\s/.test(ch)) { if (cur) { out.push(cur); cur = ""; } }
-    else cur += ch;
-  }
-  if (cur) out.push(cur);
-  return out;
-}
-
-function formatArgs(args = []) {
-  return args.map(a => /\s/.test(a) ? `"${a.replaceAll('"', '\\"')}"` : a).join(" ");
-}
-
-function setCommandError(prefix, message = "") {
-  const error = $(`${prefix}CommandError`);
-  error.textContent = message;
-  error.classList.toggle("hidden", !message);
-}
-
-function updateEnvironmentEmpty(prefix) {
-  const hasRows = $(`${prefix}EnvRows`).children.length > 0;
-  $(`${prefix}EnvEmpty`).classList.toggle("hidden", hasRows);
-}
-
-function addEnvironmentRow(prefix, name = "", value = "", focusName = false) {
-  const row = document.createElement("div");
-  row.className = "environment-row";
-  row.innerHTML = `<input class="environment-name" aria-label="Variable name" placeholder="NAME">
-    <input class="environment-value" aria-label="Variable value" placeholder="Value">
-    <button class="button secondary small environment-remove" type="button" title="Remove variable" aria-label="Remove variable">Remove</button>`;
-  row.querySelector(".environment-name").value = name;
-  row.querySelector(".environment-value").value = value;
-  row.querySelector(".environment-remove").addEventListener("click", () => {
-    row.remove();
-    updateEnvironmentEmpty(prefix);
-  });
-  $(`${prefix}EnvRows`).append(row);
-  updateEnvironmentEmpty(prefix);
-  if (focusName) row.querySelector(".environment-name").focus();
-}
-
-function populateCommandEditor(prefix, command = {}) {
-  $(`${prefix}Path`).value = command.path || "";
-  $(`${prefix}Args`).value = formatArgs(command.args || []);
-  $(`${prefix}Cwd`).value = command.workingDirectory || "";
-  $(`${prefix}Interpreter`).value = command.interpreter || "auto";
-  updateCommandEditorMode(prefix);
-  $(`${prefix}EnvRows`).replaceChildren();
-  Object.keys(command.environment || {}).sort((a, b) => a.localeCompare(b)).forEach(name => {
-    addEnvironmentRow(prefix, name, command.environment[name]);
-  });
-  updateEnvironmentEmpty(prefix);
-  setCommandError(prefix);
-	if (systemInfo?.capabilities) configurePlatformAwareFields(systemInfo.capabilities);
-}
-
-function updateCommandEditorMode(prefix) {
-  const interpreter = $(`${prefix}Interpreter`), args = $(`${prefix}Args`);
-  if (!interpreter || !args) return;
-  const inlineShell = interpreter.value === "sh-inline";
-  args.disabled = inlineShell;
-  args.placeholder = inlineShell ? "Not used for inline shell commands" : "Optional arguments";
-  args.setAttribute("aria-disabled", String(inlineShell));
-}
-
-function trimInlineCommandQuotes(value) {
-  const command = value.trim();
-  if (command.length >= 2 && ((command.startsWith('"') && command.endsWith('"')) || (command.startsWith("'") && command.endsWith("'")))) {
-    return command.slice(1, -1);
-  }
-  return command;
-}
-
-function commandFromEditor(prefix) {
-  const environment = {};
-  const names = new Map();
-  for (const row of $(`${prefix}EnvRows`).querySelectorAll(".environment-row")) {
-    const name = row.querySelector(".environment-name").value.trim();
-    const value = row.querySelector(".environment-value").value;
-    if (!name && !value) continue;
-    if (!name) {
-      setCommandError(prefix, "Environment variable names are required.");
-      return null;
-    }
-    if (name.includes("=")) {
-      setCommandError(prefix, `Environment variable "${name}" must not contain =.`);
-      return null;
-    }
-    const canonicalName = name.toUpperCase();
-    if (names.has(canonicalName)) {
-      setCommandError(prefix, `Environment variables "${names.get(canonicalName)}" and "${name}" conflict on case-insensitive platforms.`);
-      return null;
-    }
-    names.set(canonicalName, name);
-    environment[name] = value;
-  }
-  setCommandError(prefix);
-  const inlineShell = $(`${prefix}Interpreter`).value === "sh-inline";
-  return {
-    path: inlineShell ? trimInlineCommandQuotes($(`${prefix}Path`).value) : $(`${prefix}Path`).value.trim(),
-    args: inlineShell ? [] : splitArgs($(`${prefix}Args`).value),
-    workingDirectory: $(`${prefix}Cwd`).value.trim(),
-    interpreter: $(`${prefix}Interpreter`).value,
-    environment,
-  };
-}
-
-document.querySelectorAll(".environment-editor").forEach(editor => {
-  const prefix = editor.dataset.commandPrefix;
-  editor.querySelector(".env-add").addEventListener("click", () => addEnvironmentRow(prefix, "", "", true));
-});
-document.querySelectorAll("select[id$='Interpreter']").forEach(select => {
-  const prefix = select.id.slice(0, -"Interpreter".length);
-  select.addEventListener("change", () => updateCommandEditorMode(prefix));
-});
-
 function fmtDate(value) {
   if (!value) return "—";
   return new Date(value).toLocaleString();
@@ -422,49 +295,6 @@ function utilizationMetric(label, current, average, tone, available = true) {
     <div class="utilization-reading"><span>1 min AVG</span><strong>${fmtPercent(average)}</strong></div>
     ${meter(percent(average), tone)}
   </div>`;
-}
-
-function scheduleText(s) {
-  if (!s) return "—";
-  if (s.type === "interval") {
-    const min = Math.round((s.intervalSeconds || 0) / 60);
-    return `Every ${min} min`;
-  }
-  if (s.type === "daily") return `Daily ${s.timeOfDay}`;
-  return `Cron ${s.cron}`;
-}
-
-function statusBadge(status) {
-  const cls = status || "idle";
-  return `<span class="status ${escapeHtml(cls)}">${escapeHtml(cls)}</span>`;
-}
-
-function runDuration(run) {
-  const end = run.finishedAt ? new Date(run.finishedAt) : new Date();
-  return `${Math.max(0, Math.round((end - new Date(run.startedAt)) / 1000))}s`;
-}
-
-function runStatus(run) { return run.finishedAt ? (run.success ? "Success" : "Failed") : "Running"; }
-
-async function openRunHistory(id, name) {
-  $("runHistoryTitle").textContent = `${name} history`;
-  $("runHistoryList").innerHTML = `<div class="empty compact"><p>Loading history…</p></div>`;
-  $("runHistoryLogOutput").textContent = "No run selected.";
-  $("runHistoryDialog").showModal();
-  try {
-    const runs = await api(`api/v1/runs?targetId=${encodeURIComponent(id)}&limit=20`);
-    $("runHistoryList").innerHTML = runs.length ? runs.map(run => `<article class="row run-history-row" role="button" tabindex="0" aria-label="Open log from ${escapeHtml(fmtDate(run.startedAt))}" onclick="openHistoryRunLog('${escapeHtml(run.id)}','${escapeHtml(name)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openHistoryRunLog('${escapeHtml(run.id)}','${escapeHtml(name)}')}"><div class="row-head"><div><strong>${escapeHtml(fmtDate(run.startedAt))}</strong><div class="meta">${escapeHtml(runStatus(run))} · ${escapeHtml(runDuration(run))}${run.exitCode != null ? ` · exit ${escapeHtml(run.exitCode)}` : ""}</div></div>${statusBadge(runStatus(run).toLowerCase())}</div>${run.message ? `<div class="meta">${escapeHtml(run.message)}</div>` : ""}</article>`).join("") : `<div class="empty compact"><h2>No completed runs</h2><p>Run history will appear here after this task executes.</p></div>`;
-  } catch (error) { $("runHistoryList").innerHTML = `<div class="empty compact"><p>${escapeHtml(error.message)}</p></div>`; }
-}
-
-async function openHistoryRunLog(id, name) {
-  $("runHistoryLogOutput").textContent = "Loading…";
-  try {
-    const text = await api(`api/v1/runs/${encodeURIComponent(id)}/log?lines=800`);
-    $("runHistoryLogOutput").textContent = text || "(no output)";
-  } catch (error) {
-    $("runHistoryLogOutput").textContent = error.message;
-  }
 }
 
 function escapeHtml(value) {
@@ -622,80 +452,6 @@ function startConnectionMonitor() {
   probeConnection();
 }
 
-function renderContinuousTask(v) {
-  const d = v.definition, s = v.status;
-  const running = ["running","starting","stopping"].includes(s.state);
-  return `<article class="row">
-      <div class="row-head">
-        <div><h3>${escapeHtml(d.name)}</h3><div class="meta">Continuous · ${escapeHtml(d.command.path)}</div></div>
-        ${statusBadge(s.state)}
-      </div>
-      <div class="row-details">
-        <div class="kv"><span>Started</span><span>${fmtDate(s.startedAt)}</span></div>
-        <div class="kv"><span>Restart</span><span>${escapeHtml(d.restart?.mode || "on-failure")}</span></div>
-        <div class="kv"><span>Autostart</span><span>${d.autostart ? "Yes" : "No"}</span></div>
-      </div>
-      <div class="row-actions">
-        ${running ? `<button class="button secondary small" onclick="processAction('${d.id}','stop')">Stop</button><button class="button secondary small" onclick="processAction('${d.id}','restart')">Restart</button>` : `<button class="button primary small" onclick="processAction('${d.id}','start')">Start</button>`}
-        <button class="button secondary small" onclick="openProcessLog('${d.id}','${escapeHtml(d.name)}')">Log</button><button class="button secondary small" onclick="editProcess('${d.id}')">Edit</button><button class="button danger small" onclick="deleteProcess('${d.id}')">Delete</button>
-      </div></article>`;
-}
-
-function renderTasks() {
-  const items = [
-    ...processes.map(v => ({kind:"continuous", name:v.definition.name, markup:renderContinuousTask(v)})),
-    ...jobs.filter(v => v.definition.type === "command").map(v => ({kind:"scheduled", name:v.definition.name, markup:renderJobRow(v)})),
-    ...jobs.filter(v => v.definition.type === "backup").map(v => ({kind:"backup", name:v.definition.name, markup:renderBackupRow(v)})),
-  ].filter(item => taskFilter === "all" || item.kind === taskFilter).sort((a,b) => a.name.localeCompare(b.name));
-  $("taskGrid").innerHTML = items.map(item => item.markup).join("");
-  $("taskEmpty").classList.toggle("hidden", items.length > 0);
-}
-
-function renderJobRow(v) {
-  const d = v.definition, s = v.status;
-  const state = s.running ? "running" : (s.lastSuccess === false ? "failure" : "idle");
-  return `<article class="row">
-    <div class="row-head"><div><h3>${escapeHtml(d.name)}</h3><div class="meta">Scheduled · ${escapeHtml(scheduleText(d.schedule))}</div></div>${statusBadge(state)}</div>
-    <div class="row-details">
-      <div class="kv"><span>Schedule</span><span>${escapeHtml(scheduleText(d.schedule))}</span></div>
-      <div class="kv"><span>Enabled</span><span>${d.enabled ? "Yes" : "No"}</span></div>
-      <div class="kv"><span>Last run</span><span>${fmtDate(s.lastRunAt)}</span></div>
-      <div class="kv"><span>Last result</span><span>${s.lastSuccess == null ? "—" : (s.lastSuccess ? "Success" : "Failed")}</span></div>
-    </div>
-    <div class="row-actions">
-      <button class="button primary small" onclick="runJob('${d.id}')">Run now</button>
-      ${s.currentRunId ? `<button class="button secondary small" onclick="openRunLog('${s.currentRunId}','${escapeHtml(d.name)}')">Live log</button>` : ""}
-      <button class="button secondary small" onclick="openRunHistory('${d.id}','${escapeHtml(d.name)}')">History</button>
-      <button class="button secondary small" onclick="editJob('${d.id}')">Edit</button>
-      <button class="button danger small" onclick="deleteJob('${d.id}')">Delete</button>
-    </div>
-  </article>`;
-}
-
-function renderBackupRow(v) {
-  const d = v.definition, s = v.status, b = d.backup || {};
-  const provider = b.engine || "robocopy", cfg = b[provider === "rdiff-backup" ? "rdiffBackup" : provider] || b;
-  const source = provider === "restic" ? (cfg.sources || []).join(", ") : cfg.source;
-  const target = provider === "restic" ? cfg.repository : cfg.destination;
-  const state = s.running ? "running" : (s.lastSuccess === false ? "failure" : "idle");
-  return `<article class="row">
-    <div class="row-head"><div><h3>${escapeHtml(d.name)}</h3><div class="meta">Backup · ${escapeHtml(provider)} · ${escapeHtml(scheduleText(d.schedule))}</div></div>${statusBadge(state)}</div>
-    <div class="row-details">
-      <div class="kv"><span>Provider</span><span>${escapeHtml(provider)}</span></div>
-      <div class="kv"><span>Schedule</span><span>${escapeHtml(scheduleText(d.schedule))}</span></div>
-      <div class="kv"><span>Last run</span><span>${fmtDate(s.lastRunAt)}</span></div>
-      <div class="kv"><span>Last result</span><span>${s.lastSuccess == null ? "—" : (s.lastSuccess ? "Success" : "Failed")}</span></div>
-    </div>
-    <div class="row-actions">
-      <button class="button primary small" onclick="runJob('${d.id}')">Run backup</button>
-      ${s.currentRunId ? `<button class="button secondary small" onclick="openRunLog('${s.currentRunId}','${escapeHtml(d.name)}')">Live log</button>` : ""}
-      <button class="button secondary small" onclick="openRunHistory('${d.id}','${escapeHtml(d.name)}')">History</button>
-      <button class="button secondary small" onclick="editBackup('${d.id}')">Edit</button>
-      <button class="button danger small" onclick="deleteJob('${d.id}')">Delete</button>
-    </div>
-  </article>`;
-}
-
 async function downloadStorage(id,p){try{const t=await api(`api/v1/storage/${id}/download-ticket`,{method:"POST",body:JSON.stringify({path:p})});window.location.assign(t.url)}catch(e){toast(e.message)}}
 async function deleteStorageObject(id,p,type){if(!confirm(`Delete ${type === "directory" ? "folder and all contents" : "file"}? This cannot be undone through RunPilot.`))return;try{await api(`api/v1/storage/${id}/delete`,{method:"POST",body:JSON.stringify({path:p})});browseStorage(id,storagePath)}catch(e){toast(e.message)}}
 async function renameStorage(id,p){const n=prompt("New name:");if(!n)return;try{await api(`api/v1/storage/${id}/rename`,{method:"POST",body:JSON.stringify({path:p,newName:n})});browseStorage(id,storagePath)}catch(e){toast(e.message)}}
@@ -779,28 +535,6 @@ function updateTextHighlight() { const code=$("textHighlight").querySelector("co
 async function openTextEditor(id,path,name) { try { const data=await api(`api/v1/storage/${id}/text?`+new URLSearchParams({path})); editingTextPath={id,path};const canEdit=!!(storagePathCapabilities||storage.find(x=>x.id===id)?.capabilities||{}).textEdit;$("textEditorTitle").textContent=`${canEdit ? "Edit" : "View"}: ${name}`;$("textEditorPath").textContent=path;$("textEditorContent").value=data.content;$("textEditorContent").readOnly=!canEdit;$("saveTextEditor").disabled=!canEdit;updateTextHighlight();$("textEditorDialog").showModal(); }catch(e){toast(e.message)} }
 function openNewTextFile() { if (!storageLocation || !(storagePathCapabilities||{}).textEdit) return; const name=prompt("File name:"); if (!name) return; if (name === "." || name === ".." || /[\\/]/.test(name)) { toast("File name must be a single name."); return; } const path=storagePath ? `${storagePath}/${name}` : name; editingTextPath={id:storageLocation,path};$("textEditorTitle").textContent=`New file: ${name}`;$("textEditorPath").textContent=path;$("textEditorContent").value="";$("textEditorContent").readOnly=false;$("saveTextEditor").disabled=false;updateTextHighlight();$("textEditorDialog").showModal(); }
 async function saveTextEditor() { if(!editingTextPath)return;try{await api(`api/v1/storage/${editingTextPath.id}/text`,{method:"PUT",body:JSON.stringify({path:editingTextPath.path,content:$("textEditorContent").value})});$("textEditorDialog").close();toast("Fájl mentve");browseStorage(storageLocation,storagePath)}catch(e){toast(e.message)} }
-
-async function processAction(id, action) {
-  try { await api(`api/v1/processes/${id}/${action}`, {method:"POST"}); toast(`Continuous task ${action} requested`); setTimeout(refresh, 250); }
-  catch (e) { toast(e.message); }
-}
-
-async function runJob(id) {
-  try { await api(`api/v1/jobs/${id}/run`, {method:"POST"}); toast("Task started"); setTimeout(refresh, 250); }
-  catch (e) { toast(e.message); }
-}
-
-async function deleteProcess(id) {
-  if (!confirm("Delete this continuous task?")) return;
-  try { await api(`api/v1/processes/${id}`, {method:"DELETE"}); await refresh(); }
-  catch (e) { toast(e.message); }
-}
-
-async function deleteJob(id) {
-  if (!confirm("Delete this job?")) return;
-  try { await api(`api/v1/jobs/${id}`, {method:"DELETE"}); await refresh(); }
-  catch (e) { toast(e.message); }
-}
 
 function activeSoftwareProvider() { return softwareProviders.find(provider => provider.id === softwareProviderID) || softwareProviders[0]; }
 function softwarePackageFacts(pkg) {
@@ -891,26 +625,7 @@ async function loadSystemInfo() {
   $("systemVersion").textContent = systemInfo?.version ? `v${systemInfo.version}` : "";
   window.runPilotWebSocketPayloadMode = systemInfo?.websocketPayloadMode || "disabled";
   if (connectionOnline) setConnected(true);
-  configurePlatformAwareFields(systemInfo.capabilities || {});
-}
 
-function configurePlatformAwareFields(capabilities) {
-  const labels = {direct:"Direct executable", python:"Python", powershell:"PowerShell", cmd:"CMD / batch", sh:"POSIX shell (sh)", "sh-inline":"Inline shell command", bash:"Bash"};
-  const interpreters = new Set(capabilities.commandInterpreters || []);
-  document.querySelectorAll("select[id$='Interpreter']").forEach(select => {
-    const selected = select.value || "auto";
-    for (const option of select.options) {
-      if (option.value === "auto" || option.value === "direct") continue;
-      option.hidden = !interpreters.has(option.value);
-      option.disabled = !interpreters.has(option.value);
-      if (labels[option.value]) option.textContent = labels[option.value];
-    }
-    if (select.querySelector(`option[value="${selected}"]`)?.disabled) select.value = "auto";
-  });
-  const robocopy = $("backupProvider").querySelector('option[value="robocopy"]');
-  if (robocopy) { robocopy.disabled = !capabilities.robocopy; robocopy.hidden = !capabilities.robocopy; }
-  const vss = $("resticVss").closest("label");
-  if (vss) vss.classList.toggle("hidden", !capabilities.windows);
 }
 
 function setPage(page) {
@@ -928,10 +643,8 @@ function setPage(page) {
     registered.headerActions(headerActions);
     headerActions.classList.toggle("hidden", headerActions.childElementCount === 0);
   }
-  const [title, action] = pageMeta[page] || [registered?.title || page, null];
+  const [title] = pageMeta[page] || [registered?.title || page];
   $("pageTitle").textContent = title;
-  $("primaryAction").textContent = action || "";
-  $("primaryAction").classList.toggle("hidden", !action);
 	if (page === "settings") renderPluginSettings();
 	if (registered) { registered.page.replaceChildren(); registered.render(registered.page); }
   refresh();
@@ -947,8 +660,6 @@ $("softwareProviderSelect").addEventListener("change", event => changeSoftwarePr
 $("softwareSearchInput").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareSearch(); } });
 $("softwareBucketSource").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareAddBucket(); } });
 document.querySelectorAll("[data-dismiss]").forEach(button => button.addEventListener("click", () => $(button.dataset.dismiss)?.close()));
-document.querySelectorAll("[data-task-filter]").forEach(button => button.addEventListener("click", () => { taskFilter = button.dataset.taskFilter; document.querySelectorAll("[data-task-filter]").forEach(item => item.classList.toggle("active", item === button)); renderTasks(); }));
-document.querySelectorAll("[data-task-kind]").forEach(button => button.addEventListener("click", () => { $("taskDialog").close(); if (button.dataset.taskKind === "continuous") openProcess(); else if (button.dataset.taskKind === "scheduled") openJob(); else openBackup(); }));
 $("storageCreate").addEventListener("click",async()=>{if(!storageLocation)return;const name=prompt("Folder name:");if(!name)return;try{await api(`api/v1/storage/${storageLocation}/directories`,{method:"POST",body:JSON.stringify({parentPath:storagePath,name})});browseStorage(storageLocation,storagePath)}catch(e){toast(e.message)}});
 $("storageNewFile").addEventListener("click",openNewTextFile);
 $("storageUpload").addEventListener("change",async e=>{if(!storageLocation||!e.target.files.length)return;const form=new FormData();form.append("path",storagePath);for(const f of e.target.files)form.append("files",f);try{await api(`api/v1/storage/${storageLocation}/upload`,{method:"POST",body:form});browseStorage(storageLocation,storagePath)}catch(err){toast(err.message)}finally{e.target.value=""}});
@@ -957,172 +668,6 @@ $("storageShowHidden").addEventListener("change",e=>{storageShowHidden=e.target.
 $("saveTextEditor").addEventListener("click",saveTextEditor);$("closeTextEditor").addEventListener("click",()=>$("textEditorDialog").close());$("cancelTextEditor").addEventListener("click",()=>$("textEditorDialog").close());
 $("textEditorContent").addEventListener("input",updateTextHighlight);
 $("textEditorContent").addEventListener("scroll",e=>{ $("textHighlight").scrollTop=e.target.scrollTop; $("textHighlight").scrollLeft=e.target.scrollLeft; });
-
-function openProcess(existing = null) {
-  $("processForm").reset();
-  $("processId").value = existing?.id || "";
-  $("processName").value = existing?.name || "";
-  populateCommandEditor("process", existing?.command);
-  $("processRestart").value = existing?.restart?.mode || "on-failure";
-  $("processAutostart").checked = !!existing?.autostart;
-  $("processDialogTitle").textContent = existing ? "Edit continuous task" : "Add continuous task";
-  $("processDialog").showModal();
-}
-function editProcess(id) { openProcess(processes.find(v => v.definition.id === id)?.definition); }
-
-$("processForm").addEventListener("submit", async e => {
-  e.preventDefault();
-  const id = $("processId").value;
-  const command = commandFromEditor("process");
-  if (!command) return;
-  const body = {
-    name: $("processName").value.trim(),
-    autostart: $("processAutostart").checked,
-    command,
-    restart: {
-      mode: $("processRestart").value,
-      initialDelaySeconds: 2,
-      maxDelaySeconds: 60,
-      maxRetries: 0,
-    }
-  };
-  try {
-    await api(id ? `api/v1/processes/${id}` : "api/v1/processes", {method: id ? "PUT" : "POST", body: JSON.stringify(body)});
-    $("processDialog").close(); await refresh();
-  } catch (err) { setCommandError("process", err.message); }
-});
-
-function setScheduleFields(prefix, type) {
-  for (const key of ["Interval","Daily","Cron"]) {
-    const el = $(`${prefix}${key}Wrap`);
-    if (el) el.classList.toggle("hidden", key.toLowerCase() !== type);
-  }
-}
-$("jobScheduleType").addEventListener("change", e => setScheduleFields("job", e.target.value));
-$("backupScheduleType").addEventListener("change", e => setScheduleFields("backup", e.target.value));
-
-function scheduleFrom(prefix) {
-  const type = $(`${prefix}ScheduleType`).value;
-  if (type === "interval") return {type, intervalSeconds: Number($(`${prefix}Interval`).value) * 60};
-  if (type === "daily") return {type, timeOfDay: $(`${prefix}Daily`).value, timeZone: ""};
-  return {type, cron: $(`${prefix}Cron`).value.trim(), timeZone: ""};
-}
-function fillSchedule(prefix, s = {}) {
-  const type = s.type || (prefix === "backup" ? "daily" : "interval");
-  $(`${prefix}ScheduleType`).value = type;
-  if ($(`${prefix}Interval`)) $(`${prefix}Interval`).value = Math.max(1, Math.round((s.intervalSeconds || (prefix === "job" ? 1200 : 3600))/60));
-  if ($(`${prefix}Daily`)) $(`${prefix}Daily`).value = s.timeOfDay || "03:00";
-  if ($(`${prefix}Cron`)) $(`${prefix}Cron`).value = s.cron || "";
-  setScheduleFields(prefix, type);
-}
-
-function openJob(existing = null) {
-  $("jobForm").reset();
-  $("jobId").value = existing?.id || "";
-  $("jobName").value = existing?.name || "";
-  populateCommandEditor("job", existing?.command);
-  $("jobEnabled").checked = existing ? !!existing.enabled : true;
-  fillSchedule("job", existing?.schedule || {});
-  $("jobDialogTitle").textContent = existing ? "Edit scheduled task" : "Add scheduled task";
-  $("jobDialog").showModal();
-}
-function editJob(id) { openJob(jobs.find(v => v.definition.id === id)?.definition); }
-
-$("jobForm").addEventListener("submit", async e => {
-  e.preventDefault();
-  const id = $("jobId").value;
-  const command = commandFromEditor("job");
-  if (!command) return;
-  const body = {
-    name: $("jobName").value.trim(),
-    enabled: $("jobEnabled").checked,
-    type: "command",
-    overlapPolicy: "skip",
-    schedule: scheduleFrom("job"),
-    command,
-  };
-  try {
-    await api(id ? `api/v1/jobs/${id}` : "api/v1/jobs", {method: id ? "PUT" : "POST", body: JSON.stringify(body)});
-    $("jobDialog").close(); await refresh();
-  } catch (err) { setCommandError("job", err.message); }
-});
-
-function openBackup(existing = null) {
-  $("backupForm").reset();
-  const b = existing?.backup || {};
-  $("backupId").value = existing?.id || "";
-  $("backupName").value = existing?.name || "";
-  const provider = b.engine || "robocopy", r = b.robocopy || b, restic = b.restic || {}, rdiff = b.rdiffBackup || {};
-  $("backupProvider").value = provider;
-  $("backupSource").value = r.source || ""; $("backupDestination").value = r.destination || ""; $("backupMode").value = r.mode || "copy"; $("backupRetries").value = r.retries ?? 2;
-  $("resticRepository").value=restic.repository||""; $("resticSources").value=(restic.sources||[]).join("\n"); $("resticExcludes").value=(restic.excludes||[]).join("\n"); $("resticTags").value=(restic.tags||[]).join("\n"); $("resticVss").checked=!!restic.useVss; $("resticCheck").checked=!!restic.checkAfterBackup; $("resticPasswordFile").value=restic.passwordFile||""; $("resticExecutable").value=restic.executable||"";
-  const rt=restic.retention||{}; $("resticRetentionEnabled").checked=!!restic.retention; $("resticKeepLast").value=rt.keepLast||""; $("resticKeepDaily").value=rt.keepDaily||""; $("resticKeepWeekly").value=rt.keepWeekly||""; $("resticKeepMonthly").value=rt.keepMonthly||""; $("resticKeepYearly").value=rt.keepYearly||""; $("resticKeepWithin").value=rt.keepWithin||""; $("resticPrune").checked=!!rt.prune;
-  $("rdiffSource").value=rdiff.source||""; $("rdiffDestination").value=rdiff.destination||""; $("rdiffExcludes").value=(rdiff.excludes||[]).join("\n"); $("rdiffRetentionEnabled").checked=!!rdiff.retention; $("rdiffOlderThan").value=rdiff.retention?.olderThan||""; $("rdiffVerify").checked=!!rdiff.verifyAfterBackup; $("rdiffExecutable").value=rdiff.executable||"";
-  $("backupEnabled").checked = existing ? !!existing.enabled : true;
-  fillSchedule("backup", existing?.schedule || {type:"daily", timeOfDay:"03:00"});
-  updateMirrorWarning();
-  updateBackupProvider();
-  $("backupDialogTitle").textContent = existing ? "Edit backup task" : "Add backup task";
-  $("backupDialog").showModal();
-}
-function editBackup(id) { openBackup(jobs.find(v => v.definition.id === id)?.definition); }
-function updateMirrorWarning() { $("mirrorWarning").classList.toggle("hidden", $("backupMode").value !== "mirror"); }
-$("backupMode").addEventListener("change", updateMirrorWarning);
-function lines(id) { return $(id).value.split("\n").map(v=>v.trim()).filter(Boolean); }
-function updateBackupProvider() {
-  const p=$("backupProvider").value, robo=p==="robocopy";
-  ["backupMode","backupSource","backupDestination","backupRetries"].forEach(id=>$(id).closest("label").classList.toggle("hidden",!robo));
-  $("resticFields").classList.toggle("hidden",p!=="restic"); $("rdiffFields").classList.toggle("hidden",p!=="rdiff-backup");
-  $("mirrorWarning").classList.toggle("hidden",!robo || $("backupMode").value!=="mirror");
-  $("resticRetentionFields").classList.toggle("hidden",!$("resticRetentionEnabled").checked); $("rdiffRetentionWrap").classList.toggle("hidden",!$("rdiffRetentionEnabled").checked);
-}
-$("backupProvider").addEventListener("change", updateBackupProvider); $("resticRetentionEnabled").addEventListener("change",updateBackupProvider); $("rdiffRetentionEnabled").addEventListener("change",updateBackupProvider);
-
-$("backupForm").addEventListener("submit", async e => {
-  e.preventDefault();
-  const id = $("backupId").value;
-  const body = {
-    name: $("backupName").value.trim(),
-    enabled: $("backupEnabled").checked,
-    type: "backup",
-    overlapPolicy: "skip",
-    schedule: scheduleFrom("backup"),
-    backup: { engine: $("backupProvider").value }
-  };
-  if (body.backup.engine === "robocopy") body.backup.robocopy={source:$("backupSource").value.trim(),destination:$("backupDestination").value.trim(),mode:$("backupMode").value,retries:Number($("backupRetries").value),retryWaitSeconds:5};
-  if (body.backup.engine === "restic") { const retention=$("resticRetentionEnabled").checked?{keepLast:Number($("resticKeepLast").value)||0,keepDaily:Number($("resticKeepDaily").value)||0,keepWeekly:Number($("resticKeepWeekly").value)||0,keepMonthly:Number($("resticKeepMonthly").value)||0,keepYearly:Number($("resticKeepYearly").value)||0,keepWithin:$("resticKeepWithin").value.trim(),prune:$("resticPrune").checked}:null; body.backup.restic={repository:$("resticRepository").value.trim(),sources:lines("resticSources"),excludes:lines("resticExcludes"),tags:lines("resticTags"),useVss:$("resticVss").checked,checkAfterBackup:$("resticCheck").checked,passwordFile:$("resticPasswordFile").value.trim(),executable:$("resticExecutable").value.trim(),retention}; }
-  if (body.backup.engine === "rdiff-backup") body.backup.rdiffBackup={source:$("rdiffSource").value.trim(),destination:$("rdiffDestination").value.trim(),excludes:lines("rdiffExcludes"),verifyAfterBackup:$("rdiffVerify").checked,executable:$("rdiffExecutable").value.trim(),retention:$("rdiffRetentionEnabled").checked?{olderThan:$("rdiffOlderThan").value.trim()}:null};
-  try {
-    await api(id ? `api/v1/jobs/${id}` : "api/v1/jobs", {method: id ? "PUT" : "POST", body: JSON.stringify(body)});
-    $("backupDialog").close(); await refresh();
-  } catch (err) { toast(err.message); }
-});
-
-async function openProcessLog(id, name) {
-  openLog(name, async () => api(`api/v1/processes/${id}/log?lines=500`));
-}
-async function openRunLog(id, name) {
-  openLog(name, async () => api(`api/v1/runs/${id}/log?lines=800`));
-}
-async function openLog(name, loader) {
-  if (logTimer) clearInterval(logTimer);
-  logSource = loader;
-  $("logTitle").textContent = name;
-  $("logSubtitle").textContent = "Latest captured stdout/stderr";
-  $("logOutput").textContent = "Loading…";
-  $("logDialog").showModal();
-  const load = async () => {
-    try { $("logOutput").textContent = await loader() || "(no output)"; }
-    catch (e) { $("logOutput").textContent = e.message; }
-  };
-  await load();
-  logTimer = setInterval(load, 2000);
-}
-$("closeLog").addEventListener("click", () => {
-  if (logTimer) clearInterval(logTimer);
-  logTimer = null; logSource = null; $("logDialog").close();
-});
-$("closeRunHistory").addEventListener("click", () => $("runHistoryDialog").close());
 
 $("loginForm").addEventListener("submit", async e => {
   e.preventDefault();

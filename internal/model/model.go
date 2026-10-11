@@ -2,36 +2,12 @@ package model
 
 import "time"
 
-type RestartMode string
-
-const (
-	RestartNever     RestartMode = "never"
-	RestartOnFailure RestartMode = "on-failure"
-	RestartAlways    RestartMode = "always"
-)
-
-type RestartPolicy struct {
-	Mode                RestartMode `json:"mode" yaml:"mode"`
-	InitialDelaySeconds int         `json:"initialDelaySeconds" yaml:"initialDelaySeconds"`
-	MaxDelaySeconds     int         `json:"maxDelaySeconds" yaml:"maxDelaySeconds"`
-	MaxRetries          int         `json:"maxRetries" yaml:"maxRetries"`
-}
-
 type CommandSpec struct {
 	Path             string            `json:"path" yaml:"path"`
 	Args             []string          `json:"args,omitempty" yaml:"args,omitempty"`
 	WorkingDirectory string            `json:"workingDirectory,omitempty" yaml:"workingDirectory,omitempty"`
 	Environment      map[string]string `json:"environment,omitempty" yaml:"environment,omitempty"`
 	Interpreter      string            `json:"interpreter,omitempty" yaml:"interpreter,omitempty"`
-}
-
-type ProcessDefinition struct {
-	ID          string        `json:"id" yaml:"id"`
-	Name        string        `json:"name" yaml:"name"`
-	Description string        `json:"description,omitempty" yaml:"description,omitempty"`
-	Autostart   bool          `json:"autostart" yaml:"autostart"`
-	Command     CommandSpec   `json:"command" yaml:"command"`
-	Restart     RestartPolicy `json:"restart" yaml:"restart"`
 }
 
 type ScheduleType string
@@ -52,10 +28,7 @@ type ScheduleSpec struct {
 
 type JobType string
 
-const (
-	JobCommand JobType = "command"
-	JobBackup  JobType = "backup"
-)
+const JobBackup JobType = "backup"
 
 type BackupMode string
 
@@ -136,7 +109,6 @@ type JobDefinition struct {
 	Schedule       ScheduleSpec `json:"schedule" yaml:"schedule"`
 	OverlapPolicy  string       `json:"overlapPolicy" yaml:"overlapPolicy"`
 	TimeoutSeconds int          `json:"timeoutSeconds,omitempty" yaml:"timeoutSeconds,omitempty"`
-	Command        *CommandSpec `json:"command,omitempty" yaml:"command,omitempty"`
 	Backup         *BackupSpec  `json:"backup,omitempty" yaml:"backup,omitempty"`
 }
 
@@ -152,7 +124,6 @@ type ServerConfig struct {
 type Config struct {
 	Version        int                  `json:"version" yaml:"version"`
 	Server         ServerConfig         `json:"server" yaml:"server"`
-	Processes      []ProcessDefinition  `json:"processes" yaml:"processes"`
 	Jobs           []JobDefinition      `json:"jobs" yaml:"jobs"`
 	Software       SoftwareConfig       `json:"software" yaml:"software"`
 	RemoteTargets  []RemoteTarget       `json:"remoteTargets" yaml:"remoteTargets"`
@@ -410,25 +381,12 @@ type HealthIssue struct {
 }
 
 type Overview struct {
-	Host             HostStatus    `json:"host"`
-	ProcessCount     int           `json:"processCount"`
-	RunningProcesses int           `json:"runningProcesses"`
-	JobCount         int           `json:"jobCount"`
-	RunningJobs      int           `json:"runningJobs"`
-	TaskCount        int           `json:"taskCount"`
-	RunningTasks     int           `json:"runningTasks"`
-	Issues           []HealthIssue `json:"issues"`
-}
-
-type ProcessStatus struct {
-	ID           string     `json:"id"`
-	Name         string     `json:"name"`
-	State        string     `json:"state"`
-	PID          int        `json:"pid,omitempty"`
-	StartedAt    *time.Time `json:"startedAt,omitempty"`
-	ExitCode     *int       `json:"exitCode,omitempty"`
-	RestartCount int        `json:"restartCount"`
-	CurrentRunID string     `json:"currentRunId,omitempty"`
+	Host         HostStatus    `json:"host"`
+	JobCount     int           `json:"jobCount"`
+	RunningJobs  int           `json:"runningJobs"`
+	TaskCount    int           `json:"taskCount"`
+	RunningTasks int           `json:"runningTasks"`
+	Issues       []HealthIssue `json:"issues"`
 }
 
 type JobStatus struct {
@@ -439,17 +397,4 @@ type JobStatus struct {
 	LastRunAt    *time.Time `json:"lastRunAt,omitempty"`
 	LastExitCode *int       `json:"lastExitCode,omitempty"`
 	LastSuccess  *bool      `json:"lastSuccess,omitempty"`
-}
-
-type RunRecord struct {
-	ID         string     `json:"id"`
-	Kind       string     `json:"kind"`
-	TargetID   string     `json:"targetId"`
-	TargetName string     `json:"targetName"`
-	StartedAt  time.Time  `json:"startedAt"`
-	FinishedAt *time.Time `json:"finishedAt,omitempty"`
-	ExitCode   *int       `json:"exitCode,omitempty"`
-	Success    *bool      `json:"success,omitempty"`
-	LogPath    string     `json:"-"`
-	Message    string     `json:"message,omitempty"`
 }

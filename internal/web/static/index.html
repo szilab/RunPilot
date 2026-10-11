@@ -39,18 +39,11 @@
         <div class="header-actions">
           <button id="themeToggle" class="button secondary theme-toggle" type="button" aria-pressed="false" title="Switch to dark theme">☾ <span>Dark theme</span></button>
           <div id="pluginHeaderActions" class="plugin-header-actions hidden"></div>
-          <button id="primaryAction" class="button primary hidden">Add task</button>
         </div>
       </header>
 
       <section id="overviewPage" class="page active">
         <div id="hostDashboard" class="host-dashboard"></div>
-      </section>
-
-      <section id="legacyTasksPage" class="page">
-        <div class="section-head"><div class="task-filters" role="group" aria-label="Task type"><button class="button secondary small active" data-task-filter="all">All</button><button class="button secondary small" data-task-filter="continuous">Continuous</button><button class="button secondary small" data-task-filter="scheduled">Scheduled</button><button class="button secondary small" data-task-filter="backup">Backup</button></div></div>
-        <div id="taskGrid" class="row-list"></div>
-        <div id="taskEmpty" class="empty hidden"><h2>No tasks yet</h2><p>Add a continuous command, scheduled command, or backup.</p></div>
       </section>
 
       <section id="legacyStoragePage" class="page">
@@ -97,174 +90,7 @@
   </dialog>
 
 
-  <dialog id="processDialog" class="dialog">
-    <form method="dialog" id="processForm">
-      <div class="dialog-head">
-        <div><h2 id="processDialogTitle">Add continuous task</h2><p>Run continuously and supervise its lifecycle.</p></div>
-        <button class="icon-btn" type="button" data-dismiss="processDialog" aria-label="Close">×</button>
-      </div>
-      <input type="hidden" id="processId">
-      <div class="form-grid">
-        <label>Name<input id="processName" required></label>
-        <label>Interpreter
-          <select id="processInterpreter">
-            <option value="auto">Auto detect</option>
-            <option value="direct">Direct executable</option>
-            <option value="powershell">PowerShell</option>
-            <option value="cmd">CMD / batch</option>
-            <option value="python">Python</option>
-            <option value="sh">POSIX shell (sh)</option>
-            <option value="sh-inline">Inline shell command</option>
-            <option value="bash">Bash</option>
-          </select>
-        </label>
-        <label class="span-2">Executable, script, or inline command<input id="processPath" placeholder="/opt/runpilot/myapp, C:\Tools\myapp.exe, or ls -la /" required></label>
-        <label class="span-2">Arguments<input id="processArgs" placeholder='--port 8080 --mode service'></label>
-        <label class="span-2">Working directory<input id="processCwd" placeholder="Optional"></label>
-        <div class="environment-editor span-2" data-command-prefix="process">
-          <div class="environment-head">
-            <div><strong>Environment variables</strong><span>Optional values passed only to this process.</span></div>
-            <button class="button secondary small env-add" type="button">+ Add variable</button>
-          </div>
-          <div id="processEnvRows" class="environment-rows"></div>
-          <p id="processEnvEmpty" class="environment-empty">No custom variables configured.</p>
-          <p id="processCommandError" class="form-error hidden" role="alert"></p>
-        </div>
-        <label>Restart policy
-          <select id="processRestart">
-            <option value="on-failure">On failure</option>
-            <option value="always">Always</option>
-            <option value="never">Never</option>
-          </select>
-        </label>
-        <label class="check"><input id="processAutostart" type="checkbox"> Start automatically with RunPilot</label>
-      </div>
-      <div class="dialog-actions">
-        <button class="button secondary" type="button" data-dismiss="processDialog">Cancel</button>
-        <button id="saveProcessBtn" class="button primary" value="default">Save task</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="jobDialog" class="dialog">
-    <form method="dialog" id="jobForm">
-      <div class="dialog-head">
-        <div><h2 id="jobDialogTitle">Add scheduled task</h2><p>Run a command once per schedule.</p></div>
-        <button class="icon-btn" type="button" data-dismiss="jobDialog" aria-label="Close">×</button>
-      </div>
-      <input type="hidden" id="jobId">
-      <div class="form-grid">
-        <label>Name<input id="jobName" required></label>
-        <label>Interpreter
-          <select id="jobInterpreter">
-            <option value="auto">Auto detect</option>
-            <option value="direct">Direct executable</option>
-            <option value="powershell">PowerShell</option>
-            <option value="cmd">CMD / batch</option>
-            <option value="python">Python</option>
-            <option value="sh">POSIX shell (sh)</option>
-            <option value="sh-inline">Inline shell command</option>
-            <option value="bash">Bash</option>
-          </select>
-        </label>
-        <label class="span-2">Executable, script, or inline command<input id="jobPath" placeholder="/opt/runpilot/task.sh, C:\Tools\task.ps1, or ls -la /" required></label>
-        <label class="span-2">Arguments<input id="jobArgs"></label>
-        <label class="span-2">Working directory<input id="jobCwd" placeholder="Optional"></label>
-        <div class="environment-editor span-2" data-command-prefix="job">
-          <div class="environment-head">
-            <div><strong>Environment variables</strong><span>Optional values passed only to this job.</span></div>
-            <button class="button secondary small env-add" type="button">+ Add variable</button>
-          </div>
-          <div id="jobEnvRows" class="environment-rows"></div>
-          <p id="jobEnvEmpty" class="environment-empty">No custom variables configured.</p>
-          <p id="jobCommandError" class="form-error hidden" role="alert"></p>
-        </div>
-        <label>Schedule
-          <select id="jobScheduleType">
-            <option value="interval">Interval</option>
-            <option value="daily">Daily</option>
-            <option value="cron">Cron</option>
-          </select>
-        </label>
-        <label id="jobIntervalWrap">Every (minutes)<input id="jobInterval" type="number" min="1" value="20"></label>
-        <label id="jobDailyWrap" class="hidden">Time<input id="jobDaily" type="time" value="03:00"></label>
-        <label id="jobCronWrap" class="hidden">Cron<input id="jobCron" placeholder="0 */20 * * * *"></label>
-        <label class="check"><input id="jobEnabled" type="checkbox" checked> Schedule enabled</label>
-      </div>
-      <div class="dialog-actions">
-        <button class="button secondary" type="button" data-dismiss="jobDialog">Cancel</button>
-        <button class="button primary" value="default">Save task</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="backupDialog" class="dialog">
-    <form method="dialog" id="backupForm">
-      <div class="dialog-head">
-        <div><h2 id="backupDialogTitle">Add backup task</h2><p>Schedule a backup using the selected provider.</p></div>
-        <button class="icon-btn" type="button" data-dismiss="backupDialog" aria-label="Close">×</button>
-      </div>
-      <input type="hidden" id="backupId">
-      <div class="form-grid">
-        <label>Name<input id="backupName" required></label>
-        <label>Provider<select id="backupProvider"><option value="robocopy">Robocopy</option><option value="restic">Restic</option><option value="rdiff-backup">rdiff-backup</option></select></label>
-        <label>Mode
-          <select id="backupMode">
-            <option value="copy">Copy / update</option>
-            <option value="mirror">Mirror (deletes destination extras)</option>
-          </select>
-        </label>
-        <label class="span-2">Source folder<input id="backupSource" placeholder="/srv/data or D:\Data"></label>
-        <label class="span-2">Destination folder<input id="backupDestination" placeholder="/mnt/backup/data or F:\Backup\Data"></label>
-        <label>Schedule
-          <select id="backupScheduleType">
-            <option value="daily">Daily</option>
-            <option value="interval">Interval</option>
-            <option value="cron">Cron</option>
-          </select>
-        </label>
-        <label id="backupDailyWrap">Time<input id="backupDaily" type="time" value="03:00"></label>
-        <label id="backupIntervalWrap" class="hidden">Every (minutes)<input id="backupInterval" type="number" min="1" value="60"></label>
-        <label id="backupCronWrap" class="hidden">Cron<input id="backupCron" placeholder="0 0 3 * * *"></label>
-        <label>Retries<input id="backupRetries" type="number" min="0" value="2"></label>
-        <label class="check"><input id="backupEnabled" type="checkbox" checked> Schedule enabled</label>
-        <div id="resticFields" class="span-2 provider-fields hidden">
-          <label>Repository<input id="resticRepository" placeholder="/mnt/restic or F:\Restic"></label>
-          <label>Source paths (one per line)<textarea id="resticSources" rows="3" placeholder="/home/user/Documents or D:\Documents"></textarea></label>
-          <label>Excludes (one per line)<textarea id="resticExcludes" rows="2"></textarea></label>
-          <label>Tags (one per line)<textarea id="resticTags" rows="2"></textarea></label>
-          <label class="check"><input id="resticVss" type="checkbox"> Use Windows filesystem snapshot (VSS)</label>
-          <label class="check"><input id="resticCheck" type="checkbox"> Check repository after backup</label>
-          <label class="span-2">Password file path (optional)<input id="resticPasswordFile" placeholder="/etc/runpilot/restic-password or C:\Secure\restic-password.txt"></label>
-          <label class="check span-2"><input id="resticRetentionEnabled" type="checkbox"> Run Restic forget after backup</label>
-          <div id="resticRetentionFields" class="retention-fields span-2 hidden"><label>Keep last<input id="resticKeepLast" type="number" min="0"></label><label>Keep daily<input id="resticKeepDaily" type="number" min="0"></label><label>Keep weekly<input id="resticKeepWeekly" type="number" min="0"></label><label>Keep monthly<input id="resticKeepMonthly" type="number" min="0"></label><label>Keep yearly<input id="resticKeepYearly" type="number" min="0"></label><label>Keep within<input id="resticKeepWithin" placeholder="1y"></label><label class="check span-2"><input id="resticPrune" type="checkbox"> Prune repository</label></div>
-          <label class="span-2">Advanced: executable path (optional)<input id="resticExecutable" placeholder="restic or C:\Tools\restic.exe"></label>
-        </div>
-        <div id="rdiffFields" class="span-2 provider-fields hidden">
-          <label>Source folder<input id="rdiffSource" placeholder="/home/user/Photos or D:\Photos"></label><label>Destination folder<input id="rdiffDestination" placeholder="/mnt/backup/photos or F:\Backups\Photos"></label>
-          <p class="muted span-2">Destination remains a directly browsable current mirror. Do not edit <code>rdiff-backup-data</code>.</p>
-          <label class="span-2">Excludes (one per line)<textarea id="rdiffExcludes" rows="2"></textarea></label><label class="check"><input id="rdiffRetentionEnabled" type="checkbox"> Remove old increments after backup</label><label id="rdiffRetentionWrap" class="hidden">Older than<input id="rdiffOlderThan" placeholder="3M"></label><label class="check"><input id="rdiffVerify" type="checkbox"> Verify after backup</label><label class="span-2">Advanced: executable path (optional)<input id="rdiffExecutable" placeholder="rdiff-backup or C:\Tools\rdiff-backup.exe"></label>
-        </div>
-      </div>
-      <div id="mirrorWarning" class="warning hidden">Mirror mode uses <code>/MIR</code>. Files that exist only in the destination can be deleted.</div>
-      <div class="dialog-actions">
-        <button class="button secondary" type="button" data-dismiss="backupDialog">Cancel</button>
-        <button class="button primary" value="default">Save backup</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="taskDialog" class="dialog small"><div class="dialog-head"><div><h2>Add task</h2><p>What should RunPilot execute?</p></div><button class="icon-btn" type="button" data-dismiss="taskDialog" aria-label="Close">×</button></div><div class="row-list"><button class="row task-choice" type="button" data-task-kind="continuous"><strong>Continuous command</strong><span class="meta">Run continuously and supervise/restart it.</span></button><button class="row task-choice" type="button" data-task-kind="scheduled"><strong>Scheduled command</strong><span class="meta">Run a command according to a schedule.</span></button><button class="row task-choice" type="button" data-task-kind="backup"><strong>Backup</strong><span class="meta">Run a configured backup according to a schedule.</span></button></div></dialog>
-  <dialog id="runHistoryDialog" class="dialog run-history-dialog"><div class="dialog-head"><div><h2 id="runHistoryTitle">Run history</h2><p>Captured output from previous runs.</p></div><button class="icon-btn" id="closeRunHistory" type="button" aria-label="Close">×</button></div><div class="run-history-layout"><div id="runHistoryList" class="row-list"></div><section class="run-history-log"><pre id="runHistoryLogOutput">No run selected.</pre></section></div></dialog>
   <dialog id="textEditorDialog" class="dialog log-dialog"><div class="dialog-head"><div><h2 id="textEditorTitle">Fájl szerkesztése</h2><p id="textEditorPath"></p></div><button class="icon-btn" id="closeTextEditor" type="button">×</button></div><div class="editor-shell"><pre id="textHighlight" aria-hidden="true"><code></code></pre><textarea id="textEditorContent" class="text-editor" spellcheck="false"></textarea></div><div class="dialog-actions"><button class="button secondary" id="cancelTextEditor" type="button">Mégse</button><button class="button primary" id="saveTextEditor" type="button">Mentés</button></div></dialog>
-
-  <dialog id="logDialog" class="dialog log-dialog">
-    <div class="dialog-head">
-      <div><h2 id="logTitle">Log</h2><p id="logSubtitle">Latest output</p></div>
-      <button class="icon-btn" id="closeLog" type="button" aria-label="Close">×</button>
-    </div>
-    <pre id="logOutput">Loading…</pre>
-  </dialog>
 
   <div id="toast" class="toast hidden"></div>
   <script src="secure-websocket.js"></script>

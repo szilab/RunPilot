@@ -144,11 +144,6 @@ func runStep(logFile *os.File, step backup.Step, deadline time.Time, timeoutSeco
 
 func planFor(def model.JobDefinition) (backup.Plan, error) {
 	switch def.Type {
-	case model.JobCommand:
-		if def.Command == nil {
-			return backup.Plan{}, fmt.Errorf("command job has no command")
-		}
-		return backup.Plan{Provider: "command", Steps: []backup.Step{{Name: "command", Command: *def.Command, Success: func(code int) bool { return code == 0 }}}}, nil
 	case model.JobBackup:
 		if def.Backup == nil {
 			return backup.Plan{}, fmt.Errorf("backup job has no backup specification")
@@ -160,21 +155,6 @@ func planFor(def model.JobDefinition) (backup.Plan, error) {
 }
 
 func (r *Runner) finish(def model.JobDefinition, runID string, started time.Time, code int, success bool, logPath, message string) {
-	finished := time.Now()
-	rec := model.RunRecord{
-		ID:         runID,
-		Kind:       string(def.Type),
-		TargetID:   def.ID,
-		TargetName: def.Name,
-		StartedAt:  started,
-		FinishedAt: &finished,
-		ExitCode:   &code,
-		Success:    &success,
-		LogPath:    logPath,
-		Message:    message,
-	}
-	_ = r.history.Append(rec)
-
 	r.mu.Lock()
 	delete(r.active, def.ID)
 	st := r.status[def.ID]

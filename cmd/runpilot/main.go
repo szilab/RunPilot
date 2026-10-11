@@ -120,7 +120,7 @@ func runServiceCommand(args []string) error {
 }
 
 func usage() {
-	fmt.Print(`RunPilot - cross-platform process manager and task scheduler
+	fmt.Print(`RunPilot - cross-platform plugin host and management framework
 
 Usage:
   runpilot run [--data-dir PATH] [--bind-address IP] [--port N] [--base-path PATH]

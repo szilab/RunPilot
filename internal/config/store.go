@@ -16,10 +16,9 @@ import (
 )
 
 type Store struct {
-	mu           sync.RWMutex
-	path         string
-	cfg          model.Config
-	tokenCreated bool
+	mu   sync.RWMutex
+	path string
+	cfg  model.Config
 }
 
 var userHomeDir = os.UserHomeDir
@@ -57,8 +56,11 @@ func Open(dataDir string) (*Store, error) {
 	}
 	s := &Store{path: filepath.Join(dataDir, "runpilot.yaml")}
 	if _, err := os.Stat(s.path); errors.Is(err, os.ErrNotExist) {
-		s.cfg = defaultConfig()
-		s.tokenCreated = true
+		config, err := defaultConfig()
+		if err != nil {
+			return nil, err
+		}
+		s.cfg = config
 		if err := s.saveLocked(); err != nil {
 			return nil, err
 		}
@@ -82,6 +84,7 @@ func Open(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("parse %s: %w", s.path, err)
 	}
 	_, hadLegacyStorage := raw["storage"]
+	_, hadLegacyProcesses := raw["processes"]
 	serverRaw, _ := raw["server"].(map[string]any)
 	_, hadSetupMarker := serverRaw["setupComplete"]
 	if !hadSetupMarker && s.cfg.Server.Token != "" {
@@ -90,9 +93,8 @@ func Open(dataDir string) (*Store, error) {
 	before := clone(s.cfg)
 	normalize(&s.cfg)
 	if before.Server.Token == "" {
-		s.tokenCreated = true
 	}
-	if hadLegacyStorage || !reflect.DeepEqual(before, s.cfg) {
+	if hadLegacyStorage || hadLegacyProcesses || !reflect.DeepEqual(before, s.cfg) {
 		if err := s.saveLocked(); err != nil {
 			return nil, err
 		}
@@ -101,10 +103,6 @@ func Open(dataDir string) (*Store, error) {
 }
 
 func (s *Store) Path() string { return s.path }
-
-// TokenCreated reports whether this open generated an API token. It is true
-// only for a newly initialized or repaired configuration.
-func (s *Store) TokenCreated() bool { return s.tokenCreated }
 
 func (s *Store) Snapshot() model.Config {
 	s.mu.RLock()
@@ -119,7 +117,9 @@ func (s *Store) Update(fn func(*model.Config) error) error {
 	if err := fn(&next); err != nil {
 		return err
 	}
-	normalize(&next)
+	if err := normalize(&next); err != nil {
+		return err
+	}
 	prev := s.cfg
 	s.cfg = next
 	if err := s.saveLocked(); err != nil {
@@ -162,19 +162,22 @@ func (s *Store) saveLocked() error {
 	return os.Rename(tmp, s.path)
 }
 
-func defaultConfig() model.Config {
+func defaultConfig() (model.Config, error) {
+	token, err := randomToken()
+	if err != nil {
+		return model.Config{}, err
+	}
 	config := model.Config{
 		Version: 1,
 		Server: model.ServerConfig{
 			Bind:          "127.0.0.1:9070",
 			Port:          9070,
 			BasePath:      "/",
-			Token:         randomToken(),
+			Token:         token,
 			SetupComplete: false,
 		},
-		Processes: []model.ProcessDefinition{},
-		Jobs:      []model.JobDefinition{},
-		Plugins:   map[string]model.PluginSettings{},
+		Jobs:    []model.JobDefinition{},
+		Plugins: map[string]model.PluginSettings{},
 	}
 	if runtime.GOOS == "windows" {
 		config.Software.Providers = []model.SoftwareProviderDefinition{{
@@ -182,10 +185,10 @@ func defaultConfig() model.Config {
 			Scoop: &model.ScoopProviderSpec{},
 		}}
 	}
-	return config
+	return config, nil
 }
 
-func normalize(c *model.Config) {
+func normalize(c *model.Config) error {
 	if c.Version == 0 {
 		c.Version = 1
 	}
@@ -196,7 +199,11 @@ func normalize(c *model.Config) {
 		c.Server.BasePath = "/"
 	}
 	if c.Server.Token == "" {
-		c.Server.Token = randomToken()
+		token, err := randomToken()
+		if err != nil {
+			return err
+		}
+		c.Server.Token = token
 	}
 	if c.Plugins == nil {
 		c.Plugins = map[string]model.PluginSettings{}
@@ -216,12 +223,15 @@ func normalize(c *model.Config) {
 			})
 		}
 	}
-	for i := range c.Processes {
-		model.NormalizeProcess(&c.Processes[i])
-	}
+	jobs := c.Jobs[:0]
 	for i := range c.Jobs {
+		if c.Jobs[i].Type != model.JobBackup {
+			continue
+		}
 		model.NormalizeJob(&c.Jobs[i])
+		jobs = append(jobs, c.Jobs[i])
 	}
+	c.Jobs = jobs
 	// RDP and VNC targets now belong to their plugin-owned storage. Remove
 	// obsolete combined-core targets once when opening an older configuration.
 	targets := c.RemoteTargets[:0]
@@ -244,6 +254,7 @@ func normalize(c *model.Config) {
 		// Remove the compatibility field on the next normal configuration save.
 		target.ForwardDBus = false
 	}
+	return nil
 }
 
 func clone(in model.Config) model.Config {
@@ -253,10 +264,10 @@ func clone(in model.Config) model.Config {
 	return out
 }
 
-func randomToken() string {
+func randomToken() (string, error) {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
-		return "change-me"
+		return "", fmt.Errorf("generate initial token: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }

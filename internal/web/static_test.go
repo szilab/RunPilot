@@ -24,7 +24,10 @@ func TestCoreShellLeavesFeatureNavigationToPlugins(t *testing.T) {
 			t.Errorf("core %s navigation is missing", id)
 		}
 	}
-	for _, id := range []string{"tasks", "storage", "software"} {
+	if strings.Contains(page, `id="tasksPage"`) || strings.Contains(page, `id="legacyTasksPage"`) {
+		t.Error("legacy Tasks page remains in the shell")
+	}
+	for _, id := range []string{"storage", "software"} {
 		if strings.Contains(page, `id="`+id+`Page"`) || !strings.Contains(page, `id="legacy`+strings.ToUpper(id[:1])+id[1:]+`Page"`) {
 			t.Errorf("legacy %s markup reserves the plugin page ID", id)
 		}
@@ -57,7 +60,7 @@ func TestCoreShellLeavesFeatureNavigationToPlugins(t *testing.T) {
 		t.Fatal("shell refresh or plugin loader is missing")
 	}
 	refresh := script[refreshStart:refreshEnd]
-	for _, path := range []string{"api/v1/processes", "api/v1/jobs", "api/v1/storage", "api/v1/overview", "api/v1/docker"} {
+	for _, path := range []string{"api/v1/processes", "api/v1/jobs", "api/v1/runs", "api/v1/storage", "api/v1/overview", "api/v1/docker"} {
 		if strings.Contains(refresh, path) {
 			t.Errorf("shell refresh still loads legacy %s", path)
 		}
@@ -301,25 +304,10 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		`id="softwareProviderCard"`,
 		`data-software-tab="buckets"`,
 		`id="softwareBucketBar"`,
-		`Server automation`,
-		`/opt/runpilot/myapp, C:\Tools\myapp.exe, or ls -la /`,
-		`/srv/data or D:\Data`,
-		`value="sh"`,
-		`value="sh-inline"`,
-		`value="bash"`,
 		`class="row-list"`,
-		`type="button" data-dismiss="processDialog"`,
-		`type="button" data-dismiss="jobDialog"`,
-		`type="button" data-dismiss="backupDialog"`,
-		`id="backupProvider"`,
-		`id="resticFields"`,
-		`id="rdiffFields"`,
 		`for="storageProvider"`,
 		`class="storage-provider-label">Location</label>`,
 		`id="storageNewFile"`,
-		`id="legacyTasksPage"`,
-		`data-task-kind="continuous"`,
-		`class="row task-choice"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("index.html does not contain %q", want)
@@ -350,12 +338,17 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(app)
+	for _, removed := range []string{"legacyTasksPage", "function renderTasks", "api/v1/processes", "api/v1/jobs", "processDialog", "backupDialog", "runHistoryDialog"} {
+		if strings.Contains(page+script, removed) {
+			t.Errorf("legacy Tasks frontend remains: %s", removed)
+		}
+	}
 	for _, removed := range []string{`id="pageSubtitle"`, `Active sessions`, `id="remoteSessions"`, `remote-provider-add`} {
 		if strings.Contains(page+script, removed) {
 			t.Fatalf("UI still contains obsolete presentation %q", removed)
 		}
 	}
-	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "hostDashboard.setActive", "function renderTasks", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "/buckets", "function updateBackupProvider", "function configurePlatformAwareFields", "case-insensitive platforms", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function initializeSidebar", "sidebarStorageKey", `class="row"`} {
+	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "hostDashboard.setActive", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "/buckets", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function initializeSidebar", "sidebarStorageKey"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js does not contain %q", want)
 		}
@@ -384,9 +377,6 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	styles, err := staticFS.ReadFile("static/styles.css")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !strings.Contains(string(styles), `:root[data-theme="dark"] .task-choice { background: #1d2a3e; color: #f8fafc; }`) {
-		t.Fatal("task selector does not have a dark-theme color treatment")
 	}
 	if !strings.Contains(string(styles), ".shell.sidebar-collapsed") || !strings.Contains(string(styles), "main { padding: 17px 21px 24px;") {
 		t.Fatal("sidebar collapse or reduced main padding styles are missing")

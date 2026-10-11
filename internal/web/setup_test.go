@@ -2,13 +2,18 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/szilab/RunPilot/internal/config"
 	"github.com/szilab/RunPilot/internal/core"
+	"github.com/szilab/RunPilot/internal/model"
+	"github.com/szilab/RunPilot/internal/plugins"
 )
 
 func TestFirstRunGateAndTokenRotation(t *testing.T) {
@@ -60,5 +65,44 @@ func TestFirstRunGateAndTokenRotation(t *testing.T) {
 	h.ServeHTTP(newResponse, newAuth)
 	if newResponse.Code != http.StatusOK {
 		t.Fatalf("new token rejected: %d %s", newResponse.Code, newResponse.Body.String())
+	}
+}
+
+func TestPluginCallWorksAfterFirstRunSetup(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := plugins.EnsureReferenceSystem(filepath.Join(dataDir, "plugins")); err != nil {
+		t.Fatal(err)
+	}
+	store, err := config.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := true
+	if err := store.Update(func(cfg *model.Config) error {
+		cfg.Plugins = map[string]model.PluginSettings{}
+		cfg.Plugins["system"] = model.PluginSettings{Enabled: &enabled}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctrl, err := core.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	initial := ctrl.Snapshot().Server.Token
+	if err := ctrl.ChangeInitialToken(initial, "new-token-for-plugin-setup-test-123"); err != nil {
+		t.Fatal(err)
+	}
+	result, protocolErr := ctrl.PluginCall(context.Background(), "system", "status.get", json.RawMessage(`{}`))
+	if protocolErr != nil {
+		t.Fatalf("plugin call after setup: %v", protocolErr)
+	}
+	var status map[string]any
+	if err := json.Unmarshal(result, &status); err != nil {
+		t.Fatal(err)
+	}
+	if status["hostname"] == nil {
+		t.Fatalf("plugin returned no host status: %s", result)
 	}
 }

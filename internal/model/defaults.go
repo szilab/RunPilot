@@ -1,26 +1,5 @@
 package model
 
-func DefaultRestartPolicy() RestartPolicy {
-	return RestartPolicy{
-		Mode:                RestartOnFailure,
-		InitialDelaySeconds: 2,
-		MaxDelaySeconds:     60,
-		MaxRetries:          0,
-	}
-}
-
-func NormalizeProcess(p *ProcessDefinition) {
-	if p.Restart.Mode == "" {
-		p.Restart = DefaultRestartPolicy()
-	}
-	if p.Restart.InitialDelaySeconds <= 0 {
-		p.Restart.InitialDelaySeconds = 2
-	}
-	if p.Restart.MaxDelaySeconds <= 0 {
-		p.Restart.MaxDelaySeconds = 60
-	}
-}
-
 func NormalizeJob(j *JobDefinition) {
 	if j.OverlapPolicy == "" {
 		j.OverlapPolicy = "skip"

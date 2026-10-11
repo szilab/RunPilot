@@ -3,48 +3,31 @@ package history
 import (
 	"database/sql"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	_ "modernc.org/sqlite"
-
-	"github.com/szilab/RunPilot/internal/model"
 )
-
-const defaultLimit = 100
 
 type Store struct {
 	mu      sync.Mutex
 	dataDir string
-	db      *sql.DB
 	owners  map[string]*sql.DB
 }
 
+// Open initializes only generic plugin-owned history. The retained Backup
+// runner uses bounded internal log files and does not create a global run DB.
 func Open(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Join(dataDir, "internal", "runs"), 0o700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		return nil, err
-	}
-	store := &Store{dataDir: dataDir, db: db, owners: map[string]*sql.DB{}}
-	if err := store.initialize(); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
+	store := &Store{dataDir: dataDir, owners: map[string]*sql.DB{}}
 	if err := store.AbandonExecutions(); err != nil {
 		_ = store.Close()
-		return nil, fmt.Errorf("finish interrupted plugin executions: %w", err)
+		return nil, err
 	}
 	return store, nil
-}
-
-func (s *Store) initialize() error {
-	return initializeDB(s.db)
 }
 
 func initializeDB(db *sql.DB) error {
@@ -70,70 +53,6 @@ CREATE INDEX IF NOT EXISTS runs_owner_subject ON runs(owner, target_id, started_
 
 func (s *Store) RunLogPath(runID string) string {
 	return filepath.Join(s.dataDir, "internal", "runs", runID+".log")
-}
-
-func (s *Store) Append(rec model.RunRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var finished any
-	if rec.FinishedAt != nil {
-		finished = rec.FinishedAt.UnixNano()
-	}
-	var success any
-	if rec.Success != nil {
-		if *rec.Success {
-			success = 1
-		} else {
-			success = 0
-		}
-	}
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO runs (id, kind, target_id, target_name, started_at, finished_at, exit_code, success, log_path, message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, rec.ID, rec.Kind, rec.TargetID, rec.TargetName, rec.StartedAt.UnixNano(), finished, rec.ExitCode, success, rec.LogPath, rec.Message)
-	return err
-}
-
-func (s *Store) Recent(targetID string, limit int) ([]model.RunRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if limit <= 0 || limit > 100 {
-		limit = defaultLimit
-	}
-	query := `SELECT id, kind, target_id, target_name, started_at, finished_at, exit_code, success, log_path, message FROM runs WHERE owner = ''`
-	args := []any{}
-	if targetID != "" {
-		query += ` AND target_id = ?`
-		args = append(args, targetID)
-	}
-	query += ` ORDER BY started_at DESC LIMIT ?`
-	args = append(args, limit)
-	rows, err := s.db.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := []model.RunRecord{}
-	for rows.Next() {
-		var r model.RunRecord
-		var started int64
-		var finished, exitCode, success sql.NullInt64
-		if err := rows.Scan(&r.ID, &r.Kind, &r.TargetID, &r.TargetName, &started, &finished, &exitCode, &success, &r.LogPath, &r.Message); err != nil {
-			return nil, err
-		}
-		r.StartedAt = time.Unix(0, started)
-		if finished.Valid {
-			value := time.Unix(0, finished.Int64)
-			r.FinishedAt = &value
-		}
-		if exitCode.Valid {
-			value := int(exitCode.Int64)
-			r.ExitCode = &value
-		}
-		if success.Valid {
-			value := success.Int64 != 0
-			r.Success = &value
-		}
-		result = append(result, r)
-	}
-	return result, rows.Err()
 }
 
 func (s *Store) ownerDB(owner string) (*sql.DB, error) {
@@ -165,6 +84,5 @@ func (s *Store) Close() error {
 	for _, db := range s.owners {
 		errs = append(errs, db.Close())
 	}
-	errs = append(errs, s.db.Close())
 	return errors.Join(errs...)
 }

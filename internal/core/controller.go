@@ -22,7 +22,6 @@ import (
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/platform"
 	"github.com/szilab/RunPilot/internal/plugins"
-	"github.com/szilab/RunPilot/internal/processmgr"
 	"github.com/szilab/RunPilot/internal/remote"
 	"github.com/szilab/RunPilot/internal/remote/xpra"
 	"github.com/szilab/RunPilot/internal/scheduler"
@@ -35,7 +34,6 @@ type Controller struct {
 	dataDir              string
 	config               *config.Store
 	history              *history.Store
-	processes            *processmgr.Manager
 	jobs                 *jobs.Runner
 	scheduler            *scheduler.Scheduler
 	software             *software.Manager
@@ -89,7 +87,6 @@ func Open(dataDir string) (*Controller, error) {
 		dataDir:          dataDir,
 		config:           cfg,
 		history:          h,
-		processes:        processmgr.New(h),
 		jobs:             jr,
 		scheduler:        scheduler.New(jr),
 		eventSubscribers: map[uint64]chan plugins.Event{},
@@ -153,15 +150,10 @@ func Open(dataDir string) (*Controller, error) {
 		c.storage = storage.NewRegistry(nil)
 	}
 	snap := cfg.Snapshot()
-	c.processes.Reconcile(snap.Processes)
 	if err := c.scheduler.Reload(snap.Jobs); err != nil {
 		return nil, err
 	}
 	return c, nil
-}
-
-func (c *Controller) Start() {
-	c.processes.StartAutostart()
 }
 
 func (c *Controller) Close() {
@@ -182,10 +174,6 @@ func (c *Controller) Close() {
 	close(c.stopEvents)
 	c.remote.Close()
 	c.scheduler.Stop()
-	snap := c.config.Snapshot()
-	for _, p := range snap.Processes {
-		_ = c.processes.Stop(p.ID)
-	}
 	_ = c.history.Close()
 }
 
@@ -647,7 +635,6 @@ func (c *Controller) pluginStorageSet(pluginID, key string, value json.RawMessag
 func (c *Controller) DataDir() string        { return c.dataDir }
 func (c *Controller) ConfigPath() string     { return c.config.Path() }
 func (c *Controller) Snapshot() model.Config { return c.config.Snapshot() }
-func (c *Controller) TokenCreated() bool     { return c.config.TokenCreated() }
 func (c *Controller) ChangeInitialToken(current, next string) error {
 	return c.config.ChangeInitialToken(current, next)
 }
@@ -700,22 +687,16 @@ func (c *Controller) UpsertSoftwareProvider(d model.SoftwareProviderDefinition) 
 	return d, err
 }
 
-func (c *Controller) ProcessViews() []processmgr.View {
-	return c.processes.Views()
-}
-
 func (c *Controller) JobViews() []jobs.View {
 	return c.jobs.Views(c.config.Snapshot().Jobs)
 }
 
 func (c *Controller) Overview() model.Overview {
-	processes := c.ProcessViews()
 	jobs := c.JobViews()
 	overview := model.Overview{
-		Host:         platform.HostStatus(),
-		ProcessCount: len(processes),
-		JobCount:     len(jobs),
-		Issues:       []model.HealthIssue{},
+		Host:     platform.HostStatus(),
+		JobCount: len(jobs),
+		Issues:   []model.HealthIssue{},
 	}
 	if overview.Host.Error != "" {
 		overview.Issues = append(overview.Issues, model.HealthIssue{
@@ -723,18 +704,6 @@ func (c *Controller) Overview() model.Overview {
 			Name:    overview.Host.Hostname,
 			Message: overview.Host.Error,
 		})
-	}
-	for _, process := range processes {
-		if process.Status.State == "running" || process.Status.State == "starting" || process.Status.State == "stopping" {
-			overview.RunningProcesses++
-		}
-		if process.Status.ExitCode != nil && *process.Status.ExitCode != 0 {
-			overview.Issues = append(overview.Issues, model.HealthIssue{
-				Source:  "process",
-				Name:    process.Definition.Name,
-				Message: fmt.Sprintf("last exit code: %d", *process.Status.ExitCode),
-			})
-		}
 	}
 	for _, job := range jobs {
 		if job.Status.Running {
@@ -752,100 +721,30 @@ func (c *Controller) Overview() model.Overview {
 			})
 		}
 	}
-	overview.TaskCount = overview.ProcessCount + overview.JobCount
-	overview.RunningTasks = overview.RunningProcesses + overview.RunningJobs
+	overview.TaskCount = overview.JobCount
+	overview.RunningTasks = overview.RunningJobs
 	return overview
-}
-
-func (c *Controller) StartProcess(id string) error   { return c.processes.Start(id) }
-func (c *Controller) StopProcess(id string) error    { return c.processes.Stop(id) }
-func (c *Controller) RestartProcess(id string) error { return c.processes.Restart(id) }
-
-func (c *Controller) UpsertProcess(p model.ProcessDefinition) (model.ProcessDefinition, error) {
-	if strings.TrimSpace(p.Name) == "" {
-		return p, fmt.Errorf("process name is required")
-	}
-	if strings.TrimSpace(p.Command.Path) == "" {
-		return p, fmt.Errorf("process command path is required")
-	}
-	if err := model.ValidateCommand(p.Command); err != nil {
-		return p, err
-	}
-	if p.ID == "" {
-		p.ID = config.NewID("proc")
-	}
-	model.NormalizeProcess(&p)
-	err := c.config.Update(func(cfg *model.Config) error {
-		for i := range cfg.Processes {
-			if cfg.Processes[i].ID == p.ID {
-				cfg.Processes[i] = p
-				return nil
-			}
-		}
-		cfg.Processes = append(cfg.Processes, p)
-		return nil
-	})
-	if err != nil {
-		return p, err
-	}
-	c.processes.Reconcile(c.config.Snapshot().Processes)
-	return p, nil
-}
-
-func (c *Controller) DeleteProcess(id string) error {
-	if err := c.config.Update(func(cfg *model.Config) error {
-		out := cfg.Processes[:0]
-		found := false
-		for _, p := range cfg.Processes {
-			if p.ID == id {
-				found = true
-				continue
-			}
-			out = append(out, p)
-		}
-		if !found {
-			return fmt.Errorf("unknown process %q", id)
-		}
-		cfg.Processes = out
-		return nil
-	}); err != nil {
-		return err
-	}
-	c.processes.Reconcile(c.config.Snapshot().Processes)
-	return nil
 }
 
 func (c *Controller) UpsertJob(j model.JobDefinition) (model.JobDefinition, error) {
 	if strings.TrimSpace(j.Name) == "" {
 		return j, fmt.Errorf("job name is required")
 	}
-	if j.Type != model.JobCommand && j.Type != model.JobBackup {
-		return j, fmt.Errorf("job type must be command or backup")
+	if j.Type != model.JobBackup {
+		return j, fmt.Errorf("only retained Backup jobs are supported")
 	}
 	model.NormalizeJob(&j)
 	if _, err := scheduler.Expression(j.Schedule); err != nil {
 		return j, err
 	}
-	switch j.Type {
-	case model.JobCommand:
-		if j.Command == nil || strings.TrimSpace(j.Command.Path) == "" {
-			return j, fmt.Errorf("command job requires a command")
-		}
-		if err := model.ValidateCommand(*j.Command); err != nil {
-			return j, err
-		}
-		j.Backup = nil
-	case model.JobBackup:
-		if j.Backup == nil {
-			return j, fmt.Errorf("backup job requires a provider configuration")
-		}
-		if err := backup.Validate(*j.Backup); err != nil {
-			return j, err
-		}
-		if _, err := backup.Build(*j.Backup); err != nil {
-			return j, err
-		}
-		j.Command = nil
+	if j.Backup == nil {
+		return j, fmt.Errorf("backup job requires a provider configuration")
+	}
+	if err := backup.Validate(*j.Backup); err != nil {
+		return j, err
+	}
+	if _, err := backup.Build(*j.Backup); err != nil {
+		return j, err
 	}
 	if j.ID == "" {
 		j.ID = config.NewID("job")
@@ -897,29 +796,6 @@ func (c *Controller) RunJob(id string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("unknown job %q", id)
-}
-
-func (c *Controller) RecentRuns(targetID string, limit int) ([]model.RunRecord, error) {
-	return c.history.Recent(targetID, limit)
-}
-
-func (c *Controller) ProcessLog(id string, lines int) (string, error) {
-	p, err := c.processes.LogPath(id)
-	if err != nil {
-		return "", err
-	}
-	return history.Tail(p, lines)
-}
-
-func (c *Controller) RunLog(runID string, lines int) (string, error) {
-	if !safeID(runID) {
-		return "", fmt.Errorf("invalid run id")
-	}
-	path := c.history.RunLogPath(runID)
-	if _, err := os.Stat(path); err != nil {
-		return "", err
-	}
-	return history.Tail(path, lines)
 }
 
 func safeID(id string) bool {

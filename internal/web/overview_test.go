@@ -35,8 +35,8 @@ func TestOverviewEndpointProvidesHostAndServiceStatus(t *testing.T) {
 	if overview.Host.OS == "" {
 		t.Fatal("overview is missing host operating system")
 	}
-	if overview.ProcessCount != 0 || overview.JobCount != 0 {
-		t.Fatalf("empty controller counts = %d processes, %d jobs", overview.ProcessCount, overview.JobCount)
+	if overview.JobCount != 0 {
+		t.Fatalf("empty controller jobs = %d", overview.JobCount)
 	}
 }
 
@@ -80,9 +80,22 @@ func TestHiddenLegacyFeaturesKeepTheirAuthenticatedAPIs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/processes", nil)
+	request.Header.Set("Authorization", "Bearer "+ctrl.Snapshot().Server.Token)
+	removed := httptest.NewRecorder()
+	server.Handler().ServeHTTP(removed, request)
+	if removed.Code != http.StatusNotFound {
+		t.Errorf("removed Tasks process API = %d", removed.Code)
+	}
+	runsRequest := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil)
+	runsRequest.Header.Set("Authorization", "Bearer "+ctrl.Snapshot().Server.Token)
+	runsResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(runsResponse, runsRequest)
+	if runsResponse.Code != http.StatusNotFound {
+		t.Errorf("removed legacy history API = %d", runsResponse.Code)
+	}
 	for _, path := range []string{
-		"/api/v1/processes", "/api/v1/jobs", "/api/v1/storage",
-		"/api/v1/software/providers", "/api/v1/overview",
+		"/api/v1/jobs", "/api/v1/storage", "/api/v1/software/providers", "/api/v1/overview",
 	} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		request.Header.Set("Authorization", "Bearer "+ctrl.Snapshot().Server.Token)
@@ -92,7 +105,7 @@ func TestHiddenLegacyFeaturesKeepTheirAuthenticatedAPIs(t *testing.T) {
 			t.Errorf("%s = %d: %s", path, response.Code, response.Body.String())
 		}
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/docker", nil)
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/docker", nil)
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {

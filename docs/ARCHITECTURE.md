@@ -220,13 +220,14 @@ browser only through the common WebSocket. It runs on the generic storage,
 scheduler, process, history and event capabilities without adding a Task host
 capability.
 
-The plugin owns the normal `tasks` page. Legacy task definitions in
-`runpilot.yaml` and the legacy backend remain intact but are not shown in the
-normal UI. Legacy task code and configuration are still present pending cleanup.
-The core transitional history is now in-memory with temporary logs below
-`<dataDir>/internal/runs`; startup no longer creates `<dataDir>/legacy` or imports
-old local history. **Backup is not part of the Tasks plugin**: Backup jobs remain
-in the legacy job engine until their own migration.
+The plugin owns the normal `tasks` page. The pre-plugin process manager, command
+jobs, Tasks REST endpoints, history API, and Tasks/Backup dialogs have been
+removed. Opening an older config drops its
+obsolete process definitions and command jobs without changing its token.
+**Backup is not part of the Tasks plugin**: typed Backup jobs, their scheduler,
+provider implementations, and logs under `<dataDir>/internal/runs` remain in
+core until their own migration. Startup never creates `<dataDir>/legacy` or a
+global run history database.
 
 The capability changes made for Tasks are generic framework infrastructure:
 interpreter-aware `process.start` (launcher semantics), process timeouts and

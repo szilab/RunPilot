@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// ValidateCommand validates the command fields shared by managed processes and
-// command jobs. It intentionally does not require a path: callers apply their
+// ValidateCommand validates a command shared by host capabilities and retained
+// integrations. It intentionally does not require a path: callers apply their
 // own context-specific required-field validation.
 func ValidateCommand(spec CommandSpec) error {
 	return ValidateEnvironment(spec.Environment)

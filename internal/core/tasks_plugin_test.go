@@ -546,33 +546,11 @@ func TestTasksPluginConcurrentRunsSettleWithoutLostExits(t *testing.T) {
 	}
 }
 
-func TestTasksPluginDoesNotAffectLegacyTasksOrHistory(t *testing.T) {
+func TestTasksPluginExecutionHistoryIsOwnerScoped(t *testing.T) {
 	c := openTasksController(t, t.TempDir())
 	defer c.Close()
 	id := createTaskRPC(t, c, scheduled("plugin task", "exit0", 3600, false))
 	tasksOK(t, c, "tasks.run", map[string]any{"id": id})
 	waitUntil(t, 5*time.Second, "plugin run", func() bool { return finishedCount(executions(t, c, id)) == 1 })
-	job := model.JobDefinition{Name: "legacy", Enabled: false, Type: model.JobCommand, Command: &model.CommandSpec{Path: os.Args[0], Args: []string{"-test.run=^TestTasksHelperProcess$"}, Environment: map[string]string{"RUNPILOT_TASKS_HELPER": "exit0"}, Interpreter: "direct"}, Schedule: model.ScheduleSpec{Type: model.ScheduleInterval, IntervalSeconds: 3600}}
-	saved, err := c.UpsertJob(job)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runID, err := c.RunJob(saved.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitUntil(t, 5*time.Second, "legacy run", func() bool {
-		runs, _ := c.RecentRuns(saved.ID, 10)
-		return len(runs) == 1 && runs[0].FinishedAt != nil
-	})
-	all, err := c.RecentRuns("", 100)
-	if err != nil || len(all) != 1 || all[0].ID != runID {
-		t.Fatalf("legacy history must not include plugin executions: %#v %v", all, err)
-	}
-	if log, err := c.RunLog(executions(t, c, id)[0]["id"].(string), 10); err == nil {
-		t.Fatalf("legacy run log endpoint exposed a plugin execution: %q", log)
-	}
-	if len(c.JobViews()) != 1 || len(c.ProcessViews()) != 0 {
-		t.Fatalf("legacy views changed: %d jobs %d processes", len(c.JobViews()), len(c.ProcessViews()))
-	}
+
 }

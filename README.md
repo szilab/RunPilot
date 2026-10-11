@@ -383,13 +383,12 @@ The default data directory is `%ProgramData%\RunPilot`.
 
 ## Configuration model
 
-The Tasks plugin presents continuous and scheduled command tasks. Legacy task definitions remain in `runpilot.yaml` and are not imported automatically. The legacy process and job engines continue running configured workloads; backups remain typed legacy jobs until their own plugin migration.
+The Tasks plugin presents continuous and scheduled command tasks. The pre-plugin process manager, command jobs, Tasks REST endpoints, and Tasks UI have been removed. Old `processes` and command-job entries are dropped when an older configuration is next opened; Backup jobs remain typed and scheduled in core until their own plugin migration.
 
 Storage locations are runtime capabilities, not user-managed configuration records. `local` always exposes filesystem roots available to the RunPilot service identity. `docker-volumes` is one Docker-backed location whose root lists current volumes as directories. Volume contents are accessed through short-lived Docker helper containers, never through a Docker host mountpoint; running volumes are read-only.
 
-Processes and command jobs can set per-command environment variables. These values
-are stored in the normal RunPilot YAML configuration and are not encrypted secret
-storage.
+Backup configuration is stored in the normal RunPilot YAML configuration.
+Plugin-owned command tasks use the Tasks plugin's owner-scoped storage.
 
 Example backup definition:
 
@@ -463,19 +462,17 @@ RunPilot downloads and bootstraps this isolated Scoop instance on first use, inc
 runpilot.exe
 ├── Windows Service host
 ├── Core controller
-│   ├── Application/process supervision
-│   ├── Scheduler
-│   ├── One-shot job runner
+│   ├── Scheduler and retained Backup runner
 │   └── Typed external integrations
 ├── Future storage providers / software providers
 ├── Runtime PTY/ConPTY terminal sessions (not persisted)
-├── YAML config + SQLite run history + per-run logs
+├── YAML config + plugin-owned SQLite history + Backup logs
 └── Embedded HTTP API + web UI
 ```
 
 Plugin execution history and logs live in each plugin's `data` directory under
-`<data-dir>/plugins/<id>/`. Legacy core run history and logs live under
-`<data-dir>/legacy/`.
+`<data-dir>/plugins/<id>/`. Retained Backup logs use `<data-dir>/internal/runs/`;
+RunPilot does not create `<data-dir>/legacy/` or a global legacy history DB.
 
 ## Docker Compose (Linux)
 

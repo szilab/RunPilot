@@ -138,14 +138,6 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("PUT /api/v1/docker/projects/{name}/files/{kind}", s.handleDockerWriteFile)
 	api.HandleFunc("POST /api/v1/remote/sessions/{id}/client-ticket", s.handleRemoteClientTicket)
 	api.HandleFunc("GET /api/v1/overview", s.handleOverview)
-	api.HandleFunc("GET /api/v1/processes", s.handleListProcesses)
-	api.HandleFunc("POST /api/v1/processes", s.handleCreateProcess)
-	api.HandleFunc("PUT /api/v1/processes/{id}", s.handleUpdateProcess)
-	api.HandleFunc("DELETE /api/v1/processes/{id}", s.handleDeleteProcess)
-	api.HandleFunc("POST /api/v1/processes/{id}/start", s.handleStartProcess)
-	api.HandleFunc("POST /api/v1/processes/{id}/stop", s.handleStopProcess)
-	api.HandleFunc("POST /api/v1/processes/{id}/restart", s.handleRestartProcess)
-	api.HandleFunc("GET /api/v1/processes/{id}/log", s.handleProcessLog)
 
 	api.HandleFunc("GET /api/v1/jobs", s.handleListJobs)
 	api.HandleFunc("POST /api/v1/jobs", s.handleCreateJob)
@@ -153,8 +145,6 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("DELETE /api/v1/jobs/{id}", s.handleDeleteJob)
 	api.HandleFunc("POST /api/v1/jobs/{id}/run", s.handleRunJob)
 
-	api.HandleFunc("GET /api/v1/runs", s.handleRuns)
-	api.HandleFunc("GET /api/v1/runs/{id}/log", s.handleRunLog)
 	api.HandleFunc("GET /api/v1/storage", s.handleListStorage)
 	api.HandleFunc("GET /api/v1/storage/{id}/entries", s.handleStorageEntries)
 	api.HandleFunc("POST /api/v1/storage/{id}/download-ticket", s.handleDownloadTicket)
@@ -747,80 +737,6 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.ctrl.Overview())
 }
 
-func (s *Server) handleListProcesses(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.ctrl.ProcessViews())
-}
-
-func (s *Server) handleCreateProcess(w http.ResponseWriter, r *http.Request) {
-	var p model.ProcessDefinition
-	if !decodeJSON(w, r, &p) {
-		return
-	}
-	p.ID = ""
-	out, err := s.ctrl.UpsertProcess(p)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, out)
-}
-
-func (s *Server) handleUpdateProcess(w http.ResponseWriter, r *http.Request) {
-	var p model.ProcessDefinition
-	if !decodeJSON(w, r, &p) {
-		return
-	}
-	p.ID = r.PathValue("id")
-	out, err := s.ctrl.UpsertProcess(p)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-func (s *Server) handleDeleteProcess(w http.ResponseWriter, r *http.Request) {
-	if err := s.ctrl.DeleteProcess(r.PathValue("id")); err != nil {
-		writeError(w, http.StatusNotFound, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) handleStartProcess(w http.ResponseWriter, r *http.Request) {
-	if err := s.ctrl.StartProcess(r.PathValue("id")); err != nil {
-		writeError(w, http.StatusConflict, err)
-		return
-	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"status": "starting"})
-}
-
-func (s *Server) handleStopProcess(w http.ResponseWriter, r *http.Request) {
-	if err := s.ctrl.StopProcess(r.PathValue("id")); err != nil {
-		writeError(w, http.StatusConflict, err)
-		return
-	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"status": "stopping"})
-}
-
-func (s *Server) handleRestartProcess(w http.ResponseWriter, r *http.Request) {
-	if err := s.ctrl.RestartProcess(r.PathValue("id")); err != nil {
-		writeError(w, http.StatusConflict, err)
-		return
-	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"status": "restarted"})
-}
-
-func (s *Server) handleProcessLog(w http.ResponseWriter, r *http.Request) {
-	text, err := s.ctrl.ProcessLog(r.PathValue("id"), queryLimit(r, 200))
-	if err != nil {
-		writeError(w, http.StatusNotFound, err)
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = w.Write([]byte(text))
-}
-
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.ctrl.JobViews())
 }
@@ -868,43 +784,6 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"runId": runID})
-}
-
-func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
-	targetID := r.URL.Query().Get("targetId")
-	if targetID != "" && !validRunTargetID(targetID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid target id"))
-		return
-	}
-	runs, err := s.ctrl.RecentRuns(targetID, queryLimit(r, 100))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, runs)
-}
-
-func validRunTargetID(id string) bool {
-	if id == "" || id != path.Base(id) {
-		return false
-	}
-	for _, r := range id {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func (s *Server) handleRunLog(w http.ResponseWriter, r *http.Request) {
-	text, err := s.ctrl.RunLog(r.PathValue("id"), queryLimit(r, 500))
-	if err != nil {
-		writeError(w, http.StatusNotFound, err)
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = w.Write([]byte(text))
 }
 
 func (s *Server) handleListStorage(w http.ResponseWriter, r *http.Request) {

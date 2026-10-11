@@ -263,8 +263,9 @@ packaged host deployment, not the user account or operating system.
 IDs and log locations are host-generated and never accept paths. Execution
 metadata and output live in the calling plugin's
 `<dataDir>/plugins/<owner>/data/history.db` and `data/runs/<id>.log`.
-Legacy core runs use an in-memory transitional history store and never list plugin
-executions.
+The retained Backup runner writes diagnostic logs under
+`<dataDir>/internal/runs`; it does not create a global run database or expose a
+legacy history API.
 
 ```text
 history.begin   {kind, subject, label}            -> execution
