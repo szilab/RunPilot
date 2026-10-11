@@ -268,12 +268,12 @@ sudo loginctl enable-linger <username>
 ```
 
 Open `http://127.0.0.1:9070`. A fresh installation allows administrator setup
-for five minutes after startup. If setup is not complete when that window ends,
-RunPilot restarts and opens another five-minute window. Choose a username and a
-password of at least 12 characters, confirm the password, and select the
-RunPilot data directory. The username defaults to `admin`, and the data
-directory defaults to the current RunPilot data root. RunPilot stores only a
-salted Argon2id password hash in `runpilot.yaml`.
+for five minutes after startup. When the window ends, setup is locked until you
+restart RunPilot to open another five-minute window. Choose a username and a
+password of at least 12 characters, confirm the password, and select the RunPilot
+data directory. The username defaults to `admin`, and the data directory
+defaults to the current RunPilot data root. RunPilot stores only a salted
+Argon2id password hash in `runpilot.yaml`.
 
 Browser login uses server-managed HttpOnly sessions with CSRF protection,
 expiration, logout and revocation. Use HTTPS for credentials and session cookies

@@ -188,7 +188,7 @@ func TestLoginRateLimitAndSessionExpiry(t *testing.T) {
 	}
 }
 
-func TestSetupWindowRestartsIncompleteInstallation(t *testing.T) {
+func TestExpiredSetupWindowRequiresServiceRestart(t *testing.T) {
 	ctrl, err := core.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -199,13 +199,20 @@ func TestSetupWindowRestartsIncompleteInstallation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer server.Close()
-	restarted := make(chan struct{}, 1)
-	server.restartHandler = func() { restarted <- struct{}{} }
-	server.startSetupWindow(20 * time.Millisecond)
-	select {
-	case <-restarted:
-	case <-time.After(time.Second):
-		t.Fatal("incomplete setup did not restart after the setup window")
+	restartRequested := false
+	server.restartHandler = func() { restartRequested = true }
+	server.startSetupWindow(-time.Second)
+	if server.setupWindowOpen() {
+		t.Fatal("expired setup window remains open")
+	}
+	response := httptest.NewRecorder()
+	body := strings.NewReader(`{"username":"admin","password":"correct horse battery staple","confirm":"correct horse battery staple"}`)
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/setup", body))
+	if response.Code != http.StatusGone || !strings.Contains(response.Body.String(), "restart the RunPilot service") {
+		t.Fatalf("expired setup status=%d body=%s", response.Code, response.Body.String())
+	}
+	if restartRequested {
+		t.Fatal("setup expiry restarted the application")
 	}
 }
 

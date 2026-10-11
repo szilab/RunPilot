@@ -45,7 +45,6 @@ type Server struct {
 	restartHandler        func()
 	setupWindowMu         sync.Mutex
 	setupWindowDeadline   time.Time
-	setupWindowTimer      *time.Timer
 	tickets               map[string]downloadTicket
 	ticketMu              sync.Mutex
 	dockerTerminal        *terminal.Manager
@@ -129,7 +128,6 @@ func (s *Server) setupRequired() bool {
 func (s *Server) startSetupWindow(duration time.Duration) {
 	s.setupWindowMu.Lock()
 	s.setupWindowDeadline = time.Now().Add(duration)
-	s.setupWindowTimer = time.AfterFunc(duration, s.expireSetupWindow)
 	s.setupWindowMu.Unlock()
 }
 
@@ -138,15 +136,6 @@ func (s *Server) setupWindowOpen() bool {
 	deadline := s.setupWindowDeadline
 	s.setupWindowMu.Unlock()
 	return deadline.IsZero() || time.Now().Before(deadline)
-}
-
-func (s *Server) expireSetupWindow() {
-	s.setupWindowMu.Lock()
-	expired := !s.setupWindowDeadline.IsZero() && !time.Now().Before(s.setupWindowDeadline)
-	s.setupWindowMu.Unlock()
-	if expired && s.setupRequired() && s.restartHandler != nil {
-		s.restartHandler()
-	}
 }
 
 func (s *Server) SetDataRootSwitchAllowed(allowed bool) { s.dataRootSwitchAllowed = allowed }
@@ -287,14 +276,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 // Close releases all interactive shell sessions during RunPilot shutdown.
-func (s *Server) Close() error {
-	s.setupWindowMu.Lock()
-	if s.setupWindowTimer != nil {
-		s.setupWindowTimer.Stop()
-	}
-	s.setupWindowMu.Unlock()
-	return s.dockerTerminal.Close()
-}
+func (s *Server) Close() error { return s.dockerTerminal.Close() }
 
 func normalizeBasePath(value string) (string, error) {
 	value = strings.TrimSpace(value)
@@ -311,7 +293,7 @@ func normalizeBasePath(value string) (string, error) {
 	return clean, nil
 }
 
-const initialSetupHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Set up RunPilot</title><script>document.documentElement.dataset.scheme="system";document.documentElement.dataset.theme=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"</script><link rel="stylesheet" href="__BASE__/styles.css"></head><body><main class="setup-screen"><section class="dialog small setup-card"><div class="dialog-head"><div><h1>Set up RunPilot</h1><p>Create the local administrator account and choose where RunPilot stores its data.</p></div></div><p>Complete setup within 5 minutes of starting RunPilot. If time expires before you finish, RunPilot restarts and opens a new setup window.</p><form id="setup" class="settings-form setup-form"><label>Administrator username<input name="username" value="admin" minlength="3" maxlength="64" autocomplete="username" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label>Confirm password<input name="confirm" type="password" minlength="12" autocomplete="new-password" required></label><label>RunPilot data directory<input name="dataDir" type="text" value="__DATA_DIR__" required></label><div id="error" class="form-error hidden" role="alert"></div><div class="dialog-actions"><button class="button primary">Create administrator</button></div></form></section></main><script>try{localStorage.removeItem('runpilot.token');sessionStorage.removeItem('runpilot.token')}catch{}const form=document.querySelector('#setup'),error=document.querySelector('#error');form.onsubmit=async e=>{e.preventDefault();error.textContent='';error.classList.add('hidden');if(form.password.value!==form.confirm.value){error.textContent='Passwords do not match.';error.classList.remove('hidden');return}try{const response=await fetch('__BASE__/api/v1/setup',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(Object.fromEntries(new FormData(form)))});if(!response.ok){const result=await response.json();throw Error(result.error||'Setup failed')}location.href='__BASE__/'}catch(x){error.textContent=x.message;error.classList.remove('hidden')}}</script></body></html>`
+const initialSetupHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Set up RunPilot</title><script>document.documentElement.dataset.scheme="system";document.documentElement.dataset.theme=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"</script><link rel="stylesheet" href="__BASE__/styles.css"></head><body><main class="setup-screen"><section class="dialog small setup-card"><div class="dialog-head"><div><h1>Set up RunPilot</h1><p>Create the local administrator account and choose where RunPilot stores its data.</p></div></div><p>Complete setup within 5 minutes of starting RunPilot. When the window expires, setup is locked until you restart the RunPilot service.</p><form id="setup" class="settings-form setup-form"><label>Administrator username<input name="username" value="admin" minlength="3" maxlength="64" autocomplete="username" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label>Confirm password<input name="confirm" type="password" minlength="12" autocomplete="new-password" required></label><label>RunPilot data directory<input name="dataDir" type="text" value="__DATA_DIR__" required></label><div id="error" class="form-error hidden" role="alert"></div><div class="dialog-actions"><button class="button primary">Create administrator</button></div></form></section></main><script>try{localStorage.removeItem('runpilot.token');sessionStorage.removeItem('runpilot.token')}catch{}const form=document.querySelector('#setup'),error=document.querySelector('#error');form.onsubmit=async e=>{e.preventDefault();error.textContent='';error.classList.add('hidden');if(form.password.value!==form.confirm.value){error.textContent='Passwords do not match.';error.classList.remove('hidden');return}try{const response=await fetch('__BASE__/api/v1/setup',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(Object.fromEntries(new FormData(form)))});if(!response.ok){const result=await response.json();throw Error(result.error||'Setup failed')}location.href='__BASE__/'}catch(x){error.textContent=x.message;error.classList.remove('hidden')}}</script></body></html>`
 
 func (s *Server) writeInitialSetup(w http.ResponseWriter) {
 	staticPrefix := s.basePath
@@ -358,8 +340,7 @@ func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleInitialSetup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if !s.setupWindowOpen() {
-		s.expireSetupWindow()
-		writeJSON(w, http.StatusGone, map[string]string{"error": "setup window expired; RunPilot is restarting"})
+		writeJSON(w, http.StatusGone, map[string]string{"error": "setup window expired; restart the RunPilot service to try again"})
 		return
 	}
 	var input struct {
