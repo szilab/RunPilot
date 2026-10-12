@@ -651,6 +651,10 @@ func (c *Controller) ChangeAdminPassword(username, currentHash, nextHash string)
 
 func (c *Controller) SetBearerAuth(enabled bool) error { return c.config.SetBearerAuth(enabled) }
 
+func (c *Controller) SetWebSocketPayloadMode(mode string) error {
+	return c.config.SetWebSocketPayloadMode(mode)
+}
+
 func (c *Controller) StorageLocations(ctx context.Context) []storage.Descriptor {
 	return c.storage.List(ctx)
 }

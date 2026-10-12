@@ -180,6 +180,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/admin/data-root", s.handleDataRootGet)
 	api.HandleFunc("POST /api/v1/admin/data-root", s.handleDataRootChange)
 	api.HandleFunc("PUT /api/v1/admin/bearer-auth", s.handleBearerAuthChange)
+	api.HandleFunc("PUT /api/v1/admin/websocket-payload-mode", s.handleWebSocketPayloadModeChange)
 	api.HandleFunc("GET /api/v1/plugins/catalog", s.handlePluginCatalog)
 	api.HandleFunc("POST /api/v1/plugins/{id}/install", s.handlePluginInstall)
 	api.HandleFunc("DELETE /api/v1/plugins/{id}", s.handlePluginUninstall)
@@ -639,6 +640,25 @@ func (s *Server) handleBearerAuthChange(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]bool{"enabled": input.Enabled})
 }
 
+func (s *Server) handleWebSocketPayloadModeChange(w http.ResponseWriter, r *http.Request) {
+	if !s.csrfValid(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "csrf validation failed"})
+		return
+	}
+	var input struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&input); err != nil || (input.Mode != "disabled" && input.Mode != "optional" && input.Mode != "required") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be disabled, optional, or required"})
+		return
+	}
+	if err := s.ctrl.SetWebSocketPayloadMode(input.Mode); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not save WebSocket payload encryption setting"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"mode": input.Mode})
+}
+
 func (s *Server) handleDataRootGet(w http.ResponseWriter, r *http.Request) {
 	status := ""
 	if path := config.LocatorPath(); path != "" {
@@ -803,15 +823,16 @@ func (s *Server) handlePluginRescan(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	cfg := s.ctrl.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":                 "RunPilot",
-		"version":              version.Version,
-		"dataDir":              s.ctrl.DataDir(),
-		"bearerAuthEnabled":    cfg.Server.BearerAuthEnabled,
-		"username":             cfg.Server.AdminUsername,
-		"configPath":           s.ctrl.ConfigPath(),
-		"bind":                 cfg.Server.Bind,
-		"capabilities":         platform.CurrentCapabilities(),
-		"websocketPayloadMode": requestWebSocketPayloadMode(r, cfg.Server.WebSocketPayloadMode),
+		"name":                           "RunPilot",
+		"version":                        version.Version,
+		"dataDir":                        s.ctrl.DataDir(),
+		"bearerAuthEnabled":              cfg.Server.BearerAuthEnabled,
+		"username":                       cfg.Server.AdminUsername,
+		"configPath":                     s.ctrl.ConfigPath(),
+		"bind":                           cfg.Server.Bind,
+		"capabilities":                   platform.CurrentCapabilities(),
+		"websocketPayloadMode":           requestWebSocketPayloadMode(r, cfg.Server.WebSocketPayloadMode),
+		"websocketPayloadModeConfigured": cfg.Server.WebSocketPayloadMode,
 	})
 }
 

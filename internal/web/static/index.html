@@ -101,6 +101,15 @@
                 <label class="check"><input id="bearerAuthEnabled" type="checkbox"> Allow API token authentication</label>
                 <p class="meta">For CLI tools and integrations. Browser sessions use your administrator account. Disabling this blocks API token access for external clients.</p>
               </section>
+              <section class="general-settings-card">
+                <h3>WebSocket payload encryption</h3>
+                <form id="websocketPayloadModeForm" class="settings-form">
+                  <label for="websocketPayloadMode">Encryption mode<select id="websocketPayloadMode"><option value="disabled">Disabled</option><option value="optional">Optional</option><option value="required">Required</option></select></label>
+                  <p class="meta">Adds encryption inside the WebSocket connection. Required mode rejects clients that cannot negotiate encryption. Use RunPilot over HTTPS; plain HTTP connections cannot use this mode.</p>
+                  <p id="websocketPayloadModeStatus" class="meta" role="status"></p>
+                  <div class="dialog-actions"><button id="websocketPayloadModeSave" class="button primary" type="submit">Save and reconnect</button></div>
+                </form>
+              </section>
           </div><div class="settings-aside">
             <article class="general-settings-card"><h3>Workspace actions</h3><button id="generalRestartButton" class="settings-action" type="button"><span class="feature-icon blue" aria-hidden="true">↻</span><span><strong>Restart RunPilot</strong><small>Reconnect after a service restart</small></span><span aria-hidden="true">›</span></button><button id="managePluginsButton" class="settings-action" type="button"><span class="feature-icon violet" aria-hidden="true">◇</span><span><strong>Manage plugins</strong><small>Browse, enable, and configure</small></span><span aria-hidden="true">›</span></button></article>
             <article class="general-settings-card"><h3>System information</h3><div id="settingsHostFacts" class="settings-host-facts"><p class="meta">Loading host information…</p></div></article>

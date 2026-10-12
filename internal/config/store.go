@@ -198,6 +198,13 @@ func (s *Store) SetBearerAuth(enabled bool) error {
 	return s.Update(func(cfg *model.Config) error { cfg.Server.BearerAuthEnabled = enabled; return nil })
 }
 
+func (s *Store) SetWebSocketPayloadMode(mode string) error {
+	if mode != "disabled" && mode != "optional" && mode != "required" {
+		return errors.New("invalid WebSocket payload encryption mode")
+	}
+	return s.Update(func(cfg *model.Config) error { cfg.Server.WebSocketPayloadMode = mode; return nil })
+}
+
 func (s *Store) ResetAdmin() error {
 	return s.Update(func(cfg *model.Config) error {
 		cfg.Server.AdminUsername = ""
@@ -254,6 +261,9 @@ func normalize(c *model.Config) error {
 	}
 	if c.Server.BasePath == "" {
 		c.Server.BasePath = "/"
+	}
+	if c.Server.WebSocketPayloadMode != "optional" && c.Server.WebSocketPayloadMode != "required" {
+		c.Server.WebSocketPayloadMode = "disabled"
 	}
 	if c.Server.Token == "" {
 		token, err := randomToken()

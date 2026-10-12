@@ -726,6 +726,7 @@ async function loadSystemInfo() {
   window.runPilotWebSocketPayloadMode = systemInfo?.websocketPayloadMode || "disabled";
   if (connectionOnline) setConnected(true);
   $("bearerAuthEnabled").checked=!!systemInfo.bearerAuthEnabled;
+  $("websocketPayloadMode").value=systemInfo.websocketPayloadModeConfigured || systemInfo.websocketPayloadMode || "disabled";
   const username = systemInfo.username || "Administrator";
   $("accountName").textContent = username;
   $("accountMenuName").textContent = username;
@@ -822,6 +823,21 @@ $("passwordChangeForm").addEventListener("submit",async e=>{e.preventDefault();c
 $("logoutButton").addEventListener("click",async()=>{hostDashboard.stop();try{await api("api/v1/auth/logout",{method:"POST"});}finally{authenticated=false;location.reload();}});
 $("bearerAuthEnabled").addEventListener("change",async()=>{try{const result=await api("api/v1/admin/bearer-auth",{method:"PUT",body:JSON.stringify({enabled:$("bearerAuthEnabled").checked})});$("bearerAuthEnabled").checked=result.enabled;}catch(error){$("bearerAuthEnabled").checked=!$("bearerAuthEnabled").checked;toast(error.message);}});
 
+$("websocketPayloadModeForm").addEventListener("submit",async event=>{
+  event.preventDefault();
+  const mode=$("websocketPayloadMode").value, status=$("websocketPayloadModeStatus"), button=$("websocketPayloadModeSave");
+  button.disabled=true; status.textContent="Saving WebSocket encryption setting…";
+  try {
+    const result=await api("api/v1/admin/websocket-payload-mode",{method:"PUT",body:JSON.stringify({mode})});
+    status.textContent="Saved. Reconnecting to apply the new mode…";
+    systemInfo.websocketPayloadModeConfigured=result.mode;
+    setTimeout(()=>location.reload(),500);
+  } catch(error) {
+    status.textContent=`Could not save setting: ${error.message}`;
+    button.disabled=false;
+  }
+});
+
 async function loadDataRootSettings() {
   try {
     const root = await api("api/v1/admin/data-root");
@@ -849,12 +865,12 @@ $("dataRootChangeForm").addEventListener("submit",async e=>{e.preventDefault();c
     $("loginDialog").showModal();
     return;
   }
+  try { await loadSystemInfo(); } catch (e) { if (e.message !== "Unauthorized") toast(e.message); }
   await loadDataRootSettings();
   setConnected(false);
   startConnectionMonitor();
   try { await connectApplicationSocket(); } catch (e) { toast(e.message); }
   await refresh();
-  try { await loadSystemInfo(); } catch (e) { if (e.message !== "Unauthorized") toast(e.message); }
   hostDashboard.setActive(currentPage === "overview");
   hostDashboard.start();
   overviewWidgets.setActive(currentPage === "overview");
