@@ -56,19 +56,20 @@
     }
     async mountEntry(entry) {
       const generation = entry.generation;
-      entry.mounted = true;
+      entry.mounted = true; entry.busy = true;
       try {
         const cleanup = await entry.widget.mount(entry.body);
         if (generation !== entry.generation) { if (typeof cleanup === "function") cleanup(); return; }
         if (typeof cleanup === "function") entry.disposeMount = cleanup;
       } catch (error) { if (generation === entry.generation) this.showError(entry, error); }
+      finally { if (generation === entry.generation) entry.busy = false; }
     }
     async refreshEntry(entry) {
       if (!this.active || !entry.mounted || !entry.widget.refresh || entry.busy) return;
       const generation = entry.generation; entry.busy = true;
       try { await entry.widget.refresh(entry.body); }
       catch (error) { if (generation === entry.generation) this.showError(entry, error); }
-      finally { entry.busy = false; }
+      finally { if (generation === entry.generation) entry.busy = false; }
     }
     refresh() { return Promise.all([...this.entries.values()].map(entry => this.refreshEntry(entry))); }
     showError(entry, error) {

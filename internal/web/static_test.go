@@ -44,7 +44,7 @@ func TestCoreShellLeavesFeatureNavigationToPlugins(t *testing.T) {
 		`document.querySelector("nav").append(button)`,
 		`pluginNavigation.set(entry.id, { ...entry, button, page, extension })`,
 		`if (!Object.hasOwn(pageMeta, page) && !registered) return;`,
-		`if (pluginSnapshot) { pluginStatuses = pluginSnapshot.plugins || [];`,
+		`if (pluginSnapshot && JSON.stringify(pluginSnapshot) !== lastPluginSnapshot)`,
 		`if (frontendSnapshot) await loadPluginExtensions(frontendSnapshot);`,
 	} {
 		if !strings.Contains(script, want) {
@@ -128,7 +128,7 @@ func TestPluginSettingsUseSharedSectionsAndNamedNavigationIcons(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`.rp-masonry { columns:var(--rp-masonry-columns,2);`, `.plugin-settings-grid { --rp-masonry-columns:3;`, `.plugin-settings-section > form`, `.plugin-settings-section { grid-column:1 / -1;`, `.plugin-settings-section .form-grid { grid-template-columns:minmax(0,1fr); }`, `.plugin-settings-grid .plugin-setting-state { white-space:normal`, `.plugin-settings-grid .plugin-setting-actions { grid-column:2; grid-row:1;`, `.plugin-settings-section .plugin-settings-actions { display:flex; align-items:center; justify-content:flex-end;`, `.plugin-settings-section .plugin-settings-actions button[type="submit"] { order:1; }`, `.plugin-settings-footer > .plugin-settings-actions { grid-column:2; grid-row:1; }`} {
+	for _, want := range []string{`.rp-masonry { columns:var(--rp-masonry-columns,2);`, `.plugin-settings-grid { --rp-masonry-columns:2;`, `.plugin-settings-section > form`, `.plugin-settings-section { grid-column:1 / -1;`, `.plugin-settings-section .form-grid { grid-template-columns:minmax(0,1fr); }`, `.plugin-settings-grid .plugin-setting-state { white-space:normal`, `.plugin-settings-grid .plugin-setting-actions { grid-column:2; grid-row:1;`, `.plugin-settings-section .plugin-settings-actions { display:flex; align-items:center; justify-content:flex-end;`, `.plugin-settings-section .plugin-settings-actions button[type="submit"] { order:1; }`, `.plugin-settings-footer > .plugin-settings-actions { grid-column:1; grid-row:2; }`} {
 		if !strings.Contains(string(styles), want) {
 			t.Fatalf("shared settings layout is missing %q", want)
 		}
@@ -378,8 +378,8 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(styles), ".shell.sidebar-collapsed") || !strings.Contains(string(styles), "main { padding: 17px 21px 24px;") {
-		t.Fatal("sidebar collapse or reduced main padding styles are missing")
+	if !strings.Contains(string(styles), ".shell.sidebar-collapsed") || !strings.Contains(string(styles), "main { min-width: 0; padding: 28px clamp(20px, 3vw, 48px) 32px;") {
+		t.Fatal("sidebar collapse or responsive main padding styles are missing")
 	}
 	for _, want := range []string{".nav-label { overflow:hidden; text-overflow:ellipsis; }", ".sidebar-toggle { display:flex; align-items:center; gap:12px; width:100%; height:42px; min-height:42px; overflow:hidden;"} {
 		if !strings.Contains(string(styles), want) {

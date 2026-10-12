@@ -47,6 +47,11 @@ export async function activate(runpilot) {
   let root = null, snapshot = null, error = "", loading = false, modal = null, terminal = null, widgetBody = null, widgetLoading = false;
   const busy = new Set();
   const listeners = [];
+  let snapshotRequest = null;
+  function loadSnapshot() {
+    if (!snapshotRequest) snapshotRequest = rpc("docker.snapshot").finally(() => { snapshotRequest = null; });
+    return snapshotRequest;
+  }
   async function rpc(method, params = {}) {
     const result = await runpilot.ws.call(PLUGIN, method, params);
     if (result?.error) throw new Error(result.error.message || "Docker request failed");
@@ -62,7 +67,7 @@ export async function activate(runpilot) {
     const running = item.state === "running";
     const disabled = !managed || !ready || busy.has(item.id);
     const reason = !managed ? "External Compose containers are read only" : "";
-    return `<div class="docker-plugin-container"><span class="docker-plugin-dot ${esc(item.tone || "gray")}"></span><div><strong>${esc(item.service || item.name)}</strong><small>${esc(item.image || "")} · ${esc(item.status || item.state || "unknown")}${item.health ? ` · ${esc(item.health)}` : ""}</small></div><div class="docker-plugin-actions">${iconButton("▶", "Start container", "container-start", item.id, disabled || running, false, reason)}${iconButton("■", "Stop container", "container-stop", item.id, disabled || !running, false, reason)}${iconButton("🗑", "Delete stopped container", "container-delete", item.id, disabled || running, true, reason)}${iconButton("↪", "Open terminal", "terminal", item.id, disabled || !running, false, reason)}${iconButton("▤", "View logs", "logs", item.id, !ready || busy.has(item.id))}</div></div>`;
+    return `<div class="docker-plugin-container"><span class="docker-plugin-dot ${esc(item.tone || "gray")}"></span><div><strong>${esc(item.service || item.name)}</strong><small>${esc(item.image || "")} · ${esc(item.status || item.state || "unknown")}${item.health ? ` · ${esc(item.health)}` : ""}</small></div><div class="docker-plugin-actions">${iconButton("▶", "Start container", "container-start", item.id, disabled || running, false, reason)}${iconButton("■", "Stop container", "container-stop", item.id, disabled || !running, false, reason)}${iconButton("×", "Delete stopped container", "container-delete", item.id, disabled || running, true, reason)}${iconButton("↪", "Open terminal", "terminal", item.id, disabled || !running, false, reason)}${iconButton("▤", "View logs", "logs", item.id, !ready || busy.has(item.id))}</div></div>`;
   }
   function projectCard(item, ready) {
     const managed = !!item.managed, locked = busy.has(item.name);
@@ -86,12 +91,12 @@ export async function activate(runpilot) {
   function render() {
     if (!root) return;
     const ready = !!snapshot?.runtime?.available;
-    root.innerHTML = `<div class="docker-plugin"><div class="docker-plugin-toolbar"><div><h2>Docker</h2><p class="meta">Compose projects and Docker resources</p></div><div class="docker-plugin-actions">${button("Refresh", "refresh", "")}${button("Create project", "project-create", "", !ready)}${button("Create volume", "volumes-create", "", !ready)}${button("Create network", "networks-create", "", !ready)}</div></div>${error ? `<div class="notice" role="alert">${esc(error)}</div>` : ""}${!ready ? `<div class="notice" role="status"><strong>Docker unavailable</strong> ${esc(snapshot?.runtime?.message || (loading ? "Checking Docker…" : "Docker status has not been checked."))}${snapshot?.runtime?.identity ? ` Running as ${esc(snapshot.runtime.identity)}.` : ""}${snapshot?.runtime?.diagnostic ? `<p class="meta docker-plugin-diagnostic">${esc(snapshot.runtime.diagnostic)}</p>` : ""}${permissionHelp(snapshot?.runtime)}</div>` : ""}<section><h3>Compose projects</h3><div class="docker-plugin-grid docker-plugin-projects rp-masonry">${(snapshot?.projects || []).map(item => projectCard(item, ready)).join("") || '<p class="empty">No Compose projects found.</p>'}</div></section><div class="docker-plugin-grid docker-plugin-resources"><section><h3>Volumes</h3><div class="docker-plugin-card">${(snapshot?.volumes || []).map(v => resourceRow(v, "volumes", ready)).join("") || '<p class="meta">No Docker volumes found.</p>'}</div></section><section><h3>Networks</h3><div class="docker-plugin-card">${(snapshot?.networks || []).map(n => resourceRow(n, "networks", ready)).join("") || '<p class="meta">No Docker networks found.</p>'}</div></section></div></div>`;
+    root.innerHTML = `<div class="docker-plugin"><div class="docker-plugin-toolbar"><div><h2>Workspace</h2><p class="meta">${(snapshot?.projects || []).length} projects · ${(snapshot?.volumes || []).length} volumes · ${(snapshot?.networks || []).length} networks</p></div><div class="docker-plugin-actions">${button("Refresh", "refresh", "")}${button("Create project", "project-create", "", !ready)}${button("Create volume", "volumes-create", "", !ready)}${button("Create network", "networks-create", "", !ready)}</div></div>${error ? `<div class="notice" role="alert">${esc(error)}</div>` : ""}${!ready ? `<div class="notice" role="status"><strong>Docker unavailable</strong> ${esc(snapshot?.runtime?.message || (loading ? "Checking Docker…" : "Docker status has not been checked."))}${snapshot?.runtime?.identity ? ` Running as ${esc(snapshot.runtime.identity)}.` : ""}${snapshot?.runtime?.diagnostic ? `<p class="meta docker-plugin-diagnostic">${esc(snapshot.runtime.diagnostic)}</p>` : ""}${permissionHelp(snapshot?.runtime)}</div>` : ""}<section><h3>Compose projects</h3><div class="docker-plugin-grid docker-plugin-projects rp-masonry">${(snapshot?.projects || []).map(item => projectCard(item, ready)).join("") || '<p class="empty">No Compose projects found.</p>'}</div></section><div class="docker-plugin-grid docker-plugin-resources"><section><h3>Volumes</h3><div class="docker-plugin-card">${(snapshot?.volumes || []).map(v => resourceRow(v, "volumes", ready)).join("") || '<p class="meta">No Docker volumes found.</p>'}</div></section><section><h3>Networks</h3><div class="docker-plugin-card">${(snapshot?.networks || []).map(n => resourceRow(n, "networks", ready)).join("") || '<p class="meta">No Docker networks found.</p>'}</div></section></div></div>`;
   }
   async function refresh() {
     if (loading) return;
     loading = true; render();
-    try { snapshot = await rpc("docker.snapshot"); error = ""; }
+    try { snapshot = await loadSnapshot(); error = ""; }
     catch (cause) { error = cause.message; }
     finally { loading = false; render(); renderWidget(); }
   }
@@ -156,7 +161,7 @@ export async function activate(runpilot) {
     const [kind, operation] = type.split("-");
     if (operation === "delete") {
       const message = kind === "project" ? `Delete managed project ${key} and its files?` : kind === "volumes" ? `Permanently delete Docker volume ${key} and its data?` : kind === "networks" ? `Delete Docker network ${key}?` : `Delete stopped container ${key}?`;
-      if (!window.confirm(message)) return;
+      if (!await (runpilot.ui.confirm ? runpilot.ui.confirm({title:"Confirm deletion",message,confirmLabel:"Delete",danger:true}) : window.confirm(message))) return;
     }
     const method = kind === "project" ? (operation === "delete" ? "docker.projects.delete" : "docker.projects.action") : kind === "container" ? "docker.containers.action" : `docker.${kind}.${operation}`;
     const params = kind === "project" ? {name:key,action:operation} : kind === "container" ? {id:key,action:operation} : {name:key};
@@ -171,6 +176,7 @@ export async function activate(runpilot) {
   function renderWidget() {
     if (!widgetBody?.isConnected) return;
     widgetBody.replaceChildren();
+    if (!snapshot && !error) { widgetBody.textContent = "Checking Docker…"; return; }
     if (error) {const note=document.createElement("p");note.setAttribute("role","alert");note.textContent=error;widgetBody.append(note);return;}
     if (!snapshot?.runtime?.available) {const note=document.createElement("p");note.className="overview-widget-note";note.textContent=snapshot?.runtime?.message || "Docker unavailable";widgetBody.append(note);if(snapshot?.runtime?.diagnostic) {const detail=document.createElement("p");detail.className="overview-widget-note docker-plugin-diagnostic";detail.textContent=snapshot.runtime.diagnostic;widgetBody.append(detail);}if(permissionHelp(snapshot?.runtime)) {const help=document.createElement("p");help.className="overview-widget-note docker-plugin-permission-help";const link=document.createElement("a");link.href=ASUSTOR_DOCKER_DOC;link.target="_blank";link.rel="noopener noreferrer";link.textContent="ASUSTOR Docker permission guidance";help.append(link);widgetBody.append(help);}}
     const summary=dockerOverviewSummary(snapshot);
@@ -183,12 +189,12 @@ export async function activate(runpilot) {
   async function refreshWidget() {
     if (!widgetBody?.isConnected || widgetLoading) return;
     widgetLoading=true;
-    try { snapshot=await rpc("docker.snapshot"); error=""; }
+    try { snapshot=await loadSnapshot(); error=""; }
     catch(cause) { error=cause.message; }
     finally { widgetLoading=false;renderWidget(); }
   }
-  runpilot.overview.register({id:"docker.summary",title:"Docker",size:"medium",order:40,mount(body){widgetBody=body;return refreshWidget();},refresh:refreshWidget,dispose(){widgetBody=null;}});
-  runpilot.navigation.register({id:"docker",title:"Docker",icon:{src:new URL("./icon.svg",import.meta.url).href},render:page => {root = page;root.removeEventListener("click",click);root.addEventListener("click",click);render();void refresh();}});
+  runpilot.overview.register({id:"docker.summary",title:"Docker",size:"medium",order:40,mount(body){widgetBody=body;renderWidget();return refreshWidget();},refresh:refreshWidget,dispose(){widgetBody=null;}});
+  runpilot.navigation.register({id:"docker",title:"Docker",description:"Manage Compose projects, containers, volumes, and networks.",icon:{src:new URL("./icon.svg",import.meta.url).href},render:page => {root = page;root.removeEventListener("click",click);root.addEventListener("click",click);render();void refresh();}});
   listeners.push(runpilot.ws.on(PLUGIN,"process.session.output",event => { if (terminal?.id === event?.id) terminal.term.write(dec(event.data)); }));
   listeners.push(runpilot.ws.on(PLUGIN,"process.session.error",event => { if (terminal?.id === event?.id) terminal.term.writeln(`\r\n${event.message || "Terminal I/O error"}`); }));
   listeners.push(runpilot.ws.on(PLUGIN,"process.session.exit",event => { if (terminal?.id === event?.id) {terminal.term.writeln(`\r\n[session ${event.reason || "exited"}]`);terminal.id = "";} }));

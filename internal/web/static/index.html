@@ -13,11 +13,11 @@
       <div class="sidebar-head">
         <div class="brand">
           <img class="brand-mark" src="runpilot-logo.png" alt="RunPilot logo">
-          <div class="brand-text"><strong>RunPilot</strong><span>Server automation</span></div>
+          <div class="brand-text"><strong>RunPilot</strong><span>Host management</span></div>
         </div>
       </div>
-      <nav>
-        <button class="nav active" type="button" data-page="overview" title="Overview"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><rect x="14" y="14" width="6" height="6"/></svg><span class="nav-label">Overview</span></button>
+      <nav aria-label="Main navigation">
+        <button class="nav active" type="button" data-page="overview" aria-current="page" title="Overview"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><rect x="14" y="14" width="6" height="6"/></svg><span class="nav-label">Overview</span></button>
       </nav>
       <div class="sidebar-bottom">
         <button class="nav sidebar-settings-nav" type="button" data-page="settings" title="Settings"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.4 1A7 7 0 0 0 14.5 6L14.2 3h-4.4L9.5 6a7 7 0 0 0-2 .9l-2.4-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.4-1a7 7 0 0 0 2 .9l.3 3h4.4l.3-3a7 7 0 0 0 2-.9l2.4 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg><span class="nav-label">Settings</span></button>
@@ -35,7 +35,7 @@
 
     <main>
       <header>
-        <h1 id="pageTitle">Overview</h1>
+        <div class="page-heading"><span class="eyebrow">SERVER WORKSPACE</span><h1 id="pageTitle" tabindex="-1">Overview</h1><p id="pageDescription" class="page-description">A live view of your host and services.</p></div>
         <div class="header-actions">
           <div class="account-header-actions">
           <button id="themeToggle" class="button secondary theme-toggle" type="button" aria-pressed="false" title="Switch to dark theme">☾ <span>Dark theme</span></button>
@@ -47,6 +47,7 @@
 
       <section id="overviewPage" class="page active">
         <div id="hostDashboard" class="host-dashboard"></div>
+        <section class="overview-section plugin-overview" aria-label="Plugin summaries"><div id="overviewWidgets" class="overview-widgets"></div></section>
       </section>
 
       <section id="legacyStoragePage" class="page">
@@ -74,6 +75,11 @@
       </section>
 
       <section id="settingsPage" class="page">
+        <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+          <button id="generalSettingsTab" class="settings-tab" role="tab" aria-selected="true" aria-controls="generalSettingsPanel" tabindex="0">General</button>
+          <button id="pluginSettingsTab" class="settings-tab" role="tab" aria-selected="false" aria-controls="pluginSettingsPanel" tabindex="-1">Plugins</button>
+        </div>
+        <div id="generalSettingsPanel" role="tabpanel" aria-labelledby="generalSettingsTab">
         <section class="overview-section general-settings">
           <div class="section-head"><h2>General</h2></div>
           <div class="general-settings-grid">
@@ -107,7 +113,10 @@
             </div>
           </div>
         </section>
-        <section class="overview-section"><div class="section-head"><h2>Plugins</h2><div class="header-actions"><button id="restartApplicationButton" class="button danger" type="button">Restart RunPilot</button><button class="button secondary" type="button" onclick="refreshPluginCatalog()">Check for updates</button></div></div><div id="pluginSettings" class="plugin-settings-grid rp-masonry"></div></section>
+        </div>
+        <div id="pluginSettingsPanel" role="tabpanel" aria-labelledby="pluginSettingsTab" hidden>
+        <section class="overview-section"><div class="section-head"><div><h2>Plugins</h2><p class="meta">Extend your workspace. Configure each plugin in its card.</p></div><div class="header-actions"><button id="restartApplicationButton" class="button secondary" type="button">Restart RunPilot</button><button class="button secondary" type="button" onclick="refreshPluginCatalog()">Check for updates</button></div></div><div class="plugin-filter-bar"><label class="search-field"><span>Find a plugin</span><input id="pluginSearch" type="search" placeholder="Search by name or description" autocomplete="off"></label><p id="pluginSearchStatus" class="meta" role="status"></p></div><div id="pluginSettings" class="plugin-settings-grid rp-masonry"></div></section>
+        </div>
       </section>
     </main>
   </div>
@@ -115,11 +124,11 @@
   <dialog id="loginDialog" class="dialog small">
     <form method="dialog" id="loginForm">
       <div class="dialog-head">
-        <div><h2>Log in to RunPilot</h2><p>Enter your administrator account.</p></div>
+        <div><img class="auth-mark" src="runpilot-logo.png" alt=""><span class="eyebrow">YOUR SERVER WORKSPACE</span><h2>Welcome back</h2><p>Sign in to manage your RunPilot host.</p></div>
       </div>
       <label>Username<input id="loginUsername" autocomplete="username" required></label>
       <label>Password<input id="loginPassword" type="password" autocomplete="current-password" required></label>
-      <div id="loginError" class="form-error hidden"></div>
+      <div id="loginError" class="form-error hidden" role="alert"></div>
       <div class="dialog-actions">
         <button class="button primary" value="default">Log in</button>
       </div>
@@ -127,7 +136,7 @@
   </dialog>
 
 
-  <dialog id="textEditorDialog" class="dialog log-dialog"><div class="dialog-head"><div><h2 id="textEditorTitle">Fájl szerkesztése</h2><p id="textEditorPath"></p></div><button class="icon-btn" id="closeTextEditor" type="button">×</button></div><div class="editor-shell"><pre id="textHighlight" aria-hidden="true"><code></code></pre><textarea id="textEditorContent" class="text-editor" spellcheck="false"></textarea></div><div class="dialog-actions"><button class="button secondary" id="cancelTextEditor" type="button">Mégse</button><button class="button primary" id="saveTextEditor" type="button">Mentés</button></div></dialog>
+  <dialog id="textEditorDialog" class="dialog log-dialog"><div class="dialog-head"><div><h2 id="textEditorTitle">Fájl szerkesztése</h2><p id="textEditorPath"></p></div><button class="icon-btn" id="closeTextEditor" type="button" aria-label="Close editor">×</button></div><div class="editor-shell"><pre id="textHighlight" aria-hidden="true"><code></code></pre><textarea id="textEditorContent" class="text-editor" spellcheck="false"></textarea></div><div class="dialog-actions"><button class="button secondary" id="cancelTextEditor" type="button">Mégse</button><button class="button primary" id="saveTextEditor" type="button">Mentés</button></div></dialog>
 
   <div id="toast" class="toast hidden"></div>
   <script src="secure-websocket.js"></script>

@@ -7,6 +7,20 @@ const cachePrefix = "runpilot.browser.routes:" + encodeURIComponent(runtime.scop
 const id = value => typeof value === "string" && /^[A-Za-z0-9_-]{32}$/.test(value);
 function randomID() { return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(24)))).replace(/\+/g, "-").replace(/\//g, "_"); }
 function bindNavigation(client, tunnel) { sessions.set(client, tunnel); navigationLeases.set(client, Date.now() + 60000); }
+function localError(event, message, status) {
+  if (event.request.mode !== "navigate") return new Response(message, {status, headers:{"Content-Type":"text/plain; charset=utf-8", "Cache-Control":"no-store"}});
+  const safe = String(message).slice(0, 1024).replace(/[&<>"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[character]));
+  // A local navigation failure is a package-owned screen. Upstream responses
+  // and subresource errors retain their original payloads and HTTP semantics.
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Web App unavailable · RunPilot</title><style>
+    :root{color-scheme:light;--bg:#eaf0f8;--card:#f9fbff;--text:#17243b;--muted:#5d6d85;--border:#d6e0ee}
+    @media(prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#101827;--card:#182338;--text:#edf3ff;--muted:#9cacc5;--border:#2d3c54}}
+    :root[data-theme="dark"]{color-scheme:dark;--bg:#101827;--card:#182338;--text:#edf3ff;--muted:#9cacc5;--border:#2d3c54}
+    *{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;padding:24px;font:15px/1.6 system-ui,sans-serif;background:var(--bg);color:var(--text)}
+    main{width:min(460px,100%);padding:32px;border:1px solid var(--border);border-radius:20px;background:var(--card);box-shadow:0 16px 60px rgba(8,16,32,.12)}small{color:var(--muted);font-size:12px;letter-spacing:.08em}h1{margin:12px 0;font-size:24px;line-height:1.3;letter-spacing:-.03em}p{color:var(--muted);margin:12px 0 0;overflow-wrap:anywhere}
+    </style><script>try{const theme=localStorage.getItem("runpilot.theme");if(theme==="light"||theme==="dark")document.documentElement.dataset.theme=theme}catch{}</script></head><body><main><small>RUNPILOT · WEB APPS</small><h1>Web App unavailable</h1><p role="alert">${safe}</p><p>Check that the upstream service is running, then open this app again from RunPilot.</p></main></body></html>`;
+  return new Response(html, {status, headers:{"Content-Type":"text/html; charset=utf-8", "Cache-Control":"no-store", "Content-Security-Policy":"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"}});
+}
 function validPublication(p) {
   if (!p || p.runtimeId !== runtime.runtimeId || p.owner !== runtime.owner || !id(p.publicationId) || p.scope !== runtime.scope || p.workerURL !== runtime.workerURL || p.assets !== runtime.assets) return false;
   const prefix = new URL(p.publicPrefix, location.origin);
@@ -108,7 +122,7 @@ self.addEventListener("fetch", event => {
   if (url.pathname.startsWith(navigationPrefix)) {
     event.respondWith((async () => {
       const key = url.pathname.slice(navigationPrefix.length), handoff = handoffs.get(key); handoffs.delete(key);
-      if (event.request.mode !== "navigate" || !handoff || handoff.expires <= Date.now() || handoff.tunnel.dead || !event.resultingClientId) return new Response("Navigation expired. Open this Web App again from RunPilot.", { status: 410 });
+      if (event.request.mode !== "navigate" || !handoff || handoff.expires <= Date.now() || handoff.tunnel.dead || !event.resultingClientId) return localError(event, "Navigation expired. Open this Web App again from RunPilot.", 410);
       bindNavigation(event.resultingClientId, handoff.tunnel);
       return new Response(null, { status: 302, headers: { Location: handoff.url, "Cache-Control": "no-store" } });
     })()); return;
@@ -116,17 +130,17 @@ self.addEventListener("fetch", event => {
   const tunnel = sessions.get(event.clientId) || sessions.get(event.resultingClientId) || sessions.get(event.replacesClientId);
   if (tunnel) {
     event.respondWith((async () => {
-      if (tunnel.dead) return new Response("Gateway expired. Open this Web App again from RunPilot.", { status: 502 });
+      if (tunnel.dead) return localError(event, "Gateway expired. Open this Web App again from RunPilot.", 502);
       const prefix = tunnel.config.publicPrefix;
       if (url.pathname === runtime.assets + "websocket-shim.js") return fetch(event.request);
-      if (!(url.pathname === prefix || url.pathname.startsWith(prefix + "/"))) return new Response("Request outside gateway publication", { status: 403 });
+      if (!(url.pathname === prefix || url.pathname.startsWith(prefix + "/"))) return localError(event, "Request outside gateway publication", 403);
       if (event.resultingClientId) bindNavigation(event.resultingClientId, tunnel);
       try {
         const response = await tunnel.request(event.request);
         if (event.request.mode === "navigate" && /text\/html\b/i.test(response.headers.get("content-type") || "")) return await injectWebSocketShim(response);
         return response;
       }
-      catch (error) { return new Response(error.message || "Encrypted gateway failed", { status: 502, headers: { "Content-Type": "text/plain" } }); }
+      catch (error) { return localError(event, error.message || "Encrypted gateway failed", 502); }
     })()); return;
   }
   // Normal management clients and unbound subresources use ordinary networking.
@@ -137,7 +151,7 @@ self.addEventListener("fetch", event => {
     const config = [...guards.values()].reverse().find(p => url.pathname === p.publicPrefix || url.pathname.startsWith(p.publicPrefix + "/"));
     if (!config) return fetch(event.request);
     try { return await localBootstrap(config); }
-    catch { return new Response("Gateway expired. Open this Web App again from RunPilot.", { status: 503 }); }
+    catch { return localError(event, "Gateway expired. Open this Web App again from RunPilot.", 503); }
   })());
 });
 

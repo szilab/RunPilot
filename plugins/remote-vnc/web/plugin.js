@@ -34,7 +34,7 @@ function clearCredentials(state) {
 }
 
 export async function activate(runpilot) {
-  const call = (method, params = {}) => runpilot.ws.call(PLUGIN, method, params);
+  const call = async (method, params = {}) => { const result = await runpilot.ws.call(PLUGIN, method, params); if (result?.error) throw new Error(result.error.message || "Plugin request failed"); return result; };
   let page = null, targets = [], message = "", active = null, headerAction = null, disposed = false;
 
   function addTargetDialog(existing = null) {
@@ -55,7 +55,7 @@ export async function activate(runpilot) {
   }
 
   async function deleteTarget(target) {
-    if (!confirm(`Delete VNC target “${target.name}”?`)) return;
+    if (!await (runpilot.ui.confirm ? runpilot.ui.confirm({title:"Delete VNC target?",message:`Remove “${target.name}” from RunPilot? The remote host is unaffected.`,confirmLabel:"Delete target",danger:true}) : confirm(`Delete VNC target “${target.name}”?`))) return;
     try { await call("vnc.targets.delete", { id: target.id }); await loadTargets(); }
     catch (cause) { message = cause.message || "Could not delete target"; renderList(); }
   }
@@ -66,15 +66,15 @@ export async function activate(runpilot) {
     const section = document.createElement("section"); section.className = "vnc-plugin";
     if (message) { const notice = document.createElement("p"); notice.className = "vnc-plugin-notice"; notice.setAttribute("role", "alert"); notice.textContent = message; section.append(notice); message = ""; }
     const list = document.createElement("div"); list.className = "vnc-target-list";
-    if (!targets.length) { const empty = document.createElement("p"); empty.className = "vnc-empty"; empty.textContent = "No VNC targets yet. Add one to get started."; list.append(empty); }
+    if (!targets.length) { const empty = runpilot.ui.EmptyState({title:"No VNC targets yet",message:"Add a target to connect to a remote desktop."}); empty.classList.add("vnc-empty"); list.append(empty); }
     for (const target of targets) {
       const endpoint = `${target.host}${target.port !== 5900 ? `:${target.port}` : ""}`;
       const identity = target.username || "Password requested when required";
-      const card = document.createElement("article"); card.className = "docker-card remote-card vnc-target-card";
-      card.innerHTML = `<div class="docker-card-head"><div class="vnc-target-facts"><h2>${escapeHTML(target.name)}</h2></div></div><div class="vnc-target-meta-row"><div class="vnc-target-facts"><span title="${escapeHTML(endpoint)}">${escapeHTML(endpoint)}</span><small class="vnc-target-identity" title="${escapeHTML(identity)}">${escapeHTML(identity)}</small></div></div>`;
+      const card = document.createElement("article"); card.className = "rp-card vnc-target-card";
+      card.innerHTML = `<div class="vnc-target-card-head"><div class="vnc-target-facts"><h2>${escapeHTML(target.name)}</h2></div></div><div class="vnc-target-meta-row"><div class="vnc-target-facts"><span title="${escapeHTML(endpoint)}">${escapeHTML(endpoint)}</span><small class="vnc-target-identity" title="${escapeHTML(identity)}">${escapeHTML(identity)}</small></div></div>`;
       const actions = document.createElement("div"); actions.className = "vnc-target-actions";
       const button = (label, style, handler) => { const control = document.createElement("button"); control.type = "button"; control.className = `button ${style}`; control.textContent = label; control.addEventListener("click", handler); actions.append(control); };
-      button("Delete", "danger small", () => void deleteTarget(target)); button("Edit", "secondary small", () => addTargetDialog(target)); button("Connect", "primary small", () => openSession(target));
+      button("Connect", "primary small", () => openSession(target)); button("Edit", "secondary small", () => addTargetDialog(target)); button("Delete", "danger small", () => void deleteTarget(target));
       card.querySelector(".vnc-target-meta-row").append(actions); list.append(card);
     }
     section.append(list); page.append(section);
@@ -159,13 +159,13 @@ export async function activate(runpilot) {
   }
 
   runpilot.navigation.register({
-    id: "remote-vnc", title: "VNC", icon: { src: new URL("./icon.svg", import.meta.url).href },
+    id: "remote-vnc", title: "VNC", description: "Connect to and manage your remote desktops.", icon: { src: new URL("./icon.svg", import.meta.url).href },
     headerActions(root) {
       if (active) return;
       const button = document.createElement("button"); button.type = "button"; button.className = "button primary small"; button.textContent = "Add target"; button.addEventListener("click", () => addTargetDialog());
       headerAction = button; root.append(button);
     },
-    render(root) { page = root; if (active) root.append(active.view.element); else void loadTargets(); },
+    render(root) { page = root; if (active) root.append(active.view.element); else { root.replaceChildren(runpilot.ui.EmptyState({title:"Loading VNC targets…",message:"Retrieving your saved desktops."})); void loadTargets(); } },
   });
   return () => { disposed = true; void closeSession(false); };
 }

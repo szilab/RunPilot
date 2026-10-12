@@ -13,6 +13,7 @@ function worker() {
     constructor(config, ticket) { this.config = config; this.ready = Promise.resolve(); this.ticket = ticket; this.dead = false; tunnels.push(this); }
     request(request) {
       const path = new URL(request.url).pathname;
+      if (path.endsWith("/failed")) return Promise.reject(new Error("Upstream <script>alert(1)</script> failed"));
       if (path.endsWith("/document.html")) return Promise.resolve(new Response("<!doctype html><html><head><title>App</title><script>app()</script></head><body>ok</body></html>", { headers: { "Content-Type": "text/html", "Content-Length": "87", ETag: '"before"' } }));
       if (path.endsWith("/large.html")) return Promise.resolve(new Response("x".repeat(70000) + "<head><title>late</title></head>", { headers: { "Content-Type": "text/html" } }));
       return Promise.resolve(new Response(this.ticket.slice(0, 1) + ":" + path));
@@ -55,6 +56,17 @@ function worker() {
   assert.equal(injected.headers.get("content-length"), null); assert.equal(injected.headers.get("etag"), null);
   const late = await w.fetch("/p/app/large.html", { clientId: "first-app" }); const lateHTML = await late.text();
   assert.ok(lateHTML.startsWith("x".repeat(70000))); assert.ok(!lateHTML.includes("websocket-shim.js"), "injection stops at its bounded leading-document limit");
+  const failedDocument = await w.fetch("/p/app/failed", {clientId:"first-app"});
+  assert.equal(failedDocument.status, 502);
+  assert.match(failedDocument.headers.get("content-type"), /text\/html/);
+  const failedHTML = await failedDocument.text();
+  assert.match(failedHTML, /Web App unavailable/);
+  assert.match(failedHTML, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.ok(!failedHTML.includes("<script>alert(1)</script>"), "upstream error executed markup");
+  const failedResource = await w.fetch("/p/app/failed", {clientId:"first-app",mode:"cors"});
+  assert.equal(failedResource.status, 502);
+  assert.match(failedResource.headers.get("content-type"), /text\/plain/);
+  assert.equal(await failedResource.text(), "Upstream <script>alert(1)</script> failed");
   await w.fetch(runtime.assets + "websocket-shim.js", { clientId: "first-app", mode: "cors" });
   assert.ok(w.network.includes(runtime.assets + "websocket-shim.js"), "RunPilot-owned shim script is served same-origin");
   assert.equal(await (await w.fetch("/p/app/login", { replacesClientId: "first-app", resultingClientId: "chrome-next" })).text(), "f:/p/app/login");

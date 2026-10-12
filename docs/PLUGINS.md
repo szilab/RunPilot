@@ -206,3 +206,9 @@ controls. Passwords are never persisted. Core no longer contains the legacy
 RDP/VNC providers, transports, or combined Remote page. Xpra remains a
 temporary internal legacy implementation without normal UI exposure; its
 migration is deferred while reusable host lifecycle capabilities are designed.
+
+Browser regression checks are opt-in: set `RUNPILOT_PLAYWRIGHT_MODULE` to a local
+Playwright module and optionally `RUNPILOT_BROWSER_EXECUTABLE` to its browser,
+then run `go test ./internal/web -run 'Test(UI|WebApps)RealBrowser'`.
+`RUNPILOT_UI_SCREENSHOTS` saves the UI test's light/dark desktop, tablet, and
+mobile captures. These tests use temporary application data and local fixtures.

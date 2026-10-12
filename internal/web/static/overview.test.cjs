@@ -28,6 +28,20 @@ const fixture = {host:{hostname:"desk",os:"linux",architecture:"amd64",cpuAvaila
   widgets.unregisterOwner("good"); assert.equal(root.children.length,1); assert.ok(events.includes("good cleanup")); assert.ok(events.includes("good dispose"));
   widgets.setActive(false); assert.equal(root.children.length,0);
 
+  // Navigation may leave and return while a plugin is still mounting or refreshing.
+  let finishMount, finishRefresh, refreshCalls = 0;
+  const pendingWidgets = new OverviewWidgets(new Element("root"));
+  pendingWidgets.register("async", {id:"async.summary",title:"Async",mount:()=>new Promise(resolve=>{finishMount=resolve;}),refresh:()=>{refreshCalls++;return new Promise(resolve=>{finishRefresh=resolve;});}});
+  pendingWidgets.setActive(true);
+  await pendingWidgets.refresh(); assert.equal(refreshCalls,0,"refresh overlapped initial mount");
+  finishMount(); await new Promise(resolve=>setTimeout(resolve,0));
+  const oldRefresh = pendingWidgets.refresh();
+  pendingWidgets.setActive(false); pendingWidgets.setActive(true);
+  finishRefresh(); await oldRefresh;
+  await pendingWidgets.refresh(); assert.equal(refreshCalls,1,"stale refresh unlocked a new mount");
+  finishMount(); await new Promise(resolve=>setTimeout(resolve,0));
+  pendingWidgets.setActive(false);
+
   const dashboardRoot = new Element("root");
   renderStatus(dashboardRoot, fixture);
   const all = descendants(dashboardRoot);

@@ -13,7 +13,7 @@ test("VNC Add target uses the shared application header action slot", () => {
 });
 
 test("VNC target cards use the same responsive card structure as RDP", () => {
-  assert.match(source, /className = "docker-card remote-card vnc-target-card"/);
+  assert.match(source, /className = "rp-card vnc-target-card"/);
   assert.match(source, /vnc-target-meta-row[\s\S]*?vnc-target-actions/);
   assert.match(styles, /\.vnc-target-list \{ display: grid; grid-template-columns: repeat\(3, minmax\(0, 1fr\)\); gap: 12px; \}/);
   assert.match(styles, /@media \(max-width: 1100px\)/);

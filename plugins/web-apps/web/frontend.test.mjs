@@ -33,7 +33,7 @@ const awaitAuth = await fs.readFile("internal/web/static/auth-storage.js", "utf8
 const fragment = "#" + new URLSearchParams({ "runpilot-publication": JSON.stringify(ids) });
 const entry = rootContext(fragment); await vm.runInNewContext(rootEntry, entry.context);
 assert.equal(entry.context.location.hash, ""); assert.equal(entry.tab.credential, null); assert.equal(entry.shared.credential, null);
-assert.equal(entry.scripts.length, 1); assert.ok(entry.scripts[0].endsWith(`/__runpilot__/browser/${ids.runtime}/bootstrap.js?publication=${ids.publication}`));
+assert.equal(entry.scripts.length, 2); assert.ok(entry.scripts[0].endsWith("/auth-storage.js")); assert.ok(entry.scripts[1].endsWith(`/__runpilot__/browser/${ids.runtime}/bootstrap.js?publication=${ids.publication}`));
 assert.equal(entry.context.RUNPILOT_BROWSER_LAUNCH.ticket, ids.ticket);
 for (const invalid of ["#runpilot-publication=bad-json", "#runpilot-publication=" + "x".repeat(1025), fragment + "&ticket=extra", "#runpilot-publication=" + encodeURIComponent(JSON.stringify({ ...ids, upstreamURL: "https://evil" }))]) {
   const test = rootContext(invalid); await vm.runInNewContext(rootEntry, test.context);
@@ -42,7 +42,7 @@ for (const invalid of ["#runpilot-publication=bad-json", "#runpilot-publication=
 const normal = rootContext("#ordinary-page"); await vm.runInNewContext(rootEntry, normal.context);
 assert.deepEqual(normal.scripts, ["https://host/p/overview-widgets.js", "https://host/p/dashboard.js", "https://host/p/app.js"]); assert.equal(normal.tab.credential, "copied");
 const stale = rootContext("", "runpilot.browser:" + JSON.stringify({ runtime: ids.runtime, publication: ids.publication, handle: "h".repeat(32) }));
-await vm.runInNewContext(rootEntry, stale.context); assert.equal(stale.scripts.length, 1); assert.ok(!stale.scripts[0].endsWith("app.js"));
+await vm.runInNewContext(rootEntry, stale.context); assert.equal(stale.scripts.length, 2); assert.ok(stale.scripts[0].endsWith("auth-storage.js")); assert.ok(!stale.scripts[1].endsWith("app.js"));
 
 const bootstrap = await fs.readFile("plugins/web-apps/web/bootstrap.js", "utf8");
 let registration, initialized, navigated, changed, removed = false;

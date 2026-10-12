@@ -9,11 +9,12 @@ let storageClipboard = null, editingTextPath = null, storageShowHidden = false, 
 let overview = null;
 let systemInfo = null;
 let pluginStatuses = [], pluginBusy = new Set();
+let lastPluginSnapshot = "";
 let pluginDiscoveryErrors = [], pluginRestartRequired = false;
 let pluginCatalog = [], pluginCatalogError = "", pluginCatalogLoaded = false, pluginCatalogLoading = false;
 let pluginExtensions = new Map();
 const pluginNavigation = new Map(), pluginSettings = new Map();
-const overviewWidgets = new RunPilotOverviewWidgets(document.createElement("div"));
+const overviewWidgets = new RunPilotOverviewWidgets($("overviewWidgets"));
 const hostDashboard = new RunPilotDashboard.HostDashboard($("hostDashboard"), api);
 const pluginThemeListeners = new Set();
 let applicationSocket = null, applicationSocketPromise = null, applicationSequence = 0;
@@ -122,6 +123,7 @@ function pluginUI() {
     escape: escapeHtml,
     toast,
     createInteractiveSessionView,
+    confirm: confirmAction,
     theme: Object.freeze({
       get: pluginTheme,
       subscribe: listener => {
@@ -132,7 +134,7 @@ function pluginUI() {
     }),
     Card: ({title="",body="",className=""}={}) => {
       const card = document.createElement("article");
-      card.className = `metric ${className}`;
+      card.className = `rp-card metric ${className}`;
       card.innerHTML = `<span>${escapeHtml(title)}</span>${body}`;
       return card;
     },
@@ -157,7 +159,7 @@ function pluginNavigationIcon(icon) {
 }
 function registerPluginNavigation(extension, entry) {
   if (!entry || typeof entry.id !== "string" || !entry.id || typeof entry.render !== "function" || (entry.headerActions !== undefined && typeof entry.headerActions !== "function") || pluginNavigation.has(entry.id) || $(entry.id + "Page")) throw new Error("invalid or duplicate plugin navigation entry");
-  const button = document.createElement("button"); button.className = "nav"; button.type = "button"; button.dataset.page = entry.id; button.title = entry.title || entry.id; button.innerHTML = `${pluginNavigationIcon(entry.icon)}<span class="nav-label">${escapeHtml(entry.title || entry.id)}</span>`;
+  const button = document.createElement("button"); button.className = "nav"; button.type = "button"; button.dataset.page = entry.id; button.title = entry.title || entry.id; button.setAttribute("aria-current", "false"); button.innerHTML = `${pluginNavigationIcon(entry.icon)}<span class="nav-label">${escapeHtml(entry.title || entry.id)}</span>`;
   document.querySelector("nav").append(button);
   const page = document.createElement("section"); page.id = entry.id + "Page"; page.className = "page"; document.querySelector("main").append(page);
   pluginNavigation.set(entry.id, { ...entry, button, page, extension });
@@ -171,6 +173,56 @@ function registerPluginOverview(extension, entry) {
   return overviewWidgets.register(extension, entry);
 }
 function registerPluginSettings(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginSettings.has(entry.id)) throw new Error("invalid or duplicate settings section"); pluginSettings.set(entry.id,{...entry,extension}); }
+
+function confirmAction({title = "Continue?", message = "", confirmLabel = "Continue", danger = false} = {}) {
+  const previousFocus = document.activeElement;
+  return new Promise(resolve => {
+    const dialog = document.createElement("dialog");
+    dialog.className = "dialog small confirmation-dialog";
+    dialog.innerHTML = `<form method="dialog"><div class="dialog-head"><div><h2 id="confirmationTitle">${escapeHtml(title)}</h2><p id="confirmationMessage">${escapeHtml(message)}</p></div></div><div class="dialog-actions"><button class="button secondary" value="cancel" autofocus>Cancel</button><button class="button ${danger ? "danger" : "primary"}" value="confirm">${escapeHtml(confirmLabel)}</button></div></form>`;
+    dialog.setAttribute("aria-labelledby", "confirmationTitle");
+    dialog.setAttribute("aria-describedby", "confirmationMessage");
+    dialog.addEventListener("close", () => {
+      const confirmed = dialog.returnValue === "confirm";
+      dialog.remove();
+      if (previousFocus?.isConnected) previousFocus.focus({preventScroll:true});
+      resolve(confirmed);
+    }, {once:true});
+    document.body.append(dialog);
+    dialog.showModal();
+  });
+}
+
+function selectSettingsTab(id, focus = false) {
+  for (const tab of document.querySelectorAll(".settings-tab")) {
+    const selected = tab.id === id;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    $(tab.getAttribute("aria-controls")).hidden = !selected;
+    if (selected && focus) tab.focus();
+  }
+}
+for (const tab of document.querySelectorAll(".settings-tab")) {
+  tab.addEventListener("click", () => selectSettingsTab(tab.id));
+  tab.addEventListener("keydown", event => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const id = event.key === "Home" ? "generalSettingsTab" : event.key === "End" ? "pluginSettingsTab" : tab.id === "generalSettingsTab" ? "pluginSettingsTab" : "generalSettingsTab";
+    selectSettingsTab(id, true);
+  });
+}
+function filterPluginCards() {
+  const search = $("pluginSearch").value.trim().toLocaleLowerCase();
+  const cards = [...$("pluginSettings").querySelectorAll(".plugin-setting-card")];
+  let shown = 0;
+  for (const card of cards) {
+    const matches = `${card.dataset.pluginId} ${card.querySelector(".plugin-setting-info").textContent}`.toLocaleLowerCase().includes(search);
+    card.hidden = !matches;
+    if (matches) shown++;
+  }
+  $("pluginSearchStatus").textContent = search && !shown ? "No matching plugins. Try another name." : `${shown} plugin${shown === 1 ? "" : "s"}${search ? " found" : ""}`;
+}
+$("pluginSearch").addEventListener("input", filterPluginCards);
 
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
@@ -221,7 +273,8 @@ function applyTheme(theme) {
   toggle.setAttribute("aria-pressed", String(isDark));
   const nextTheme = isDark ? "light" : "dark";
   toggle.title = `Switch to ${nextTheme} theme`;
-  toggle.innerHTML = `${isDark ? "☀" : "☾"} <span>${isDark ? "Light" : "Dark"} theme</span>`;
+  toggle.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${isDark ? '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>' : '<path d="M20.5 14A8.5 8.5 0 0 1 10 3.5 8.5 8.5 0 1 0 20.5 14Z"/>'}</svg><span>${isDark ? "Light" : "Dark"} theme</span>`;
+  toggle.setAttribute("aria-label", toggle.title);
   notifyPluginThemeListeners();
 }
 
@@ -315,7 +368,7 @@ async function refresh() {
       currentPage === "settings" ? api("api/v1/plugins") : Promise.resolve(null),
       api("api/v1/plugins/runtime")
     ]);
-    if (pluginSnapshot) { pluginStatuses = pluginSnapshot.plugins || []; pluginDiscoveryErrors=pluginSnapshot.discoveryErrors || []; pluginRestartRequired=!!pluginSnapshot.restartRequired; renderPluginSettings(); if (!pluginCatalogLoaded && !pluginCatalogLoading) refreshPluginCatalog(); }
+    if (pluginSnapshot && JSON.stringify(pluginSnapshot) !== lastPluginSnapshot) { lastPluginSnapshot = JSON.stringify(pluginSnapshot); pluginStatuses = pluginSnapshot.plugins || []; pluginDiscoveryErrors=pluginSnapshot.discoveryErrors || []; pluginRestartRequired=!!pluginSnapshot.restartRequired; renderPluginSettings(); if (!pluginCatalogLoaded && !pluginCatalogLoading) refreshPluginCatalog(); }
     if (frontendSnapshot) await loadPluginExtensions(frontendSnapshot);
     setConnected(true);
   } catch (e) {
@@ -384,6 +437,7 @@ function renderPluginSettings() {
       : `<button class="button primary small" type="button" ${busy || !compatible ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible || "")}')">Install${compatible ? " " + escapeHtml(compatible) : ""}</button>`;
     return `<article class="plugin-setting-card" data-plugin-id="${escapeHtml(id)}"><div class="plugin-setting-info"><strong>${escapeHtml(manifest.name || id)}</strong><div class="meta">${escapeHtml(manifest.description || "")}</div></div><div class="plugin-setting-actions">${buttons}</div><span class="status plugin-setting-state ${stateClass}"${entry?.incompatibility ? ` title="${escapeHtml(entry.incompatibility)}"` : ""}>${escapeHtml(busy ? "Updating…" : state)}${update ? " · Update available" : ""}${status?.restartRequired ? " · Restart required" : ""}</span></article>`;
   }).join("");
+  filterPluginCards();
   const cards = new Map([...root.querySelectorAll(".plugin-setting-card")].map(card => [card.dataset.pluginId, card]));
   for (const entry of pluginSettings.values()) {
     if (!installed.get(entry.extension)?.enabled) continue;
@@ -400,7 +454,7 @@ function renderPluginSettings() {
   }
 }
 async function requestRunPilotRestart() {
-  if (!confirm("Restart RunPilot now? The page will reconnect when RunPilot is ready.")) return;
+  if (!await confirmAction({title:"Restart RunPilot?",message:"Interactive sessions will disconnect. This page will reconnect when RunPilot is ready.",confirmLabel:"Restart"})) return;
   const button=$("restartApplicationButton"); button.disabled=true;
   try { await api("api/v1/restart",{method:"POST"}); toast("RunPilot is restarting. This page will reconnect shortly."); }
   catch(error) { toastError(error.message); button.disabled=false; }
@@ -421,7 +475,7 @@ async function refreshPluginCatalog() {
 }
 async function managePlugin(id, action, version="") {
   if (pluginBusy.has(id)) return;
-  if (action === "uninstall" && !confirm("Uninstall this package? Plugin data will be retained. Restart to finish deactivation.")) return;
+  if (action === "uninstall" && !await confirmAction({title:"Uninstall plugin?",message:"Plugin data will be retained. Restart RunPilot to finish deactivation.",confirmLabel:"Uninstall",danger:true})) return;
   pluginBusy.add(id); renderPluginSettings();
   try {
     const response=await api(`api/v1/plugins/${encodeURIComponent(id)}${action === "install" ? "/install" : ""}`, {method:action === "install" ? "POST" : "DELETE", ...(action === "install" ? {body:JSON.stringify({version})} : {})});
@@ -435,6 +489,7 @@ function startAutoRefresh() {
   refreshTimer = setInterval(() => {
     if (!document.hidden) refresh();
   }, 5000);
+  setInterval(() => { if (!document.hidden && currentPage === "overview") void overviewWidgets.refresh(); }, 30000);
 }
 
 async function probeConnection() {
@@ -637,8 +692,9 @@ function setPage(page) {
   const registered = pluginNavigation.get(page);
   if (!Object.hasOwn(pageMeta, page) && !registered) return;
   hostDashboard.setActive(page === "overview");
+  overviewWidgets.setActive(page === "overview");
   currentPage = page;
-  document.querySelectorAll(".nav").forEach(n => n.classList.toggle("active", n.dataset.page === page));
+  document.querySelectorAll(".nav").forEach(n => { n.classList.toggle("active", n.dataset.page === page); n.setAttribute("aria-current", n.dataset.page === page ? "page" : "false"); });
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
   $(`${page}Page`).classList.add("active");
   const headerActions = $("pluginHeaderActions");
@@ -650,8 +706,11 @@ function setPage(page) {
   }
   const [title] = pageMeta[page] || [registered?.title || page];
   $("pageTitle").textContent = title;
+  $("pageDescription").textContent = registered?.description || (page === "settings" ? "Manage your account, host preferences, and plugins." : "A live view of your host and services.");
 	if (page === "settings") renderPluginSettings();
 	if (registered) { registered.page.replaceChildren(); registered.render(registered.page); }
+  window.scrollTo(0, 0);
+  $("pageTitle").focus({preventScroll:true});
   refresh();
 }
 
@@ -674,6 +733,7 @@ $("saveTextEditor").addEventListener("click",saveTextEditor);$("closeTextEditor"
 $("textEditorContent").addEventListener("input",updateTextHighlight);
 $("textEditorContent").addEventListener("scroll",e=>{ $("textHighlight").scrollTop=e.target.scrollTop; $("textHighlight").scrollLeft=e.target.scrollLeft; });
 
+$("loginDialog").addEventListener("cancel", event => event.preventDefault());
 $("loginForm").addEventListener("submit", async e => {
   e.preventDefault();
   try {
@@ -688,6 +748,7 @@ $("loginForm").addEventListener("submit", async e => {
     await connectApplicationSocket();
     await refresh();
     hostDashboard.setActive(currentPage === "overview");
+    overviewWidgets.setActive(currentPage === "overview");
     startAutoRefresh();
     startConnectionMonitor();
   } catch (error) {
@@ -716,7 +777,7 @@ async function loadDataRootSettings() {
   }
 }
 
-$("dataRootChangeForm").addEventListener("submit",async e=>{e.preventDefault();const error=$("dataRootError");if(!confirm("RunPilot will restart using the selected directory. No data will be copied or moved. An empty directory starts a fresh installation. Continue?"))return;error.classList.add("hidden");try{await api("api/v1/admin/data-root",{method:"POST",body:JSON.stringify({destination:$("dataRootDestination").value})});error.textContent="RunPilot is restarting. Sign in again when it is ready.";error.classList.remove("hidden");}catch(reason){error.textContent=reason.message;error.classList.remove("hidden");}});
+$("dataRootChangeForm").addEventListener("submit",async e=>{e.preventDefault();const error=$("dataRootError");if(!await confirmAction({title:"Change directory and restart?",message:"No data will be copied or moved. Prepare your data in the selected directory; an empty directory starts a fresh installation.",confirmLabel:"Change and restart",danger:true}))return;error.classList.add("hidden");try{await api("api/v1/admin/data-root",{method:"POST",body:JSON.stringify({destination:$("dataRootDestination").value})});error.textContent="RunPilot is restarting. Sign in again when it is ready.";error.classList.remove("hidden");}catch(reason){error.textContent=reason.message;error.classList.remove("hidden");}});
 
 (async function init() {
   initializeSidebar();
@@ -733,9 +794,10 @@ $("dataRootChangeForm").addEventListener("submit",async e=>{e.preventDefault();c
   await refresh();
   try { await loadSystemInfo(); } catch (e) { if (e.message !== "Unauthorized") toast(e.message); }
   hostDashboard.setActive(currentPage === "overview");
+  overviewWidgets.setActive(currentPage === "overview");
   startAutoRefresh();
 })();
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) { refresh(); probeConnection(); void hostDashboard.refresh(); }
+  if (!document.hidden) { refresh(); probeConnection(); void hostDashboard.refresh(); void overviewWidgets.refresh(); }
 });

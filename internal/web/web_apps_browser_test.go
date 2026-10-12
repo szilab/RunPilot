@@ -96,6 +96,13 @@ func TestWebAppsRealBrowser(t *testing.T) {
 			}))
 			defer upstream.Close()
 			c := webAppsController(t, base)
+			hash, err := hashPassword("browser gateway review password")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.ChangeAdminPassword("admin", c.Snapshot().Server.AdminPasswordHash, hash); err != nil {
+				t.Fatal(err)
+			}
 			openWebApp(t, c, upstream.URL, upstreamBase)
 			s, _ := New(c, base)
 			var targetHTTP atomic.Int64

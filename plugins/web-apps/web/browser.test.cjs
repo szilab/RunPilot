@@ -15,15 +15,19 @@ const browserType = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE)[process.env.
     const shell = await context.newPage();
     await shell.addInitScript(({ token, path }) => { if (location.pathname === path) localStorage.setItem("runpilot.token", token); }, { token: process.env.RUNPILOT_TEST_TOKEN, path: process.env.RUNPILOT_TEST_BASE + "/" });
     await shell.goto(process.env.RUNPILOT_TEST_URL + process.env.RUNPILOT_TEST_BASE + "/");
+    await shell.locator("#loginDialog[open]").waitFor();
+    await shell.locator("#loginUsername").fill("admin");
+    await shell.locator("#loginPassword").fill("browser gateway review password");
+    await shell.locator("#loginForm button").click();
     await shell.waitForFunction(() => document.querySelector('[data-page="web-apps"]'));
     assert.equal(await shell.evaluate(() => localStorage.getItem("runpilot.token")), null);
-    assert.equal(await shell.evaluate(() => sessionStorage.getItem("runpilot.token")), process.env.RUNPILOT_TEST_TOKEN);
+    assert.equal(await shell.evaluate(() => sessionStorage.getItem("runpilot.token")), null);
     await shell.click('[data-page="web-apps"]');
     await shell.getByRole("button", { name: "Open", exact: true }).waitFor();
     for (const [width, columns] of [[1280, 3], [1000, 2], [640, 1]]) {
       await shell.setViewportSize({ width, height: 800 });
       assert.equal(await shell.locator(".webapps-list").evaluate(list => getComputedStyle(list).gridTemplateColumns.split(" ").length), columns);
-      assert.equal(await shell.locator(".webapps-card.docker-card.remote-card").count(), 1);
+      assert.equal(await shell.locator(".webapps-card.rp-card").count(), 1);
     }
     await shell.setViewportSize({ width: 1280, height: 800 });
     if (process.env.RUNPILOT_TEST_LEGACY === "true") await shell.evaluate(async base => {
@@ -57,7 +61,11 @@ const browserType = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE)[process.env.
       const registration = await navigator.serviceWorker.getRegistration();
       return { cookie, range, compressed, redirect: await redirect.text(), post: post.length, large, scope: registration.scope, browserCookies: document.cookie };
     });
-    assert.equal(result.cookie, "private-cookie"); assert.equal(result.browserCookies, "");
+    assert.equal(result.cookie, "private-cookie");
+    // The readable CSRF cookie remains scoped to the management base path.
+    // Session credentials are HttpOnly and upstream cookies stay in the gateway jar.
+    assert.equal(result.browserCookies, await shell.evaluate(() => document.cookie));
+    assert.doesNotMatch(result.browserCookies, /runpilot_session|private-cookie/);
     assert.deepEqual(result.range, { status: 206, contentRange: "bytes 2-5/10", body: "2345" });
     assert.equal(result.compressed, "compressed response"); assert.equal(result.redirect, "private-cookie");
     assert.equal(result.post, 400000); assert.equal(result.large, 20 * 1024 * 1024);
@@ -91,8 +99,8 @@ const browserType = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE)[process.env.
     assert.equal(new URL(documents[routerStart]).pathname, process.env.RUNPILOT_TEST_BASE + "/");
     assert.equal(await router.evaluate(async () => (await fetch("cookie")).text()), "");
     await router.evaluate(async () => fetch("login", { method: "POST", body: "router-login" }));
-    assert.equal(await shell.evaluate(() => sessionStorage.getItem("runpilot.token")), process.env.RUNPILOT_TEST_TOKEN);
-    const normalResponse = await shell.evaluate(async () => (await fetch("api/v1/system", { headers: { Authorization: "Bearer " + sessionStorage.getItem("runpilot.token") } })).status);
+    assert.equal(await shell.evaluate(() => sessionStorage.getItem("runpilot.token")), null);
+    const normalResponse = await shell.evaluate(async () => (await fetch("api/v1/system")).status);
     assert.equal(normalResponse, 200, "base worker intercepted management API");
     await shell.locator(".webapps-card").filter({ hasText: "Test app" }).getByRole("button", { name: /Close sessions/ }).click();
     await shell.locator(".webapps-card").filter({ hasText: "Test app" }).getByRole("button", { name: /Close sessions/ }).waitFor({ state: "detached" });
@@ -101,7 +109,7 @@ const browserType = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE)[process.env.
     await router.reload(); await router.waitForFunction(() => document.querySelector("#app-ready"));
     assert.equal(await router.evaluate(async () => (await fetch("cookie")).text()), "private-cookie");
     await routerCard.getByRole("button", { name: /Close sessions/ }).click(); await routerCard.getByRole("button", { name: /Close sessions/ }).waitFor({ state: "detached" }); await router.close();
-    shell.once("dialog", dialog => dialog.accept()); await routerCard.getByRole("button", { name: "Delete", exact: true }).click();
+    await routerCard.getByRole("button", { name: "Delete", exact: true }).click(); await shell.locator(".confirmation-dialog").getByRole("button", { name: "Delete Web App", exact: true }).click();
     await routerCard.waitFor({ state: "detached" });
     async function addTarget(name, mount) {
       await shell.getByRole("button", { name: "Add Web App" }).click();
@@ -121,10 +129,10 @@ const browserType = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE)[process.env.
     await shell.locator("dialog.webapps-dialog").getByRole("button", { name: "Save", exact: true }).click();
     await shell.locator("dialog.webapps-dialog").waitFor({ state: "detached" });
     card = shell.locator(".webapps-card").filter({ hasText: "CRUD renamed" });
-    shell.once("dialog", dialog => dialog.accept()); await card.getByRole("button", { name: "Delete", exact: true }).click();
+    await card.getByRole("button", { name: "Delete", exact: true }).click(); await shell.locator(".confirmation-dialog").getByRole("button", { name: "Delete Web App", exact: true }).click();
     await card.waitFor({ state: "detached" });
     const original = shell.locator(".webapps-card").filter({ hasText: "Test app" });
-    shell.once("dialog", dialog => dialog.accept()); await original.getByRole("button", { name: "Delete", exact: true }).click();
+    await original.getByRole("button", { name: "Delete", exact: true }).click(); await shell.locator(".confirmation-dialog").getByRole("button", { name: "Delete Web App", exact: true }).click();
     await original.waitFor({ state: "detached" });
     await addTarget("Replacement", "/app");
     const replacementPromise = context.waitForEvent("page"); await shell.getByRole("button", { name: "Open", exact: true }).click();

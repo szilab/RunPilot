@@ -12,8 +12,13 @@
   if (!restricted) { await load(new URL("overview-widgets.js", document.baseURI).href); await load(new URL("dashboard.js", document.baseURI).href); await load(new URL("app.js", document.baseURI).href); return; }
   // This tab must never migrate or acquire management credentials, even on errors.
   localStorage.removeItem("runpilot.token"); sessionStorage.removeItem("runpilot.token");
+  if (document.documentElement) {
+    const scheme = localStorage.getItem("runpilot.theme");
+    document.documentElement.dataset.theme = scheme === "dark" || (scheme !== "light" && globalThis.matchMedia?.("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+  }
   const title = document.createElement("h1"), status = document.createElement("p");
   title.textContent = "Opening application"; status.id = "status"; status.setAttribute("role", "status"); status.textContent = "Establishing the encrypted tunnel…";
+  document.body.className = "publication-screen";
   document.body.replaceChildren(title, status);
   try {
     if (params.has(marker)) {
@@ -29,6 +34,7 @@
       if (!id(launch.runtime) || !id(launch.publication) || !id(launch.handle)) throw new Error("This gateway has expired. Open it again from RunPilot.");
     }
     const base = new URL("./", document.baseURI);
+    await load(new URL("auth-storage.js", base).href);
     await load(new URL("__runpilot__/browser/" + launch.runtime + "/bootstrap.js?publication=" + launch.publication, base).href);
   } catch (error) { delete globalThis.RUNPILOT_BROWSER_LAUNCH; status.textContent = error.message; status.setAttribute("role", "alert"); }
 })();

@@ -146,9 +146,9 @@ hard-code RunPilot's current colors or spacing.
 
 Overview currently presents a built-in, host-only monitoring dashboard with
 separate identity, CPU, memory, optional GPU and filesystem cards. Its metrics
-reuse the existing platform adapters. The generic frontend widget registration
-contract remains available, but widget contributions are dormant while the
-host-only dashboard is shown. Launcher shortcuts remain in framework
+reuse the existing platform adapters. Plugin summary widgets appear below the
+host dashboard through the generic frontend widget registration contract. Their mount, refresh, and disposal follow
+Overview visibility. Launcher shortcuts remain in framework
 configuration for future UI work. The current System package remains a
 technical fixture, not the user-facing System feature.
 
@@ -254,9 +254,8 @@ ordered/bounded event delivery. See [PLUGIN_API.md](PLUGIN_API.md).
 The async ABI-v2 process/scheduler/event path remains covered by real-WASM
 race/integration tests.
 
-Tasks and Docker retain compact Overview widget registrations for future use;
-they are not mounted by the current host dashboard. Their business logic and
-backend RPCs remain plugin-owned.
+Tasks and Docker provide compact summary widgets below the host dashboard.
+Their business logic and backend RPCs remain plugin-owned.
 
 ## Security and guardrails
 

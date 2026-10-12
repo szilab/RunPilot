@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/szilab/RunPilot/internal/browserpath"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -122,7 +123,7 @@ func (s *Server) issueSession(w http.ResponseWriter, r *http.Request) string {
 		closeConnection()
 	}
 	secure := requestScheme(r) == "https"
-	path := s.basePath
+	path := browserpath.Escape(s.basePath)
 	if path == "/" {
 		path = "/"
 	}
@@ -145,7 +146,7 @@ func (s *Server) clearSession(w http.ResponseWriter, r *http.Request) {
 		s.revokeSessionTickets(cookie.Value)
 	}
 	for _, name := range []string{adminSessionCookie, csrfCookie} {
-		http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: s.basePath, HttpOnly: name == adminSessionCookie, Secure: requestScheme(r) == "https", SameSite: http.SameSiteLaxMode, MaxAge: -1})
+		http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: browserpath.Escape(s.basePath), HttpOnly: name == adminSessionCookie, Secure: requestScheme(r) == "https", SameSite: http.SameSiteLaxMode, MaxAge: -1})
 	}
 }
 

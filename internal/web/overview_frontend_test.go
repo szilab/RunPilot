@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestHostDashboardIsTheOnlyVisibleOverviewSurface(t *testing.T) {
+func TestOverviewMountsHostAndPluginSurfaces(t *testing.T) {
 	page, err := staticFS.ReadFile("static/index.html")
 	if err != nil {
 		t.Fatal(err)
@@ -16,11 +16,11 @@ func TestHostDashboardIsTheOnlyVisibleOverviewSurface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(page), `id="hostDashboard"`) || strings.Contains(string(page), `id="overviewMetrics"`) {
-		t.Fatal("Overview still mounts the plugin widget grid")
+	if !strings.Contains(string(page), `id="hostDashboard"`) || !strings.Contains(string(page), `id="overviewWidgets"`) {
+		t.Fatal("Overview must provide host metrics and plugin widget containers")
 	}
-	if !strings.Contains(string(shell), `new RunPilotOverviewWidgets(document.createElement("div"))`) || strings.Contains(string(shell), "overviewWidgets.setActive(") {
-		t.Fatal("plugin widgets are active on the host dashboard")
+	if !strings.Contains(string(shell), `new RunPilotOverviewWidgets($("overviewWidgets"))`) || !strings.Contains(string(shell), `overviewWidgets.setActive(page === "overview")`) {
+		t.Fatal("plugin widgets must follow the active Overview lifecycle")
 	}
 }
 

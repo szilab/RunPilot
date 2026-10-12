@@ -1,1 +1,26 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Web App · RunPilot</title><style>body{font:16px system-ui;margin:3rem;max-width:45rem}p{line-height:1.6}</style><h1>Opening Web App</h1><p id="status" role="status">Establishing the encrypted tunnel…</p><script>globalThis.RUNPILOT_PUBLICATION=__RUNPILOT_PUBLICATION__;</script><script>const auth=document.createElement("script");auth.src=RUNPILOT_PUBLICATION.basePath+"/auth-storage.js";auth.onload=()=>{const script=document.createElement("script");script.src=RUNPILOT_PUBLICATION.assets+"bootstrap.js";document.head.append(script);};document.head.append(auth);</script></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Web App · RunPilot</title>
+  <style>
+    :root { color-scheme: light; --surface: #eaf0f8; --card: #f9fbff; --text: #17243b; --muted: #5d6d85; --border: #d6e0ee; --accent: #345dcc; }
+    @media (prefers-color-scheme: dark) { :root { color-scheme: dark; --surface: #101827; --card: #182338; --text: #edf3ff; --muted: #9cacc5; --border: #2d3c54; --accent: #a0b9ff; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 24px; font: 15px/1.6 system-ui, sans-serif; color: var(--text); background: var(--surface); }
+    main { width: min(460px, 100%); padding: 32px; border: 1px solid var(--border); border-radius: 20px; background: var(--card); box-shadow: 0 16px 60px rgba(8, 16, 32, .12); }
+    .mark { display: grid; width: 48px; height: 48px; place-items: center; border: 1px solid var(--border); border-radius: 14px; color: var(--accent); margin-bottom: 24px; }
+    svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+    small { color: var(--muted); font-size: 12px; letter-spacing: .08em; }
+    h1 { font-size: 24px; line-height: 1.3; letter-spacing: -.03em; margin: 8px 0 12px; }
+    p { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
+    #status[role="alert"] { color: var(--text); }
+  </style>
+</head>
+<body>
+  <main><div class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18m-8 4 3 3-3 3m-5-3h8"/></svg></div><small>RUNPILOT · WEB APPS</small><h1>Opening Web App</h1><p id="status" role="status">Establishing the encrypted tunnel…</p></main>
+  <script>globalThis.RUNPILOT_PUBLICATION=__RUNPILOT_PUBLICATION__;</script>
+  <script>const auth=document.createElement("script");auth.src=RUNPILOT_PUBLICATION.basePath+"/auth-storage.js";auth.onload=()=>{const script=document.createElement("script");script.src=RUNPILOT_PUBLICATION.assets+"bootstrap.js";document.head.append(script);};document.head.append(auth);</script>
+</body>
+</html>

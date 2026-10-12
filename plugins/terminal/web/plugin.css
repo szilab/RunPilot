@@ -92,7 +92,7 @@
 
 .terminal-plugin-new-tab:hover,
 .terminal-plugin-new-tab:focus-visible {
-  background: var(--rp-surface-elevated);
+  background: var(--rp-field, var(--rp-surface-elevated));
   color: var(--rp-text-strong);
   outline-color: var(--rp-accent);
 }
@@ -104,7 +104,7 @@
 
 .terminal-plugin-tab button {
   border: 0;
-  padding: 9px 8px;
+  min-height: 42px; padding: 10px 12px;
   color: inherit;
   background: transparent;
   font: inherit;
@@ -145,7 +145,7 @@
   overflow: hidden;
   border: 1px solid var(--rp-border);
   border-radius: var(--rp-radius-card);
-  background: var(--rp-surface-elevated);
+  background: var(--rp-field, var(--rp-surface-elevated));
   color: var(--rp-text);
   padding: var(--rp-space-2);
   box-shadow: 0 2px 8px color-mix(in srgb, var(--rp-text) 8%, transparent);

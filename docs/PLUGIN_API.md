@@ -407,9 +407,8 @@ cards and Settings sections are registered through the corresponding extension
 hosts.
 
 Overview widget registration remains part of the compatible frontend 1.x
-surface. The current host-only Overview retains registrations without mounting
-or refreshing plugin widgets. The following lifecycle applies when a widget
-surface is enabled in a future layout:
+surface. Widgets appear below the built-in host metrics and follow Overview
+visibility. The following lifecycle applies:
 
 ```javascript
 const unregister = runpilot.overview.register({
@@ -444,7 +443,8 @@ inside their owning plugin's card only while that plugin is enabled. Plugins
 provide their heading, fields, and actions using the host's shared responsive
 layout without imposing a custom section width.
 
-A navigation entry may provide `headerActions(root)` to add page-specific
+A navigation entry may provide an optional `description` for the page introduction
+and `headerActions(root)` to add page-specific
 buttons to the application header beside the theme switcher. The host clears
 this slot when the user leaves that page:
 
@@ -513,7 +513,22 @@ are not silently dropped. The owner receives `network.stream.closed` with only
 the stream ID for feature-local state cleanup.
 
 Core owns the shell and design system. Plugin CSS should use public semantic
-tokens. System/Light/Dark is a color-scheme choice separate from the selected
+`--rp-*` tokens. In addition to the existing surface/text/border/accent, spacing,
+and radius tokens, the default style provides `--rp-field`, `--rp-glass`,
+`--rp-shadow`, `--rp-action`, `--rp-accent-soft`, and semantic
+`--rp-success`, `--rp-danger`, `--rp-warning` colors with `-soft` backgrounds.
+Use a fallback to existing tokens when supporting older hosts. The shared
+`rp-card`, `button`, `form-grid`, `notice`, `status`, and `empty` classes are
+available to core and plugins; feature layouts and dependencies remain owned
+by each plugin. Frosting is applied selectively with an opaque fallback, and
+reduced-motion preferences are honored. The bundled Inter font needs no network.
+
+`runpilot.ui.confirm({title, message, confirmLabel, danger})` returns a Promise
+of a boolean. Cancel and Escape return false; confirming returns true. The host
+restores focus on dismissal. Plugins supporting earlier frontend 1.x hosts
+should fall back to the native browser confirmation if the helper is absent.
+
+System/Light/Dark is a color-scheme choice separate from the selected
 style. Executable theme plugins are not part of the contract.
 
 ## First-party build contract

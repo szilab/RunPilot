@@ -159,7 +159,7 @@ export function activate(runpilot) {
       actions = `<button class="button primary small" data-action="run" data-id="${id}" ${busy ? "disabled" : ""}>Run now</button>${status.state === "running" ? `<button class="button secondary small" data-action="stop" data-id="${id}" ${busy ? "disabled" : ""}>Stop</button>` : ""}`;
     }
     const notes = [status.error ? `<div class="form-error" role="alert">${esc(status.error)}</div>` : "",
-      status.message && status.state !== "running" ? `<div class="meta">${esc(status.message)}</div>` : ""].join("");
+      status.message && status.message !== status.state && status.state !== "running" ? `<div class="meta">${esc(status.message)}</div>` : ""].join("");
     return `<article class="row" data-task="${id}">
       <div class="row-head"><div><h3>${esc(task.name)}</h3><div class="meta">${task.type === "continuous" ? "Continuous" : "Scheduled"} · ${esc(task.command.path)}</div></div>${statusBadge(view)}</div>
       ${task.description ? `<div class="meta">${esc(task.description)}</div>` : ""}
@@ -172,15 +172,16 @@ export function activate(runpilot) {
     if (!page || !page.isConnected) return;
     const visible = state.tasks.filter(view => state.filter === "all" || view.task.type === state.filter);
     const filters = [["all", "All"], ["continuous", "Continuous"], ["scheduled", "Scheduled"]]
-      .map(([key, label]) => `<button class="button secondary small ${state.filter === key ? "active" : ""}" data-action="filter" data-filter="${key}">${label}</button>`).join("");
+      .map(([key, label]) => `<button class="button secondary small ${state.filter === key ? "active" : ""}" aria-pressed="${state.filter === key}" data-action="filter" data-filter="${key}">${label}</button>`).join("");
     const readOnly = !!state.loadError;
     page.innerHTML = `<div class="tasks-plugin">
       <div class="section-head tasks-plugin-toolbar"><div class="task-filters" role="group" aria-label="Task type">${filters}</div>
         <div class="row-actions"><button class="button primary small" data-action="add" data-type="continuous" ${readOnly ? "disabled" : ""}>Add continuous</button><button class="button primary small" data-action="add" data-type="scheduled" ${readOnly ? "disabled" : ""}>Add scheduled</button></div></div>
       ${state.loadError ? `<div class="notice" role="alert"><strong>Task configuration is unavailable</strong><span>${esc(state.loadError)}</span><span>The stored configuration was left untouched. Repair or remove plugins/${PLUGIN}/data/storage.json and restart RunPilot.</span></div>` : ""}
       ${state.error ? `<div class="notice" role="alert"><span>${esc(state.error)}</span></div>` : ""}
-      <div class="row-list">${visible.map(row).join("")}</div>
-      ${state.loaded && !visible.length && !state.loadError ? `<div class="empty"><h2>No tasks yet</h2><p>Add a continuous command or a scheduled command.</p></div>` : ""}
+      ${visible.length ? `<div class="row-list">${visible.map(row).join("")}</div>` : ""}
+      ${!state.loaded ? `<div class="notice" role="status">Loading tasks…</div>` : ""}
+      ${state.loaded && !visible.length && !state.loadError ? `<div class="empty"><h2>${state.tasks.length ? "No matching tasks" : "No tasks yet"}</h2><p>${state.tasks.length ? "Choose another task type to see your commands." : "Add a continuous command or schedule a command to run later."}</p></div>` : ""}
     </div>`;
     if (!wired.has(page)) {
       wired.add(page);
@@ -220,7 +221,7 @@ export function activate(runpilot) {
     state.tasks.sort((a, b) => a.task.name.toLowerCase().localeCompare(b.task.name.toLowerCase()));
   }
 
-  function onPageClick(event) {
+  async function onPageClick(event) {
     const button = event.target.closest("[data-action]");
     if (!button || button.disabled) return;
     const { action, id, filter, type } = button.dataset;
@@ -230,7 +231,7 @@ export function activate(runpilot) {
     else if (action === "history") openHistory(findTask(id));
     else if (action === "delete") {
       const view = findTask(id);
-      if (view && confirm(`Delete task "${view.task.name}"? Its run history is kept.`)) act(id, "tasks.delete");
+      if (view && await (ui.confirm ? ui.confirm({title:"Delete task?",message:`Remove “${view.task.name}”? Its run history will be kept.`,confirmLabel:"Delete task",danger:true}) : confirm(`Delete task "${view.task.name}"? Its run history is kept.`))) act(id, "tasks.delete");
     } else act(id, `tasks.${action}`);
   }
 
@@ -467,7 +468,7 @@ export function activate(runpilot) {
   ];
 
   runpilot.navigation.register({
-    id: "tasks", title: "Tasks", icon: { src: new URL("./icon.svg", import.meta.url).href },
+    id: "tasks", title: "Tasks", description: "Run continuous commands and schedule repeatable work.", icon: { src: new URL("./icon.svg", import.meta.url).href },
     render: root => { page = root; render(); load(); },
   });
   load();

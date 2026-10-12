@@ -72,17 +72,17 @@ test("session surface hides the local cursor on every Guacamole layer", () => {
   assert.match(css, /\.rdp-session-surface, \.rdp-session-surface \* \{ cursor: none; \}/);
 });
 
-test("RDP navigation uses its packaged icon and targets reuse the legacy responsive cards", () => {
+test("RDP navigation uses its packaged icon and targets own responsive themed cards", () => {
   const css = readFileSync(new URL("./plugin.css", import.meta.url), "utf8");
-  assert.match(frontendSource, /title: "RDP", icon: \{ src: new URL\("\.\/icon\.svg", import\.meta\.url\)\.href \}/);
+  assert.match(frontendSource, /title: "RDP", description: "Remote desktops through your Guacamole connection.", icon: \{ src: new URL\("\.\/icon\.svg", import\.meta\.url\)\.href \}/);
   assert.match(frontendSource, /headerActions\(root\)/);
   assert.doesNotMatch(frontendSource, /<h2>RDP targets<\/h2>/);
   assert.match(frontendSource, /settingsForm.className = "plugin-settings-form rdp-plugin-settings"/);
-  assert.match(frontendSource, /class="docker-card remote-card rdp-target-card"/);
+  assert.match(frontendSource, /class="rp-card rdp-target-card"/);
   assert.match(frontendSource, /class="rdp-target-meta-row"><div class="rdp-target-facts"><span title=/);
   assert.match(frontendSource, /span title="\$\{escapeHTML\(endpoint\)\}"/);
   assert.match(frontendSource, /rdp-target-identity" title="\$\{escapeHTML\(identity\)\}"/);
-  assert.match(frontendSource, /class="rdp-target-actions"><button class="button danger small"/);
+  assert.match(frontendSource, /class="rdp-target-actions"><button class="button primary small"/);
   assert.match(frontendSource, /formatUsername\(target\.options\.username, target\.options\.domain\)/);
   assert.doesNotMatch(frontendSource, /class="status installed">RDP<\/span>/);
   assert.match(css, /\.rdp-target-list \{ display: grid; grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);

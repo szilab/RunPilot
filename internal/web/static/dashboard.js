@@ -53,7 +53,6 @@
     identity.append(element("strong", "host-dashboard-name", host.hostname || "Unknown host"));
     identity.append(element("p", "host-dashboard-platform", [host.os, host.architecture].filter(Boolean).join(" · ") || "Platform unavailable"));
     identity.append(element("p", "host-dashboard-uptime", `Uptime ${uptime(data?.hostUptimeSeconds)}`));
-    top.append(identity);
 
     const cpuAvailable = host.cpuAvailable !== false && Number.isFinite(host.cpuPercent);
     const load = Array.isArray(host.loadAverage) && host.loadAverage.length === 3
@@ -104,11 +103,11 @@
       }
       storage.append(grid);
     } else storage.append(element("p", "host-dashboard-empty", "No filesystem metrics available."));
-    root.replaceChildren(top, storage);
+    root.replaceChildren(identity, top, storage);
   }
 
   class HostDashboard {
-    constructor(root, api, {interval = 8000, setIntervalFn = setInterval, clearIntervalFn = clearInterval} = {}) {
+    constructor(root, api, {interval = 8000, setIntervalFn = (callback, delay) => setInterval(callback, delay), clearIntervalFn = id => clearInterval(id)} = {}) {
       this.root = root; this.api = api; this.interval = interval;
       this.setIntervalFn = setIntervalFn; this.clearIntervalFn = clearIntervalFn;
       this.active = false; this.timer = null; this.controller = null; this.busy = false; this.generation = 0;

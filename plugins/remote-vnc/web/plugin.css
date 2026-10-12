@@ -1,6 +1,6 @@
 .vnc-plugin { min-width: 0; }
 .vnc-target-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
-.vnc-plugin-notice { margin: 0 0 12px; padding: 9px 11px; border: 1px solid #f0b4ae; border-radius: var(--rp-radius); color: #8f2018; background: #fff4f2; font-size: 13px; }
+.vnc-plugin-notice { margin: 0 0 12px; padding: 9px 11px; border: 1px solid var(--rp-danger-border, var(--rp-border)); border-radius: var(--rp-radius); color: var(--rp-danger, var(--rp-text)); background: var(--rp-danger-soft, var(--rp-surface-elevated)); font-size: 13px; }
 .vnc-target-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .vnc-target-card { grid-template-rows: auto 1fr; border-radius: var(--rp-radius); background: var(--rp-surface-elevated); }
 .vnc-target-meta-row { display: flex; min-width: 0; align-items: flex-end; justify-content: space-between; gap: 10px; margin-top: auto; }
@@ -8,14 +8,14 @@
 .vnc-target-facts { display: grid; min-width: 0; gap: 3px; }
 .vnc-target-facts h2 { overflow-wrap: anywhere; margin: 0; color: var(--rp-text-strong); font-size: 17px; }
 .vnc-target-facts span { overflow: hidden; color: var(--rp-text); font: 12px/1.4 var(--rp-font-mono); text-overflow: ellipsis; white-space: nowrap; }
-.vnc-target-identity { overflow: hidden; color: var(--rp-text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.vnc-target-identity { overflow: hidden; color: var(--rp-text-muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .vnc-empty { grid-column: 1 / -1; color: var(--rp-text-muted); }
-.vnc-form-error { margin: 0 0 12px; color: var(--rp-danger, #b42318); font-size: 13px; }
+.vnc-form-error { margin: 0 0 12px; color: var(--rp-danger, var(--rp-text)); font-size: 13px; }
 .vnc-form { display: grid; gap: 12px; }
 .vnc-form .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .vnc-form h2 { margin: 0; color: var(--rp-text-strong); font-size: 19px; }
 .vnc-form p { margin: 0; color: var(--rp-text-muted); font-size: 13px; }
-.vnc-field { display: grid; gap: 5px; color: var(--rp-text); font-size: 12px; }
+.vnc-field { display: grid; gap: 5px; color: var(--rp-text); font-size: 13px; }
 .vnc-field input { width: 100%; min-width: 0; }
 .vnc-form .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
 .vnc-target-dialog, .vnc-credentials-dialog { width: min(480px, calc(100vw - 28px)); }
@@ -37,4 +37,9 @@
 .vnc-interactive-view:fullscreen .vnc-toolbar-disconnect::before { content: "×"; font-size: 25px; }
 @media (prefers-reduced-motion: reduce) { .vnc-interactive-view:fullscreen .rp-interactive-toolbar { transition: none; } }
 @media (max-width: 1100px) { .vnc-target-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 680px) { .vnc-target-list { grid-template-columns: minmax(0, 1fr); } .vnc-target-meta-row { gap: 6px; } .vnc-target-card .vnc-target-actions { gap: 4px; } .vnc-target-card .vnc-target-actions .button { padding: 5px 6px; font-size: 11px; } }
+@media (max-width: 680px) { .vnc-target-list { grid-template-columns: minmax(0, 1fr); } .vnc-target-meta-row { gap: 6px; } .vnc-target-card .vnc-target-actions { gap: 4px; } .vnc-target-card .vnc-target-actions .button { padding: 5px 6px; font-size: 13px; } }
+
+.vnc-target-card { display: grid; gap: 18px; min-width: 0; padding: 20px; border: 1px solid var(--rp-border); border-radius: var(--rp-radius-card); background: var(--rp-glass, var(--rp-surface-elevated)); box-shadow: var(--rp-shadow, none); }
+.vnc-target-meta-row { flex-wrap: wrap; align-items: start; gap: 16px; }
+.vnc-target-actions { width: 100%; justify-content: flex-start; border-top: 1px solid var(--rp-border); padding-top: 14px; gap: 8px; }
+.vnc-target-actions .button { min-height: 36px; padding: 7px 11px; font-size: 13px; }

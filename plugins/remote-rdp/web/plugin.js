@@ -161,7 +161,7 @@ export function createGuacamoleStreamTunnel(Guacamole, stream, connectionID) {
 function defaultGuacdSettings() { return { host: "127.0.0.1", port: 4822, tls: false, connectTimeoutSeconds: 5 }; }
 
 export async function activate(runpilot) {
-  const ui = runpilot.ui, call = (method, params = {}) => runpilot.ws.call(PLUGIN, method, params);
+  const ui = runpilot.ui, call = async (method, params = {}) => { const result = await runpilot.ws.call(PLUGIN, method, params); if (result?.error) throw new Error(result.error.message || "Plugin request failed"); return result; };
   let page = null, targets = [], notice = "", activeSession = null, headerAction = null, settingsForm = null, disposed = false;
   const settingsState = { loaded: false, loading: false, busy: false, error: "", status: "", value: defaultGuacdSettings() };
 
@@ -213,8 +213,8 @@ export async function activate(runpilot) {
     page.innerHTML = `<section class="rdp-plugin">${notice ? `<div class="rdp-plugin-notice" role="alert">${escapeHTML(notice)}</div>` : ""}<div class="rdp-target-list">${targets.map(target => {
       const endpoint = `${target.options.host || ""}${target.options.port && target.options.port !== 3389 ? `:${target.options.port}` : ""}`;
       const identity = formatUsername(target.options.username, target.options.domain) || "Interactive sign-in";
-      return `<article class="docker-card remote-card rdp-target-card"><div class="docker-card-head"><div class="rdp-target-facts"><h2>${escapeHTML(target.name)}</h2></div></div><div class="rdp-target-meta-row"><div class="rdp-target-facts"><span title="${escapeHTML(endpoint)}">${escapeHTML(endpoint)}</span><small class="rdp-target-identity" title="${escapeHTML(identity)}">${escapeHTML(identity)}</small></div><div class="rdp-target-actions"><button class="button danger small" data-delete="${escapeHTML(target.id)}">Delete</button><button class="button secondary small" data-edit="${escapeHTML(target.id)}">Edit</button><button class="button primary small" data-connect="${escapeHTML(target.id)}">Connect</button></div></div></article>`;
-    }).join("") || '<div class="empty rdp-target-empty"><h2>No RDP targets</h2></div>'}</div></section>`;
+      return `<article class="rp-card rdp-target-card"><div class="rdp-target-card-head"><div class="rdp-target-facts"><h2>${escapeHTML(target.name)}</h2></div></div><div class="rdp-target-meta-row"><div class="rdp-target-facts"><span title="${escapeHTML(endpoint)}">${escapeHTML(endpoint)}</span><small class="rdp-target-identity" title="${escapeHTML(identity)}">${escapeHTML(identity)}</small></div><div class="rdp-target-actions"><button class="button primary small" data-connect="${escapeHTML(target.id)}">Connect</button><button class="button secondary small" data-edit="${escapeHTML(target.id)}">Edit</button><button class="button danger small" data-delete="${escapeHTML(target.id)}">Delete</button></div></div></article>`;
+    }).join("") || '<div class="empty rdp-target-empty"><h2>No RDP targets yet</h2><p>Add a target to connect through your Guacamole endpoint.</p></div>'}</div></section>`;
     page.querySelectorAll("[data-connect]").forEach(button => button.addEventListener("click", () => connectPrompt(targets.find(target => target.id === button.dataset.connect))));
     page.querySelectorAll("[data-edit]").forEach(button => button.addEventListener("click", () => editTarget(targets.find(target => target.id === button.dataset.edit))));
     page.querySelectorAll("[data-delete]").forEach(button => button.addEventListener("click", () => deleteTarget(button.dataset.delete)));
@@ -247,7 +247,7 @@ export async function activate(runpilot) {
     if (options.certificatePolicy === "fingerprint") certificates.push(["fingerprint", "Pinned fingerprint"]);
     const performance = [["balanced", "Balanced"], ["quality", "Quality"], ["low-bandwidth", "Low bandwidth"]];
     if (options.performanceProfile === "custom") performance.push(["custom", "Custom"]);
-    const content = `<div class="form-grid"><label class="span-2">Name<input name="name" required maxlength="100" value="${escapeHTML(existing?.name || "")}"></label><section class="remote-xpra-settings span-2"><div class="section-head"><div><h3>RDP / Guacamole</h3><p class="muted">Credentials are requested for each connection and never saved.</p></div></div><div class="form-grid remote-xpra-grid"><label>Host<input name="host" required placeholder="rdp.example" inputmode="url" value="${escapeHTML(options.host)}"></label><label>Port<input name="port" type="number" min="1" max="65535" value="${escapeHTML(options.port)}"></label><label class="span-2">Username<input name="username" autocomplete="username" placeholder="DOMAIN\\username" value="${escapeHTML(formatUsername(options.username, options.domain))}"></label></div><details class="remote-xpra-advanced"><summary>Advanced settings</summary><div class="form-grid remote-xpra-grid">${selectField("Server keyboard layout", "serverLayout", LAYOUTS, options.serverLayout, "span-2")}${selectField("Security", "securityMode", [["automatic", "Automatic"], ["nla", "NLA"], ["nla-ext", "NLA Extended"], ["tls", "TLS"], ["rdp", "Legacy RDP"]], options.securityMode)}${selectField("Resize", "resizeMethod", [["display-update", "Dynamic / Display Update"], ["reconnect", "Reconnect on resize"], ["fixed", "Fixed"]], options.resizeMethod)}${selectField("Certificate", "certificatePolicy", certificates, options.certificatePolicy)}<label>Connection timeout<input name="timeoutSeconds" type="number" min="1" max="120" value="${escapeHTML(options.timeoutSeconds)}"></label>${selectField("Clipboard line endings", "clipboardNormalization", [["preserve", "Preserve"], ["unix", "Unix (LF)"], ["windows", "Windows (CRLF)"]], options.clipboardNormalization)}<label class="check"><input name="clipboard" type="checkbox" ${clipboardEnabled ? "checked" : ""}> Enable clipboard in both directions</label>${selectField("Performance", "performanceProfile", performance, options.performanceProfile)}</div></details></section></div>`;
+    const content = `<div class="form-grid"><label class="span-2">Name<input name="name" required maxlength="100" value="${escapeHTML(existing?.name || "")}"></label><section class="rdp-target-settings span-2"><div class="section-head"><div><h3>RDP / Guacamole</h3><p class="muted">Credentials are requested for each connection and never saved.</p></div></div><div class="form-grid rdp-target-grid"><label>Host<input name="host" required placeholder="rdp.example" inputmode="url" value="${escapeHTML(options.host)}"></label><label>Port<input name="port" type="number" min="1" max="65535" value="${escapeHTML(options.port)}"></label><label class="span-2">Username<input name="username" autocomplete="username" placeholder="DOMAIN\\username" value="${escapeHTML(formatUsername(options.username, options.domain))}"></label></div><details class="rdp-target-advanced"><summary>Advanced settings</summary><div class="form-grid rdp-target-grid">${selectField("Server keyboard layout", "serverLayout", LAYOUTS, options.serverLayout, "span-2")}${selectField("Security", "securityMode", [["automatic", "Automatic"], ["nla", "NLA"], ["nla-ext", "NLA Extended"], ["tls", "TLS"], ["rdp", "Legacy RDP"]], options.securityMode)}${selectField("Resize", "resizeMethod", [["display-update", "Dynamic / Display Update"], ["reconnect", "Reconnect on resize"], ["fixed", "Fixed"]], options.resizeMethod)}${selectField("Certificate", "certificatePolicy", certificates, options.certificatePolicy)}<label>Connection timeout<input name="timeoutSeconds" type="number" min="1" max="120" value="${escapeHTML(options.timeoutSeconds)}"></label>${selectField("Clipboard line endings", "clipboardNormalization", [["preserve", "Preserve"], ["unix", "Unix (LF)"], ["windows", "Windows (CRLF)"]], options.clipboardNormalization)}<label class="check"><input name="clipboard" type="checkbox" ${clipboardEnabled ? "checked" : ""}> Enable clipboard in both directions</label>${selectField("Performance", "performanceProfile", performance, options.performanceProfile)}</div></details></section></div>`;
     const { form } = dialog(existing ? "Edit RDP target" : "Add RDP target", "Connect to a remote desktop through guacd.", content, async form => {
       const value = name => form.elements.namedItem(name).value;
       const identity = splitUsername(value("username"));
@@ -260,6 +260,7 @@ export async function activate(runpilot) {
   }
 
   async function deleteTarget(id) {
+    if (!await (ui.confirm ? ui.confirm({title:"Delete RDP target?",message:"Remove this target from RunPilot? The remote host is unaffected.",confirmLabel:"Delete target",danger:true}) : confirm("Delete this RDP target?"))) return;
     try { await call("rdp.targets.delete", { id }); await loadTargets(); }
     catch (error) { notice = error.message; render(); }
   }
@@ -491,13 +492,13 @@ export async function activate(runpilot) {
     },
   });
   runpilot.navigation.register({
-    id: "remote-rdp", title: "RDP", icon: { src: new URL("./icon.svg", import.meta.url).href },
+    id: "remote-rdp", title: "RDP", description: "Remote desktops through your Guacamole connection.", icon: { src: new URL("./icon.svg", import.meta.url).href },
     headerActions(root) {
       if (activeSession) return;
       const button = document.createElement("button"); button.type = "button"; button.className = "button primary small"; button.textContent = "Add target"; button.addEventListener("click", () => editTarget());
       headerAction = button; root.append(button);
     },
-    render(root) { page = root; if (activeSession) root.append(activeSession.view.element); else void loadTargets(); },
+    render(root) { page = root; if (activeSession) root.append(activeSession.view.element); else { root.replaceChildren(ui.EmptyState({title:"Loading RDP targets…",message:"Retrieving your saved desktops."})); void loadTargets(); } },
   });
   return () => { disposed = true; stopDiagnosticEvents(); void closeSession(false); };
 }
