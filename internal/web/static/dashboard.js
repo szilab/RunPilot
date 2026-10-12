@@ -16,6 +16,13 @@
     const days = Math.floor(seconds / 86400), hours = Math.floor(seconds % 86400 / 3600), minutes = Math.floor(seconds % 3600 / 60);
     return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes}m` : `${Math.max(1, minutes)}m`;
   };
+  const historyLimit = 32;
+  function historyStorage() {
+    try { return global.localStorage; } catch { return null; }
+  }
+  function historyStorageKey() {
+    try { return `runpilot.hostMetrics.v1:${new URL("./", document.baseURI).pathname}`; } catch { return null; }
+  }
   const paths = {
     cpu:'<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 3v3m6-3v3M9 18v3m6-3v3M3 9h3m-3 6h3m12-6h3m-3 6h3"/>',
     memory:'<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 9v6m5-6v6m5-6v6M6 18v3m4-3v3m4-3v3m4-3v3"/>',
@@ -103,22 +110,63 @@
     if (["filesystems", "settings"].includes(focusKey)) root.querySelector?.(`[data-dashboard-control="${focusKey}"]`)?.focus({preventScroll:true});
   }
   class HostDashboard {
-    constructor(root, api, {interval = 8000, setIntervalFn = (callback, delay) => setInterval(callback, delay), clearIntervalFn = id => clearInterval(id), onUpdate, onOpenSettings} = {}) {
+    constructor(root, api, {interval = 8000, setIntervalFn = (callback, delay) => setInterval(callback, delay), clearIntervalFn = id => clearInterval(id), storage = historyStorage(), storageKey = historyStorageKey(), nowFn = () => Date.now(), onUpdate, onOpenSettings} = {}) {
       this.root=root; this.api=api; this.interval=interval; this.setIntervalFn=setIntervalFn; this.clearIntervalFn=clearIntervalFn; this.onUpdate=onUpdate; this.onOpenSettings=onOpenSettings;
-      this.active=false; this.timer=null; this.controller=null; this.busy=false; this.generation=0; this.samples=[]; this.lastData=null;
+      this.storage=storage; this.storageKey=storageKey; this.nowFn=nowFn; this.sampleHost=null;
+      this.active=false; this.running=false; this.timer=null; this.controller=null; this.busy=false; this.generation=0; this.samples=[]; this.lastData=null;
     }
     setActive(active) {
       if (this.active===active) return; this.active=active;
-      if (!active) { this.generation++; this.controller?.abort(); this.controller=null; this.busy=false; if(this.timer!==null)this.clearIntervalFn(this.timer);this.timer=null;return; }
-      if(!this.root.childElementCount)this.root.replaceChildren(element("p","host-dashboard-loading","Loading host metrics…"));
-      void this.refresh();this.timer=this.setIntervalFn(()=>{if(!document.hidden)void this.refresh();},this.interval);
+      if (!active) return;
+      if (this.lastData) renderStatus(this.root,this.lastData,{samples:this.samples,onOpenSettings:this.onOpenSettings});
+      else this.root.replaceChildren(element("p","host-dashboard-loading","Loading host metrics…"));
+    }
+    start() {
+      if (this.running) return;
+      this.running=true;
+      void this.refresh();
+      this.timer=this.setIntervalFn(()=>{if(!document.hidden)void this.refresh();},this.interval);
+    }
+    stop() {
+      this.running=false; this.generation++; this.controller?.abort(); this.controller=null; this.busy=false;
+      if(this.timer!==null)this.clearIntervalFn(this.timer);
+      this.timer=null;
+    }
+    restoreSamples(hostname) {
+      try {
+        const saved=this.storageKey && JSON.parse(this.storage?.getItem(this.storageKey) || "null");
+        if (saved?.version!==1 || saved.hostname!==hostname || !Array.isArray(saved.samples)) return [];
+        const now=this.nowFn();
+        return saved.samples.slice(-historyLimit).filter(sample => sample && Number.isFinite(sample.at) && sample.at>0 && sample.at<=now && ["cpu","memory","storage","gpu"].every(key => sample[key]===null || (Number.isFinite(sample[key]) && sample[key]>=0 && sample[key]<=100)))
+          .sort((a,b)=>a.at-b.at).map(({at,cpu,memory,storage,gpu})=>({at,cpu,memory,storage,gpu}));
+      } catch { return []; }
+    }
+    saveSamples() {
+      // Browser storage can be unavailable or full; live collection must still work.
+      try {
+        if (this.storageKey) this.storage?.setItem(this.storageKey,JSON.stringify({version:1,hostname:this.sampleHost,samples:this.samples}));
+      } catch {}
     }
     async refresh() {
-      if(!this.active||this.busy)return;const generation=++this.generation;this.busy=true;this.controller=new AbortController();
+      if(!this.running||this.busy)return;const generation=++this.generation;this.busy=true;this.controller=new AbortController();
       try {
         const data=await this.api("api/v1/dashboard/status",{signal:this.controller.signal});
-        if(this.active&&generation===this.generation){if(this.lastData?.host?.hostname!==data.host?.hostname)this.samples=[];this.samples.push(readings(data));if(this.samples.length>32)this.samples.shift();this.lastData=data;renderStatus(this.root,data,{samples:this.samples,onOpenSettings:this.onOpenSettings});this.onUpdate?.(data);}
-      } catch(error) {if(this.active&&generation===this.generation&&error?.name!=="AbortError")this.root.replaceChildren(element("p","host-dashboard-error",`Host metrics unavailable: ${error.message||error}`));}
+        if(this.running&&generation===this.generation){
+          const hostname=data.host?.hostname || "";
+          if(this.sampleHost!==hostname){this.sampleHost=hostname;this.samples=this.restoreSamples(hostname);}
+          const {cpu,memory,storage,gpu}=readings(data);
+          this.samples.push({at:this.nowFn(),cpu,memory,storage,gpu});
+          if(this.samples.length>historyLimit)this.samples.shift();
+          this.saveSamples();this.lastData=data;
+          if(this.active)renderStatus(this.root,data,{samples:this.samples,onOpenSettings:this.onOpenSettings});
+          this.onUpdate?.(data);
+        }
+      } catch(error) {
+        if(this.running&&generation===this.generation&&error?.name!=="AbortError"){
+          if(this.active)this.root.replaceChildren(element("p","host-dashboard-error",`Host metrics unavailable: ${error.message||error}`));
+          if(error?.message==="Unauthorized")this.stop();
+        }
+      }
       finally {if(generation===this.generation){this.busy=false;this.controller=null;}}
     }
   }

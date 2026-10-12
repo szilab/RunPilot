@@ -147,8 +147,12 @@ hard-code RunPilot's current colors or spacing.
 Overview currently presents a built-in, host-only monitoring dashboard with
 a host identity banner, CPU, memory, primary-filesystem and optional GPU cards,
 plus expandable filesystem details. Its metrics reuse the existing platform
-adapters. Sparklines retain at most 32 actual successful browser samples; they
-do not persist execution history or synthesize measurements. Plugin summary widgets appear below the
+adapters. Sparklines retain at most 32 actual successful samples in browser
+local storage, scoped to the application base path and host name. Collection
+continues on other pages while the authenticated app is visible; reloads restore
+the retained samples. Hidden or closed browsers do not collect measurements.
+This is recent browser history, not a server metrics archive; it does not use
+execution history or synthesize measurements. Plugin summary widgets appear below the
 host dashboard through the generic frontend widget registration contract. Their
 mount, refresh, and disposal follow Overview visibility. Pages can contribute
 shortcut metadata to the host quick-action panel. Existing launcher configuration

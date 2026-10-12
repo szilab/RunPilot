@@ -841,6 +841,7 @@ $("loginForm").addEventListener("submit", async e => {
     await connectApplicationSocket();
     await refresh();
     hostDashboard.setActive(currentPage === "overview");
+    hostDashboard.start();
     overviewWidgets.setActive(currentPage === "overview");
     startAutoRefresh();
     startConnectionMonitor();
@@ -850,8 +851,8 @@ $("loginForm").addEventListener("submit", async e => {
   }
 });
 
-$("passwordChangeForm").addEventListener("submit",async e=>{e.preventDefault();const message=$("passwordChangeError");message.classList.add("hidden");try{await api("api/v1/auth/password",{method:"POST",body:JSON.stringify({current:$("currentPassword").value,next:$("nextPassword").value,confirm:$("confirmPassword").value})});authenticated=false;location.reload();}catch(error){message.textContent=error.message;message.classList.remove("hidden");}});
-$("logoutButton").addEventListener("click",async()=>{try{await api("api/v1/auth/logout",{method:"POST"});}finally{authenticated=false;location.reload();}});
+$("passwordChangeForm").addEventListener("submit",async e=>{e.preventDefault();const message=$("passwordChangeError");message.classList.add("hidden");try{await api("api/v1/auth/password",{method:"POST",body:JSON.stringify({current:$("currentPassword").value,next:$("nextPassword").value,confirm:$("confirmPassword").value})});authenticated=false;hostDashboard.stop();location.reload();}catch(error){message.textContent=error.message;message.classList.remove("hidden");}});
+$("logoutButton").addEventListener("click",async()=>{hostDashboard.stop();try{await api("api/v1/auth/logout",{method:"POST"});}finally{authenticated=false;location.reload();}});
 $("bearerAuthEnabled").addEventListener("change",async()=>{try{const result=await api("api/v1/admin/bearer-auth",{method:"PUT",body:JSON.stringify({enabled:$("bearerAuthEnabled").checked})});$("bearerAuthEnabled").checked=result.enabled;}catch(error){$("bearerAuthEnabled").checked=!$("bearerAuthEnabled").checked;toast(error.message);}});
 
 async function loadDataRootSettings() {
@@ -889,6 +890,7 @@ $("dataRootChangeForm").addEventListener("submit",async e=>{e.preventDefault();c
   await refresh();
   try { await loadSystemInfo(); } catch (e) { if (e.message !== "Unauthorized") toast(e.message); }
   hostDashboard.setActive(currentPage === "overview");
+  hostDashboard.start();
   overviewWidgets.setActive(currentPage === "overview");
   startAutoRefresh();
 })();

@@ -63,13 +63,64 @@ const fixture = {host:{hostname:"desk",os:"linux",architecture:"amd64",cpuAvaila
   const dormant = new OverviewWidgets(new Element("detached"));
   dormant.register("tasks",{id:"tasks.summary",title:"Tasks",mount(){pluginMounted++;}});
   const dashboard = new HostDashboard(new Element("root"), async()=>{calls++;return fixture;},{setIntervalFn:fn=>{interval=fn;return 1;},clearIntervalFn:()=>{stopped=true;}});
-  dashboard.setActive(true); await new Promise(resolve=>setTimeout(resolve,0));
+  dashboard.setActive(true); assert.equal(calls,0,"collection must wait for authenticated startup");
+  dashboard.start(); await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(calls,1);assert.equal(pluginMounted,0);
   interval(); await new Promise(resolve=>setTimeout(resolve,0));assert.equal(calls,2);
   for(let i=0;i<40;i++) await dashboard.refresh();
   assert.equal(dashboard.samples.length,32,"browser history must remain bounded");
   assert.ok(dashboard.samples.every(sample=>sample.cpu===12.4),"charts must use actual host samples");
   dashboard.setActive(false);interval();await new Promise(resolve=>setTimeout(resolve,0));
-  assert.equal(calls,42);assert.equal(stopped,true);
-  console.log("Overview host rendering, missing GPU, disks and refresh lifecycle passed");
+  assert.equal(calls,43,"navigation must not stop collection");
+  dashboard.setActive(true);assert.equal(dashboard.samples.length,32);
+  document.hidden=true;interval();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(calls,43);
+  document.hidden=false;
+  dashboard.stop();interval();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(calls,43);assert.equal(stopped,true);
+
+  const tick = () => new Promise(resolve=>setTimeout(resolve,0));
+  const saved = new Map(), storage = {getItem:key=>saved.get(key),setItem:(key,value)=>saved.set(key,value)};
+  let now=100000;
+  const options = {storage,storageKey:"metrics:/pilot/",nowFn:()=>now,setIntervalFn:()=>1,clearIntervalFn:()=>{}};
+  const cache = new HostDashboard(new Element("root"), async()=>fixture, options);
+  cache.setActive(true);cache.start();await tick();now+=8000;await cache.refresh();cache.stop();
+  const retained=JSON.parse(saved.get(options.storageKey));
+  assert.equal(retained.samples.length,2);
+  assert.deepEqual(Object.keys(retained.samples[0]).sort(),["at","cpu","gpu","memory","storage"],"persist only chart readings");
+  const reloaded = new HostDashboard(new Element("root"), async()=>fixture, options);
+  now+=8000;reloaded.setActive(true);reloaded.start();await tick();
+  assert.deepEqual(reloaded.samples.slice(0,2),retained.samples,"reload lost history");
+  for(let i=0;i<40;i++){now+=8000;await reloaded.refresh();}
+  assert.equal(JSON.parse(saved.get(options.storageKey)).samples.length,32,"persisted history must remain bounded");
+  reloaded.stop();
+  const otherHost = new HostDashboard(new Element("root"), async()=>({...fixture,host:{...fixture.host,hostname:"other-host"}}), options);
+  otherHost.start();await tick();assert.equal(otherHost.samples.length,1,"history leaked across hosts");otherHost.stop();
+  const otherPath = new HostDashboard(new Element("root"), async()=>fixture, {...options,storageKey:"metrics:/other/"});
+  otherPath.start();await tick();assert.equal(otherPath.samples.length,1,"history leaked across base paths");otherPath.stop();
+
+  saved.set(options.storageKey,JSON.stringify({version:1,hostname:"desk",samples:[
+    {at:1,cpu:5,memory:20,storage:30,gpu:null},
+    {at:2,cpu:101,memory:20,storage:30,gpu:null},
+    {at:3,cpu:"5",memory:20,storage:30,gpu:null},
+    {at:now+1,cpu:5,memory:20,storage:30,gpu:null},null,
+  ]}));
+  const validated = new HostDashboard(new Element("root"), async()=>fixture, options);
+  validated.start();await tick();assert.equal(validated.samples.length,2,"invalid cache readings were restored");validated.stop();
+  saved.set(options.storageKey,"broken JSON");
+  const corrupt = new HostDashboard(new Element("root"), async()=>fixture, options);
+  corrupt.start();await tick();assert.equal(corrupt.samples.length,1);corrupt.stop();
+  const denied = new HostDashboard(new Element("root"), async()=>fixture, {...options,storage:{getItem(){throw Error("disabled");},setItem(){throw Error("quota");}}});
+  denied.start();await tick();await denied.refresh();assert.equal(denied.samples.length,2,"storage failure broke live metrics");denied.stop();
+
+  let finish;
+  const pending = new HostDashboard(new Element("root"), ()=>new Promise(resolve=>{finish=resolve;}), options);
+  const before=saved.get(options.storageKey);
+  pending.start();pending.stop();finish(fixture);await tick();
+  assert.equal(pending.samples.length,0);assert.equal(saved.get(options.storageKey),before,"stopped request wrote history");
+  const unauthorized = new HostDashboard(new Element("root"), async()=>{throw Error("Unauthorized");}, options);
+  unauthorized.start();await tick();assert.equal(unauthorized.running,false,"expired authentication kept polling");
+  document.baseURI="https://example.test/tenant/pilot/";
+  const scoped = new HostDashboard(new Element("root"), async()=>fixture);
+  assert.equal(scoped.storageKey,"runpilot.hostMetrics.v1:/tenant/pilot/");delete document.baseURI;
+  console.log("Overview rendering, persistent bounded host/path history, background sampling, storage fallback and authentication lifecycle passed");
 })().catch(error => {console.error(error);process.exitCode=1;});
