@@ -74,14 +74,13 @@ function fakeRuntime(replies) {
 
 const view = (id, name, type, status = {}) => ({ task: { id, name, type, command: { path: "/bin/x" }, restart: { mode: "on-failure" }, schedule: type === "scheduled" ? { type: "interval", intervalSeconds: 60 } : undefined, enabled: true }, status: { state: type === "scheduled" ? "idle" : "stopped", ...status } });
 
-test("the page renders escaped task data, reacts to events and unsubscribes", async () => {
+test("the page renders escaped task data without an Overview card", async () => {
   const runtime = fakeRuntime({ "tasks.list": { tasks: [view("task-1", `<img src=x onerror=alert(1)>`, "continuous", { message: "<b>boom</b>" }), view("task-2", "Nightly", "scheduled")] } });
   const cleanup = activate(runtime.runpilot);
   assert.equal(runtime.registered.length, 1);
   assert.equal(runtime.registered[0].id, "tasks");
   assert.equal(runtime.registered[0].title, "Tasks");
-  assert.equal(runtime.overviewRegistered.length, 1);
-  assert.equal(runtime.overviewRegistered[0].id, "tasks.summary");
+  assert.equal(runtime.overviewRegistered.length, 0);
   assert.deepEqual([...runtime.subscriptions.keys()].sort(), ["tasks:history.output", "tasks:tasks.changed", "tasks:tasks.run.completed", "tasks:tasks.status"]);
   const page = { isConnected: true, innerHTML: "", addEventListener() {} };
   runtime.registered[0].render(page);
