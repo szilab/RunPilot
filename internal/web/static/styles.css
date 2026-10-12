@@ -289,7 +289,6 @@ h1 { margin: 0; font-size: 28px; letter-spacing: -.035em; color: var(--rp-text-s
 .general-settings-card label { color:var(--rp-text-muted); }
 .general-settings-card .settings-form { display:grid; gap:12px; }
 .general-settings-card .settings-form p { margin:0; }
-.general-settings-card .settings-password-form { max-width:none; }
 .general-settings-card .dialog-actions { justify-content:flex-start; flex-wrap:wrap; margin-top:4px; }
 .general-settings-card input { min-width:0; }
 .general-settings-card button:disabled { cursor:not-allowed; opacity:.55; }

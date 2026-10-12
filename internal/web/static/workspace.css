@@ -212,9 +212,6 @@ main > header { margin-bottom: 22px; gap: 16px; align-items: center; }
 .settings-host-facts span { color: var(--rp-text-muted); }
 .settings-host-facts strong { font-weight: 500; text-align: right; color: var(--rp-text); }
 .general-settings-card .settings-form { gap: 10px; }
-.settings-password-form { grid-template-columns: 1fr 1fr; }
-.settings-password-form > label:first-child { grid-column: 1 / -1; }
-.settings-password-form > .dialog-actions, .settings-password-form > .form-error { grid-column: 1 / -1; }
 .general-settings-card .dialog-actions { justify-content: flex-end; }
 .plugin-filter-bar { margin: 10px 0 18px; }
 .plugin-setting-card { position: relative; }
@@ -297,8 +294,6 @@ main > header { margin-bottom: 22px; gap: 16px; align-items: center; }
   .host-dashboard-identity > .button { margin-left: 88px; }
   .settings-aside { grid-template-columns: minmax(0, 1fr); }
   .general-settings-grid { max-width: none; }
-  .settings-password-form { grid-template-columns: minmax(0, 1fr); }
-  .settings-password-form > * { grid-column: 1; }
   .plugin-settings-grid .plugin-setting-actions { grid-row: 2; }
   .plugin-settings-grid .plugin-setting-state { grid-row: 3; }
 }
@@ -321,8 +316,8 @@ main > header { margin-bottom: 22px; gap: 16px; align-items: center; }
 
 .account-identity-row { display: flex; align-items: center; gap: 12px; justify-content: space-between; margin: 14px 0; font-size: 13px; }
 .account-identity-row > span:first-child { color: var(--rp-text-strong); font-weight: 600; }
-.account-password-panel > summary { cursor: pointer; color: var(--rp-accent); font-size: 13px; font-weight: 600; padding: 10px 12px; border: 1px solid var(--rp-border); border-radius: 9px; background: var(--rp-field); }
-.account-password-panel[open] > summary { margin-bottom: 16px; }
+.account-settings-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.account-settings-form > .dialog-actions { margin-top: 4px; }
 .plugin-config-panel { grid-column: 1 / -1; border-top: 1px solid var(--rp-border); padding-top: 12px; }
 .plugin-config-panel > summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--rp-accent); padding: 3px 0; }
 .plugin-config-panel .plugin-settings-section { border-top: 0; }
@@ -334,17 +329,12 @@ main > header { margin-bottom: 22px; gap: 16px; align-items: center; }
 @media (max-width: 480px) { .account-identity-row { flex-wrap: wrap; gap: 8px; } }
 
 body[data-current-page="overview"] #pageEyebrow { display: none; }
-.settings-bottom-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; min-width: 0; align-items: start; }
-.settings-bottom-grid .general-settings-card { padding: 18px; }
-.settings-bottom-grid .meta { font-size: 12px; }
-.settings-bottom-grid .account-identity-row { flex-wrap: wrap; }
 :root[data-theme="dark"] .host-metric-reading { height: 48px; display: flex; align-items: center; justify-content: flex-start; margin: 10px 0; }
 :root[data-theme="dark"] .host-metric-ring { display: none; }
 :root[data-theme="dark"] .host-dashboard-value { position: static; display: block; font-size: 30px; text-align: left; }
 :root[data-theme="dark"] .host-metric-trend { height: 42px; padding-top: 12px; }
 @media (max-width: 1000px) {
   :root[data-theme="dark"] .host-metric-reading { grid-column: 2; grid-row: 2 / 5; margin: 10px 0; }
-  .settings-bottom-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 :root[data-theme="dark"] .shell { box-shadow: 0 24px 70px rgba(0, 0, 0, .28), 0 0 0 1px rgba(166, 190, 234, .1); }

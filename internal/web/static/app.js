@@ -233,7 +233,7 @@ function updatePageHeading() {
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   $("pageTitle").textContent = currentPage === "overview" ? `${greeting}${systemInfo?.username ? `, ${systemInfo.username}` : ""}` : (pageMeta[currentPage]?.[0] || entry?.title || currentPage);
   $("pageEyebrow").textContent = currentPage === "overview" ? "YOUR WORKSPACE, AT A GLANCE" : "RUNPILOT WORKSPACE";
-  $("pageDescription").textContent = entry?.description || (currentPage === "settings" ? "Manage your server, account, and plugins." : "Your host and services, in one place.");
+  $("pageDescription").textContent = entry?.description || (currentPage === "settings" ? "Manage your server and plugins." : "Your host and services, in one place.");
   $("overviewClock").hidden = currentPage !== "overview";
   $("overviewClock").innerHTML = `<span>${escapeHtml(now.toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric",year:"numeric"}))}</span><strong>${escapeHtml(now.toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"}))}</strong>`;
 }
@@ -269,7 +269,7 @@ async function ensureHostSummary() {
 }
 
 function workspaceDestinations() {
-  return [{id:"overview",title:"Overview",description:"Host resources and summaries",icon:"monitor"},{id:"settings",title:"Settings",description:"Account and host configuration",icon:"monitor"},{id:"plugins",title:"Plugins",description:"Browse and manage plugin packages",icon:"monitor"},...[...pluginNavigation.values()].map(entry=>({id:entry.id,title:entry.title,description:entry.description||"Plugin page",icon:entry.icon}))];
+  return [{id:"overview",title:"Overview",description:"Host resources and summaries",icon:"monitor"},{id:"settings",title:"Settings",description:"Host configuration and plugins",icon:"monitor"},{id:"plugins",title:"Plugins",description:"Browse and manage plugin packages",icon:"monitor"},...[...pluginNavigation.values()].map(entry=>({id:entry.id,title:entry.title,description:entry.description||"Plugin page",icon:entry.icon}))];
 }
 function renderWorkspaceSearch() {
   const field=$("workspaceSearch"),root=$("workspaceSearchResults"),query=field.value.trim().toLocaleLowerCase();
@@ -763,7 +763,7 @@ async function loadSystemInfo() {
   $("accountName").textContent = username;
   $("accountMenuName").textContent = username;
   $("accountAvatar").textContent = username.charAt(0).toUpperCase();
-  $("settingsAccountName").textContent = username;
+  $("accountSettingsName").textContent = username;
   updatePageHeading();
 
 }
@@ -797,7 +797,17 @@ document.querySelectorAll(".nav").forEach(n => n.addEventListener("click", () =>
 $("restartApplicationButton").addEventListener("click", requestRunPilotRestart);
 $("generalRestartButton").addEventListener("click", requestRunPilotRestart);
 $("managePluginsButton").addEventListener("click", () => selectSettingsTab("pluginSettingsTab", true));
-$("accountSettingsButton").addEventListener("click", () => { document.querySelector(".account-menu").open=false; setPage("settings"); selectSettingsTab("generalSettingsTab"); document.querySelector(".account-password-panel").open=true; $("currentPassword").focus(); });
+$("accountSettingsButton").addEventListener("click", () => {
+  document.querySelector(".account-menu").open = false;
+  $("accountSettingsDialog").showModal();
+  $("currentPassword").focus();
+});
+$("accountSettingsDialog").addEventListener("close", () => {
+  $("passwordChangeForm").reset();
+  $("passwordChangeError").textContent = "";
+  $("passwordChangeError").classList.add("hidden");
+  document.querySelector(".account-menu > summary").focus();
+});
 
 document.querySelectorAll("[data-software-tab]").forEach(button => button.addEventListener("click", () => { softwareTab = button.dataset.softwareTab; renderSoftware(); loadSoftwareView(); }));
 $("softwareSearchButton").addEventListener("click", softwareSearch);

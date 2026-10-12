@@ -102,23 +102,12 @@
                   <div class="dialog-actions"><button id="dataRootSave" class="button secondary" disabled>Change directory and restart</button></div>
                 </form>
               </section>
-              <div class="settings-bottom-grid"><section class="general-settings-card">
+              <section class="general-settings-card">
                 <h3>API access</h3>
                 <label class="check"><input id="bearerAuthEnabled" type="checkbox"> Allow API token authentication</label>
                 <p class="meta">For CLI tools and integrations. Browser sessions use your administrator account. Disabling this blocks API token access for external clients.</p>
               </section>
-            <section class="general-settings-card">
-              <h3>Administrator account</h3>
-              <p class="meta">Update the password used to sign in to RunPilot.</p>
-              <div class="account-identity-row"><span id="settingsAccountName">Administrator</span><span class="status installed">Local administrator</span></div><details class="account-password-panel"><summary>Change password</summary><form id="passwordChangeForm" class="settings-form settings-password-form">
-                <label>Current password<input id="currentPassword" type="password" autocomplete="current-password" required></label>
-                <label>New password<input id="nextPassword" type="password" minlength="12" autocomplete="new-password" required></label>
-                <label>Confirm new password<input id="confirmPassword" type="password" minlength="12" autocomplete="new-password" required></label>
-                <div id="passwordChangeError" class="form-error hidden" role="alert"></div>
-                <div class="dialog-actions"><button class="button primary">Change password</button></div>
-              </form></details>
-            </section>
-</div>          </div><div class="settings-aside">
+          </div><div class="settings-aside">
             <article class="general-settings-card"><h3>Workspace actions</h3><button id="generalRestartButton" class="settings-action" type="button"><span class="feature-icon blue" aria-hidden="true">↻</span><span><strong>Restart RunPilot</strong><small>Reconnect after a service restart</small></span><span aria-hidden="true">›</span></button><button id="managePluginsButton" class="settings-action" type="button"><span class="feature-icon violet" aria-hidden="true">◇</span><span><strong>Manage plugins</strong><small>Browse, enable, and configure</small></span><span aria-hidden="true">›</span></button></article>
             <article class="general-settings-card"><h3>System information</h3><div id="settingsHostFacts" class="settings-host-facts"><p class="meta">Loading host information…</p></div></article>
           </div></div>
@@ -131,6 +120,24 @@
       </main>
     </div>
   </div>
+
+  <dialog id="accountSettingsDialog" class="dialog small" aria-labelledby="accountSettingsTitle" aria-describedby="accountSettingsDescription">
+    <div class="dialog-head">
+      <div><h2 id="accountSettingsTitle">Account settings</h2><p id="accountSettingsDescription">Update the password used to sign in to RunPilot.</p></div>
+      <button class="icon-btn" type="button" data-dismiss="accountSettingsDialog" aria-label="Close account settings">×</button>
+    </div>
+    <div class="account-identity-row"><span id="accountSettingsName">Administrator</span><span class="status installed">Local administrator</span></div>
+    <form id="passwordChangeForm" class="settings-form account-settings-form">
+      <label>Current password<input id="currentPassword" type="password" autocomplete="current-password" required autofocus></label>
+      <label>New password<input id="nextPassword" type="password" minlength="12" autocomplete="new-password" required></label>
+      <label>Confirm new password<input id="confirmPassword" type="password" minlength="12" autocomplete="new-password" required></label>
+      <div id="passwordChangeError" class="form-error hidden" role="alert"></div>
+      <div class="dialog-actions">
+        <button class="button secondary" type="button" data-dismiss="accountSettingsDialog">Cancel</button>
+        <button class="button primary" type="submit">Change password</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="loginDialog" class="dialog small">
     <form method="dialog" id="loginForm">
