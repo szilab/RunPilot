@@ -11,7 +11,7 @@ class Element {
 }
 global.document = {hidden:false, createElement: tag => new Element(tag)};
 const descendants = node => [node, ...node.children.flatMap(descendants)];
-const fixture = {host:{hostname:"desk",os:"linux",architecture:"amd64",cpuAvailable:true,cpuCount:16,cpuPercent:12.4,loadAverage:[1.7,1.4,1.2],cpuModel:"Ryzen",memoryTotalBytes:32*1024**3,memoryFreeBytes:20*1024**3,gpuAvailable:true,gpuName:"RTX",gpuPercent:38,gpuMemoryUsedBytes:2*1024**3,gpuMemoryTotalBytes:8*1024**3,disks:[{path:"/",totalBytes:1000,freeBytes:250},{path:"/mnt/data",totalBytes:2000,freeBytes:1000}]},hostUptimeSeconds:10*86400+14*3600};
+const fixture = {host:{hostname:"desk",os:"linux",architecture:"amd64",cpuAvailable:true,cpuCount:16,cpuPercent:12.4,loadAverage:[1.7,1.4,1.2],cpuModel:"Ryzen",memoryTotalBytes:32*1024**3,memoryFreeBytes:20*1024**3,gpuAvailable:true,gpuName:"RTX",gpuPercent:38,gpuMemoryUsedBytes:2*1024**3,gpuMemoryTotalBytes:8*1024**3,disks:[{path:"/boot/efi",totalBytes:500,freeBytes:490},{path:"/",totalBytes:1000,freeBytes:250},{path:"/mnt/data",totalBytes:2000,freeBytes:1000}]},hostUptimeSeconds:10*86400+14*3600};
 (async () => {
   const root = new Element("root"), widgets = new OverviewWidgets(root), events = [];
   widgets.register("good", {id:"good.summary",title:"Good",size:"small",order:20,mount(body){ events.push("good mount"); body.textContent="ok"; return () => events.push("good cleanup"); },refresh(){ events.push("good refresh"); },dispose(){events.push("good dispose");}});

@@ -43,7 +43,7 @@
   }
   function readings(data) {
     const host = data?.host || {}, total = Number(host.memoryTotalBytes) || 0, free = Math.min(total, Math.max(0, Number(host.memoryFreeBytes) || 0));
-    const disks = Array.isArray(host.disks) ? host.disks.filter(d => d && d.totalBytes > 0) : [];
+    const disks = Array.isArray(host.disks) ? host.disks.filter(d => d && d.totalBytes > 0 && d.path !== "/boot/efi") : [];
     const primary = disks.find(d => d.path === "/") || disks[0];
     return {cpu:host.cpuAvailable !== false && Number.isFinite(host.cpuPercent) ? utilization(host.cpuPercent) : null, memory:total ? fraction(total-free,total) : null, gpu:host.gpuAvailable ? utilization(host.gpuPercent) : null, storage:primary ? fraction(Math.max(0,primary.totalBytes-primary.freeBytes),primary.totalBytes) : null, primary, disks, totalMemory:total, freeMemory:free};
   }
