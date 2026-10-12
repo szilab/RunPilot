@@ -64,12 +64,12 @@
     const heading = element("div", "host-metric-heading"), glyph = element("span", "feature-icon"); glyph.innerHTML = icon(key); heading.append(element("h2", "host-dashboard-title", title), glyph);
     const reading = element("div", "host-metric-reading"); reading.setAttribute("role", "meter"); reading.setAttribute("aria-label", title); reading.setAttribute("aria-valuemin", "0"); reading.setAttribute("aria-valuemax", "100");
     if (value !== null) reading.setAttribute("aria-valuenow", String(Math.round(value))); else reading.setAttribute("aria-valuetext", "Unavailable");
-    const circumference = 251.327, offset = value === null ? circumference : circumference*(1-utilization(value)/100);
-    reading.innerHTML = `<svg class="host-metric-ring" viewBox="0 0 94 94" aria-hidden="true"><circle cx="47" cy="47" r="40"/><circle class="ring-value" cx="47" cy="47" r="40" stroke-dasharray="${circumference}" stroke-dashoffset="${offset.toFixed(2)}"/></svg>`;
-    reading.append(element("strong", "host-dashboard-value", value === null ? "—" : percentage(value))); node.append(heading, reading);
+    reading.append(element("strong", "host-dashboard-value", value === null ? "—" : percentage(value)), element("span", "host-metric-current", "Current"));
+    const visual = element("div", "host-metric-visual");
+    visual.append(trend(samples.map(sample => sample[key]), title), reading);node.append(heading,visual);
     for (const line of details.filter(Boolean)) node.append(element("p", "host-dashboard-detail", line));
     if (model) { const text = element("p", "host-dashboard-model", model); text.title = model; node.append(text); }
-    node.append(trend(samples.map(sample => sample[key]), title)); return node;
+    return node;
   }
   function renderStatus(root, data, {samples = [], onOpenSettings} = {}) {
     const focusKey = root.contains?.(document.activeElement) ? document.activeElement?.dataset?.dashboardControl : null;

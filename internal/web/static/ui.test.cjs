@@ -82,8 +82,8 @@ const {chromium} = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE);
         await page.screenshot({path:path.join(process.env.RUNPILOT_UI_SCREENSHOTS, `${base ? "nested" : "root"}-${label}.png`),fullPage});
       }
     };
-    for (const width of [1440,820,390]) {
-      await page.setViewportSize({width,height:width===390?844:1000});
+    for (const width of [1920,1440,820,390,320]) {
+      await page.setViewportSize({width,height:width<700?844:1000});
       for (const theme of ["light","dark"]) {
         const current = await page.locator("html").getAttribute("data-theme");
         if (theme !== current) await page.locator("#themeToggle").click();
@@ -93,6 +93,14 @@ const {chromium} = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE);
           assert.equal(await page.locator(`[data-page="${id}"]`).getAttribute("aria-current"), "page");
           if (id === "settings") await page.locator("#generalSettingsTab").click();
           if (id === "terminal") await page.locator(".xterm-helper-textarea").waitFor();
+          if (id === "overview") {
+            const card = page.locator('.host-metric[data-metric="cpu"]');
+            const chart = await card.locator(".host-metric-trend").boundingBox();
+            const reading = await card.locator(".host-metric-reading").boundingBox();
+            assert.ok(chart.height >= 72 && chart.width > reading.width * 2, "chart should dominate the metric card");
+            assert.ok(reading.x >= chart.x + chart.width, "usage must be beside the chart");
+            assert.ok(Math.abs(chart.y + chart.height / 2 - reading.y - reading.height / 2) < 2, "chart and usage should align vertically");
+          }
           await page.evaluate(() => scrollTo(0,0));
           await screenshot(`${id}-${theme}-${width}`);
         }
