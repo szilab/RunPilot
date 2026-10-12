@@ -22,6 +22,7 @@ func TestUIRealBrowser(t *testing.T) {
 	if os.Getenv("RUNPILOT_PLAYWRIGHT_MODULE") == "" || runtime.GOOS != "linux" {
 		t.Skip("needs Linux and RUNPILOT_PLAYWRIGHT_MODULE")
 	}
+	t.Setenv("RUNPILOT_DATA_ROOT_FILE", filepath.Join(t.TempDir(), "deployment", "data-root"))
 	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(plugins.Catalog{SchemaVersion: 1, Plugins: []plugins.CatalogEntry{}})
 	}))

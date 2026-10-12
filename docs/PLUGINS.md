@@ -212,3 +212,8 @@ Playwright module and optionally `RUNPILOT_BROWSER_EXECUTABLE` to its browser,
 then run `go test ./internal/web -run 'Test(UI|WebApps)RealBrowser'`.
 `RUNPILOT_UI_SCREENSHOTS` saves the UI test's light/dark desktop, tablet, and
 mobile captures. These tests use temporary application data and local fixtures.
+
+For a manual isolated development instance, also set `RUNPILOT_DATA_ROOT_FILE`
+to a locator inside its temporary deployment directory. Separate `--data-dir`
+and `--config-dir` flags do not isolate the deployment locator: completing
+initial setup persists the selected data root there.
