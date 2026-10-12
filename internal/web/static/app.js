@@ -240,7 +240,6 @@ function updatePageHeading() {
 
 function updateHostSummary(data) {
   const host=data?.host||{};
-  $("sidebarHostName").textContent=host.hostname||"RunPilot host";
   const metrics=RunPilotDashboard.readings(data), {size,uptime}=RunPilotDashboard;
   $("settingsHostIdentity").innerHTML=`<img src="host-device.svg" alt=""><div><strong>${escapeHtml(host.hostname||"Unknown host")}</strong><p>${escapeHtml([host.os,host.architecture].filter(Boolean).join(" · "))} · Uptime ${escapeHtml(uptime(data.hostUptimeSeconds))}</p></div>`;
   const info=[["Operating system",host.os||"Unavailable"],["Architecture",host.architecture||"Unavailable"],["Processor",host.cpuModel||"Unavailable"],["Logical CPUs",host.cpuCount||"Unavailable"],["Total memory",metrics.totalMemory?size(metrics.totalMemory):"Unavailable"],["Host uptime",uptime(data.hostUptimeSeconds)],["RunPilot",systemInfo?.version||"Unavailable"]];
@@ -302,10 +301,11 @@ function setConnected(ok) {
   connectionChecked = true;
   const restored = ok && connectionWasLost;
   connectionOnline = ok;
-  $("connectionDot").classList.toggle("ok", ok);
   const mode = systemInfo?.websocketPayloadMode || "disabled";
-  const encryptionStatus = mode === "required" ? "Encrypted" : "Normal";
-  $("connectionWarning").classList.toggle("hidden", location.protocol !== "http:");
+  const encrypted = mode === "required";
+  $("connectionDot").classList.toggle("ok", ok && encrypted);
+  $("connectionDot").classList.toggle("unencrypted", ok && !encrypted);
+  const encryptionStatus = encrypted ? "Encrypted" : "Unencrypted";
   $("connectionText").textContent = ok ? `Connected · ${encryptionStatus}` : "Offline";
   $("connectionDot").title = ok ? encryptionStatus : "RunPilot is offline";
   $("connectionText").title = ok ? encryptionStatus : "RunPilot is offline";

@@ -22,6 +22,9 @@ const {chromium} = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE);
     await page.evaluate(() => document.fonts.ready);
     assert.equal(await page.evaluate(() => document.fonts.check("14px Inter")), true);
     assert.equal(await page.locator("#accountName").textContent(), "admin");
+    assert.equal(await page.locator("#sidebarHostName, #connectionWarning").count(),0);
+    assert.equal(await page.locator("#connectionText").textContent(),"Connected · Unencrypted");
+    assert.equal(await page.locator("#connectionDot").evaluate(el=>getComputedStyle(el).backgroundColor),"rgb(234, 179, 8)");
     await page.evaluate(() => hostDashboard.refresh());
     const retained = await page.evaluate(() => hostDashboard.samples.slice());
     assert.ok(retained.length>=2);
@@ -109,6 +112,15 @@ const {chromium} = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE);
           }
           await page.evaluate(() => scrollTo(0,0));
           await screenshot(`${id}-${theme}-${width}`);
+          if (id === "overview" && width === 1440) {
+            assert.equal(await page.locator("#connectionText").textContent(),"Connected · Unencrypted");
+            assert.ok(await page.locator("#connectionText").evaluate(el=>el.scrollWidth<=el.clientWidth),"connection text is clipped");
+            await page.locator("#sidebarToggle").click();
+            assert.equal(await page.locator("#connectionDot").getAttribute("title"),"Unencrypted");
+            assert.equal(await page.locator("#connectionDot").evaluate(el=>getComputedStyle(el).backgroundColor),"rgb(234, 179, 8)");
+            await screenshot(`sidebar-collapsed-${theme}`);
+            await page.locator("#sidebarToggle").click();
+          }
         }
         await page.locator(".account-menu > summary").click();
         await page.locator("#accountSettingsButton").click();

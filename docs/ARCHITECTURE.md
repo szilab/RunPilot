@@ -147,7 +147,7 @@ hard-code RunPilot's current colors or spacing.
 Overview currently presents a built-in, host-only monitoring dashboard with
 CPU, memory, primary-filesystem and optional GPU cards, followed by always-visible
 filesystem capacity cards using the same responsive columns. Host identity stays
-in Settings and the sidebar. Its metrics reuse the existing platform
+in Settings. Its metrics reuse the existing platform
 adapters. Sparklines retain at most 32 actual successful samples in browser
 local storage, scoped to the application base path and host name. Collection
 continues on other pages while the authenticated app is visible; reloads restore

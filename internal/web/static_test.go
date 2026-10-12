@@ -250,27 +250,27 @@ func TestLegacyTerminalUIIsRemoved(t *testing.T) {
 	}
 }
 
-func TestSidebarWarnsWhenHTTPDisablesWebSocketPayloadEncryption(t *testing.T) {
+func TestSidebarUsesConnectionIndicatorForPayloadEncryption(t *testing.T) {
 	index, err := staticFS.ReadFile("static/index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(index), `id="connectionWarning"`) || !strings.Contains(string(index), `aria-label="HTTP connection: WebSocket payload encryption is disabled."`) {
-		t.Fatal("sidebar HTTP transport warning is missing")
+	for _, removed := range []string{`id="connectionWarning"`, `id="sidebarHostName"`} {
+		if strings.Contains(string(index), removed) {
+			t.Fatalf("sidebar still contains %s", removed)
+		}
 	}
-	app, err := staticFS.ReadFile("static/app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(app), `$("connectionWarning").classList.toggle("hidden", location.protocol !== "http:")`) {
-		t.Fatal("sidebar HTTP transport warning is not controlled by page scheme")
+	for _, required := range []string{`id="connectionDot"`, `id="connectionText"`} {
+		if !strings.Contains(string(index), required) {
+			t.Fatalf("sidebar connection status is missing %s", required)
+		}
 	}
 	styles, err := staticFS.ReadFile("static/styles.css")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(styles), `.shell.sidebar-collapsed .connection-warning { position: relative; align-self: start; width: 40px; height: 40px;`) || !strings.Contains(string(styles), `position: absolute; inset: 0; display: grid; place-items: center;`) {
-		t.Fatal("collapsed sidebar warning treatment is missing")
+	if !strings.Contains(string(styles), `.dot.unencrypted {`) {
+		t.Fatal("unencrypted connection indicator style is missing")
 	}
 	for _, want := range []string{
 		`.shell.sidebar-collapsed .system-version { display: none; }`,
