@@ -45,17 +45,18 @@ const fixture = {host:{hostname:"desk",os:"linux",architecture:"amd64",cpuAvaila
   const dashboardRoot = new Element("root");
   renderStatus(dashboardRoot, fixture);
   const all = descendants(dashboardRoot);
-  assert.equal(all.filter(node => node.className.includes("host-dashboard-card")).length, 5);
+  assert.equal(all.filter(node => node.className.includes("host-dashboard-card")).length, 6);
   assert.equal(all.filter(node => node.className === "host-dashboard-disk").length, 2);
   assert.ok(all.some(node => node.textContent === "75%"));
   assert.ok(all.some(node => node.textContent === "desk"));
   assert.ok(all.some(node => node.textContent === "16 logical CPUs"));
   assert.ok(all.some(node => node.textContent.includes("Load 1.70 / 1.40 / 1.20")));
-  assert.ok(all.some(node => node.textContent.includes("Video memory")));
-  assert.equal(all.filter(node => node.className === "host-dashboard-bar").length, 6);
+  assert.ok(all.some(node => node.textContent.includes("video memory")));
+  assert.equal(all.filter(node => node.attributes.role === "meter").length, 4);
+  assert.equal(all.filter(node => node.className === "host-dashboard-bar").length, 2);
   const noGPU = new Element("root");
   renderStatus(noGPU, {...fixture, host:{...fixture.host,gpuAvailable:false,disks:[]}});
-  assert.equal(descendants(noGPU).filter(node => node.className.includes("host-dashboard-card")).length, 4);
+  assert.equal(descendants(noGPU).filter(node => node.className.includes("host-dashboard-card")).length, 5);
   assert.ok(descendants(noGPU).some(node => node.textContent === "No filesystem metrics available."));
 
   let calls=0, interval, stopped=false, pluginMounted=0;
@@ -65,7 +66,10 @@ const fixture = {host:{hostname:"desk",os:"linux",architecture:"amd64",cpuAvaila
   dashboard.setActive(true); await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(calls,1);assert.equal(pluginMounted,0);
   interval(); await new Promise(resolve=>setTimeout(resolve,0));assert.equal(calls,2);
+  for(let i=0;i<40;i++) await dashboard.refresh();
+  assert.equal(dashboard.samples.length,32,"browser history must remain bounded");
+  assert.ok(dashboard.samples.every(sample=>sample.cpu===12.4),"charts must use actual host samples");
   dashboard.setActive(false);interval();await new Promise(resolve=>setTimeout(resolve,0));
-  assert.equal(calls,2);assert.equal(stopped,true);
+  assert.equal(calls,42);assert.equal(stopped,true);
   console.log("Overview host rendering, missing GPU, disks and refresh lifecycle passed");
 })().catch(error => {console.error(error);process.exitCode=1;});

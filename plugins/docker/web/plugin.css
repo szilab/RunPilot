@@ -37,3 +37,16 @@
 .docker-plugin-container small, .docker-plugin-resource small { margin-top: 4px; line-height: 1.5; }
 .docker-plugin .meta { max-width: none; white-space: normal; }
 @media(max-width:600px) { .docker-plugin-toolbar { padding: 16px; align-items: start; } .docker-plugin-resource { flex-wrap: wrap; } }
+.docker-plugin-viewbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.docker-plugin-tabs { display: flex; gap: 4px; padding: 4px; border: 1px solid var(--rp-border); border-radius: var(--rp-radius); background: var(--rp-field, var(--rp-surface)); }
+.docker-plugin-tabs .button { border: 0; background: transparent; display: inline-flex; gap: 8px; align-items: center; }
+.docker-plugin-tabs .button.active { background: var(--rp-accent-soft, var(--rp-surface-elevated)); color: var(--rp-accent); }
+.docker-plugin-count { font-size: 11px; font-variant-numeric: tabular-nums; opacity: .8; }
+.docker-plugin-filter { width: min(260px, 100%); background: var(--rp-field, var(--rp-surface-elevated)); font-size: 13px; }
+.docker-plugin-resource-panel { padding: 8px 20px; }
+.docker-plugin-projects > .empty { column-span: all; }
+.docker-plugin-card { background: var(--rp-glass-tint, var(--rp-surface-elevated)); }
+.docker-plugin-readonly { margin: 0; padding: 6px 0 0; font-size: 12px; }
+@media(max-width:600px) { .docker-plugin-tabs { width: 100%; } .docker-plugin-tabs .button { padding: 7px 8px; font-size: 12px; flex: 1; justify-content: center; } .docker-plugin-filter { width: 100%; } }
+
+.docker-plugin-actions:empty { display: none; }

@@ -63,7 +63,7 @@ export async function activate(runpilot) {
     if (!targets.length) root.append(runpilot.ui.EmptyState({ title: "No Web Apps", message: "Add a host-reachable HTTP application to get started." }));
     for (const target of targets) {
       const card = document.createElement("article"); card.className = "rp-card webapps-card";
-      card.innerHTML = `<div class="webapps-card-head"><div class="webapps-facts"><h2>${escape(target.name)}</h2></div></div><div class="webapps-meta-row"><div class="webapps-facts"><span title="${escape(target.upstreamURL)}">${escape(target.upstreamURL)}</span><small title="${escape(publicPrefix(base, target.mountPath))}">${escape(publicPrefix(base, target.mountPath))}</small></div></div>`;
+      card.innerHTML = `<div class="webapps-card-head"><span class="webapps-glyph" aria-hidden="true"></span><div class="webapps-facts"><h2>${escape(target.name)}</h2></div></div><div class="webapps-meta-row"><div class="webapps-facts"><span title="${escape(target.upstreamURL)}">${escape(target.upstreamURL)}</span><small title="${escape(publicPrefix(base, target.mountPath))}">${escape(publicPrefix(base, target.mountPath))}</small></div></div>`;
       const actions = document.createElement("div"); actions.className = "webapps-actions";
       const button = (label, style, work) => { const el = document.createElement("button"); el.type = "button"; el.className = "button " + style; el.textContent = label; el.onclick = work; actions.append(el); };
       button("Open", "primary small", () => action(async () => { const params = { targetId: target.id }; if (target.forwardPublicHost || target.forwardPublicScheme) { params.publicHost = location.host; params.publicScheme = location.protocol.slice(0, -1); } const opened = await call("apps.session.open", params); launchGateway(opened); }));
@@ -80,7 +80,7 @@ export async function activate(runpilot) {
     try { const [t, s] = await Promise.all([call("apps.targets.list"), call("apps.sessions.list")]); targets = t.targets; sessions = s.sessions; }
     catch (error) { message = error.message; } render();
   }
-  runpilot.navigation.register({ id: "web-apps", title: "Web Apps", description: "Secure access to the web applications on your host.", icon: { src: new URL("./icon.svg", import.meta.url).href }, render(root) { page = root; root.replaceChildren(runpilot.ui.EmptyState({title:"Loading Web Apps…",message:"Retrieving your saved applications."})); void load(); }, headerActions(root) { const button = document.createElement("button"); button.className = "button primary small"; button.textContent = "Add Web App"; button.onclick = () => edit(); root.append(button); } });
+  runpilot.navigation.register({ id: "web-apps", title: "Web Apps", shortcut:{title:"Open Web Apps",description:"Your web applications",order:40}, description: "Secure access to the web applications on your host.", icon: { src: new URL("./icon.svg", import.meta.url).href }, render(root) { page = root; root.replaceChildren(runpilot.ui.EmptyState({title:"Loading Web Apps…",message:"Retrieving your saved applications."})); void load(); }, headerActions(root) { const button = document.createElement("button"); button.className = "button primary small"; button.textContent = "Add Web App"; button.onclick = () => edit(); root.append(button); } });
   const refresh = setInterval(() => { if (page?.isConnected && page.classList.contains("active")) void load(); }, 30000);
   return { dispose() { disposed = true; clearInterval(refresh); } };
 }

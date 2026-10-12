@@ -173,7 +173,7 @@ export async function activate(runpilot) {
       const closeTab = document.createElement("button"); closeTab.type = "button"; closeTab.className = "terminal-plugin-tab-close"; closeTab.textContent = "×";
       closeTab.setAttribute("aria-label", `Close ${label.textContent}`); closeTab.title = `Close ${label.textContent}`; closeTab.addEventListener("click", () => close(id));
       tab.append(label, closeTab); tabs.append(tab);
-      const pane = document.createElement("div"); pane.className = "terminal-plugin-screen";
+      const pane = document.createElement("div"); pane.className = "terminal-plugin-screen"; pane.dataset.rpInteractive = "";
       pane.id = `terminal-pane-${id}`; pane.setAttribute("role", "tabpanel"); pane.setAttribute("aria-labelledby", label.id);
       pane.hidden = id !== activeID; panes.append(pane);
       label.setAttribute("aria-controls", pane.id);
@@ -257,7 +257,7 @@ export async function activate(runpilot) {
     item.resizeObserver.observe(host);
   }
   runpilot.navigation.register({
-    id: "terminal", title: "Terminal", description: "Interactive shell sessions on your RunPilot host.", icon: { src: new URL("./icon.svg", import.meta.url).href },
+    id: "terminal", title: "Terminal", shortcut:{title:"Open Terminal",description:"Interactive host shell",order:10}, description: "Interactive shell sessions on your RunPilot host.", icon: { src: new URL("./icon.svg", import.meta.url).href },
     render: root => {
       page = root;
       render();

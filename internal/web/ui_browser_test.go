@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/szilab/RunPilot/internal/config"
 	"github.com/szilab/RunPilot/internal/core"
@@ -74,6 +75,42 @@ func TestUIRealBrowser(t *testing.T) {
 				t.Fatalf("UI browser: %v\n%s", err, output)
 			} else {
 				t.Log(string(output))
+			}
+		})
+	}
+}
+
+func TestSetupAppearanceRealBrowser(t *testing.T) {
+	if os.Getenv("RUNPILOT_PLAYWRIGHT_MODULE") == "" || runtime.GOOS != "linux" {
+		t.Skip("needs Linux and RUNPILOT_PLAYWRIGHT_MODULE")
+	}
+	t.Setenv("RUNPILOT_DATA_ROOT_FILE", filepath.Join(t.TempDir(), "deployment", "data-root"))
+	for _, locked := range []bool{false, true} {
+		t.Run(map[bool]string{false: "setup", true: "expired"}[locked], func(t *testing.T) {
+			ctrl, err := core.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ctrl.Close()
+			s, err := New(ctrl, "/tenant/pilot")
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.SetDataRootSwitchAllowed(false)
+			s.SetRestartHandler(func() {})
+			if locked {
+				s.startSetupWindow(-time.Second)
+			}
+			server := httptest.NewServer(s.Handler())
+			defer server.Close()
+			cmd := exec.Command("node", "internal/web/static/setup-ui.test.cjs")
+			cmd.Dir = filepath.Join("..", "..")
+			cmd.Env = append(os.Environ(), "RUNPILOT_TEST_URL="+server.URL+"/tenant/pilot/setup", "RUNPILOT_SETUP_STATE="+map[bool]string{false: "setup", true: "expired"}[locked])
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("setup browser: %v\n%s", err, output)
+			}
+			if ctrl.Snapshot().Server.SetupComplete {
+				t.Fatal("appearance checks must not complete setup")
 			}
 		})
 	}

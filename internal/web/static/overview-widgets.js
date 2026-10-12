@@ -45,6 +45,11 @@
           const title = document.createElement("h2"); title.textContent = entry.widget.title;
           const refresh = document.createElement("button"); refresh.type = "button"; refresh.className = "button secondary small"; refresh.textContent = "Refresh"; refresh.setAttribute("aria-label", `Refresh ${entry.widget.title}`);
           refresh.onclick = () => this.refreshEntry(entry);
+          if (typeof entry.widget.icon?.src === "string") {
+            const glyph=document.createElement("span");glyph.className="feature-icon overview-widget-glyph";
+            const image=document.createElement("img");image.className="nav-icon nav-icon-image";image.src=entry.widget.icon.src;image.alt="";
+            glyph.append(image);header.append(glyph);
+          }
           header.append(title, refresh);
           const body = document.createElement("div"); body.className = "overview-widget-body";
           body.setAttribute("role", "status"); body.textContent = "Loading…";

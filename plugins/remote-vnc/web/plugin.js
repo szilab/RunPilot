@@ -71,7 +71,7 @@ export async function activate(runpilot) {
       const endpoint = `${target.host}${target.port !== 5900 ? `:${target.port}` : ""}`;
       const identity = target.username || "Password requested when required";
       const card = document.createElement("article"); card.className = "rp-card vnc-target-card";
-      card.innerHTML = `<div class="vnc-target-card-head"><div class="vnc-target-facts"><h2>${escapeHTML(target.name)}</h2></div></div><div class="vnc-target-meta-row"><div class="vnc-target-facts"><span title="${escapeHTML(endpoint)}">${escapeHTML(endpoint)}</span><small class="vnc-target-identity" title="${escapeHTML(identity)}">${escapeHTML(identity)}</small></div></div>`;
+      card.innerHTML = `<div class="vnc-target-card-head"><span class="vnc-target-glyph" aria-hidden="true"></span><div class="vnc-target-facts"><h2>${escapeHTML(target.name)}</h2></div></div><div class="vnc-target-meta-row"><div class="vnc-target-facts"><span title="${escapeHTML(endpoint)}">${escapeHTML(endpoint)}</span><small class="vnc-target-identity" title="${escapeHTML(identity)}">${escapeHTML(identity)}</small></div></div>`;
       const actions = document.createElement("div"); actions.className = "vnc-target-actions";
       const button = (label, style, handler) => { const control = document.createElement("button"); control.type = "button"; control.className = `button ${style}`; control.textContent = label; control.addEventListener("click", handler); actions.append(control); };
       button("Connect", "primary small", () => openSession(target)); button("Edit", "secondary small", () => addTargetDialog(target)); button("Delete", "danger small", () => void deleteTarget(target));

@@ -413,6 +413,7 @@ visibility. The following lifecycle applies:
 ```javascript
 const unregister = runpilot.overview.register({
   id: "example.summary", title: "Example", size: "medium", order: 30,
+  icon: {src: new URL("./icon.svg", import.meta.url).href}, // optional packaged icon
   async mount(body) { /* create content, load initial data; may return cleanup */ },
   async refresh(body) { /* update while the widget is visible */ },
   dispose() { /* release listeners, timers and references */ },
@@ -430,6 +431,9 @@ runs while widgets are visible, at a moderate interval or from the Refresh butto
 its widgets. Plugins should stop their own event listeners on deactivation.
 Use the shared `overview-stat-row`, `overview-stat`, `overview-fact` and
 `overview-widget-note` classes or plugin CSS with semantic `--rp-*` tokens.
+For compact summaries, `overview-summary` holds inline counts; `overview-list`
+holds `overview-list-item` rows with a `feature-icon`, `overview-list-copy` and
+optional status badge. Plugins own the row data, actions and empty states.
 Navigation shortcuts use `runpilot.navigation.open("page-id")`.
 Legacy `register({id, render})` cards and `runpilot.overview.render()` remain
 available in frontend 1.x; new widgets should use lifecycle hooks.
@@ -439,11 +443,13 @@ Navigation entries may use a plugin-packaged image, for example
 it at 20 × 20 pixels with the same spacing as core navigation icons. The
 `icon: "monitor"` desktop icon and other text glyph strings remain supported
 for existing plugins. Settings forms appear
-inside their owning plugin's card only while that plugin is enabled. Plugins
+inside their owning plugin's collapsible configuration panel only while that
+plugin is enabled. Panel expansion is preserved across package status refreshes. Plugins
 provide their heading, fields, and actions using the host's shared responsive
 layout without imposing a custom section width.
 
-A navigation entry may provide an optional `description` for the page introduction
+A navigation entry may provide an optional `description` for the page introduction,
+`shortcut: {title, description, order}` for an Overview quick action,
 and `headerActions(root)` to add page-specific
 buttons to the application header beside the theme switcher. The host clears
 this slot when the user leaves that page:
@@ -451,6 +457,7 @@ this slot when the user leaves that page:
 ```javascript
 runpilot.navigation.register({
     id: "example", title: "Example", render,
+    shortcut: {title: "Open Example", description: "Manage example items", order: 50},
     headerActions(root) {
         const button = document.createElement("button");
         button.className = "button primary small";
@@ -460,6 +467,10 @@ runpilot.navigation.register({
     },
 });
 ```
+
+The shell's Ctrl/Cmd+K search shortcut yields to elements marked
+`data-rp-interactive` or `role="application"`. Plugins with custom keyboard-driven
+surfaces should mark their container so operational keystrokes remain theirs.
 
 Interactive plugins may use `runpilot.ui.createInteractiveSessionView()` for a
 provider-neutral session shell and measured surface:
@@ -521,7 +532,9 @@ Use a fallback to existing tokens when supporting older hosts. The shared
 `rp-card`, `button`, `form-grid`, `notice`, `status`, and `empty` classes are
 available to core and plugins; feature layouts and dependencies remain owned
 by each plugin. Frosting is applied selectively with an opaque fallback, and
-reduced-motion preferences are honored. The bundled Inter font needs no network.
+reduced-motion preferences are honored. The bundled Inter font and scenic background need no network. Shared primitives
+live in `styles.css`; `workspace.css` owns the application frame, dashboard and
+Settings composition. Plugins continue to own their feature layouts and assets.
 
 `runpilot.ui.confirm({title, message, confirmLabel, danger})` returns a Promise
 of a boolean. Cancel and Escape return false; confirming returns true. The host

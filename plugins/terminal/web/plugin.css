@@ -184,3 +184,9 @@
     padding: var(--rp-space-1);
   }
 }
+@media (min-width: 801px) {
+  main:has(> #terminalPage.active) { height: calc(100dvh - 108px); }
+}
+@media (min-width: 801px) and (max-width: 1000px) {
+  main:has(> #terminalPage.active) { height: calc(100dvh - 90px); }
+}

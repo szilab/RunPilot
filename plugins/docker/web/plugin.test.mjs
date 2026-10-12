@@ -26,19 +26,23 @@ test("project and resource controls follow snapshot ownership and usage", async 
   nav.render(root);await new Promise(resolve=>setTimeout(resolve,0));
   assert.match(root.innerHTML,/External project · read only/);
   assert.match(root.innerHTML,/data-action="project-up" data-key="owned"/);
-  assert.match(root.innerHTML,/data-action="project-up" data-key="outside"[^>]*disabled/);
+  assert.doesNotMatch(root.innerHTML,/data-action="project-up" data-key="outside"/);
+  assert.doesNotMatch(root.innerHTML,/data-action="container-stop" data-key="fedcba987654"/);
   assert.match(root.innerHTML,/External project · read only/);
   assert.match(root.innerHTML,/aria-label="Stop container"/);
   assert.match(root.innerHTML,/aria-label="View logs" data-action="logs" data-key="fedcba987654"/);
   assert.match(root.innerHTML,/docker-plugin-projects rp-masonry/);
+  click({target:{closest:()=>({dataset:{action:"view",key:"volumes"}})}});
   assert.match(root.innerHTML,/data-action="volumes-delete" data-key="data"[^>]*disabled/);
-  assert.match(root.innerHTML,/data-action="networks-delete" data-key="bridge"[^>]*disabled/);
-  assert.match(root.innerHTML,/data-action="networks-delete" data-key="compose_net"[^>]*disabled/);
   const freeDelete = root.innerHTML.match(/<button[^>]*data-action="volumes-delete" data-key="free"[^>]*>/)?.[0];
   assert.ok(freeDelete);
   assert.doesNotMatch(freeDelete,/disabled/);
   assert.match(root.innerHTML,/Resource is in use by a container/);
   assert.match(readFileSync(new URL("./plugin.css", import.meta.url), "utf8"),/\.docker-plugin-resource-delete:disabled\s*\{[^}]*opacity:/);
+  click({target:{closest:()=>({dataset:{action:"view",key:"networks"}})}});
+  assert.match(root.innerHTML,/data-action="networks-delete" data-key="bridge"[^>]*disabled/);
+  assert.match(root.innerHTML,/data-action="networks-delete" data-key="compose_net"[^>]*disabled/);
+  click({target:{closest:()=>({dataset:{action:"view",key:"projects"}})}});
   click({target:{closest:()=>({dataset:{action:"project-up",key:"owned"}})}});
   await new Promise(resolve=>setTimeout(resolve,0));
   assert.ok(calls.some(([,method,params])=>method==="docker.projects.action"&&params.name==="owned"&&params.action==="up"));
@@ -48,6 +52,19 @@ test("project and resource controls follow snapshot ownership and usage", async 
 test("Docker Overview maps container state and health", () => {
   const summary=dockerOverviewSummary({projects:[{containers:[{state:"running",health:"healthy"},{state:"running",health:"unhealthy",name:"bad"},{state:"exited"}]}]});
   assert.equal(summary.total,3);assert.equal(summary.running,2);assert.equal(summary.stopped,1);assert.equal(summary.unhealthy,1);assert.equal(summary.problems[0].name,"bad");
+});
+
+test("Docker Overview lists a bounded, ordered set of actual running containers", () => {
+  const containers = [
+    {id:"z",name:"Zebra",state:"running"}, {id:"b",name:"Beta",state:"running"},
+    {id:"stopped",name:"A stopped service",state:"exited"},
+    {id:"a",name:"Alpha",state:"running"}, {id:"c",name:"Charlie",state:"running"},
+  ];
+  const summary = dockerOverviewSummary({projects:[{containers}]});
+  assert.deepEqual(summary.active.map(item=>item.id),["a","b","c"]);
+  assert.equal(summary.running,4);
+  assert.equal(containers[0].id,"z", "widget sorting must not reorder the snapshot");
+  assert.deepEqual(dockerOverviewSummary(null).active,[]);
 });
 
 async function renderRuntime(runtime) {

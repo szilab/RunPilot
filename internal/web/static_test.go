@@ -114,7 +114,7 @@ func TestPluginSettingsUseSharedSectionsAndNamedNavigationIcons(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`pluginNavigationIcon(entry.icon)`, `icon === "monitor"`, `viewBox="0 0 24 24" aria-hidden="true"`, `section.className = "plugin-settings-section"`, `data-plugin-id="${escapeHtml(id)}"`, `if (!installed.get(entry.extension)?.enabled) continue;`, `const card = cards.get(entry.extension);`, `card.append(section);`} {
+	for _, want := range []string{`pluginNavigationIcon(entry.icon)`, `icon === "monitor"`, `viewBox="0 0 24 24" aria-hidden="true"`, `section.className = "plugin-settings-section"`, `data-plugin-id="${escapeHtml(id)}"`, `if (!installed.get(entry.extension)?.enabled) continue;`, `const card = cards.get(entry.extension);`, `card.append(details);`} {
 		if !strings.Contains(string(app), want) {
 			t.Fatalf("shared plugin presentation is missing %q", want)
 		}

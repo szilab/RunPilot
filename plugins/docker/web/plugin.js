@@ -39,12 +39,14 @@ export function dockerOverviewSummary(snapshot) {
     stopped: containers.filter(item => ["exited", "stopped", "created", "dead"].includes(item.state)).length,
     unhealthy: containers.filter(item => item.health === "unhealthy").length,
     problems: containers.filter(item => item.health === "unhealthy" || item.state === "restarting").slice(0, 3),
+    active: containers.filter(item => item.state === "running").sort((a,b) => (a.name || a.service || a.id || "").localeCompare(b.name || b.service || b.id || "")).slice(0, 3),
   };
 }
 
 export async function activate(runpilot) {
   const esc = runpilot.ui.escape;
   let root = null, snapshot = null, error = "", loading = false, modal = null, terminal = null, widgetBody = null, widgetLoading = false;
+  let view = "projects", query = "";
   const busy = new Set();
   const listeners = [];
   let snapshotRequest = null;
@@ -67,13 +69,13 @@ export async function activate(runpilot) {
     const running = item.state === "running";
     const disabled = !managed || !ready || busy.has(item.id);
     const reason = !managed ? "External Compose containers are read only" : "";
-    return `<div class="docker-plugin-container"><span class="docker-plugin-dot ${esc(item.tone || "gray")}"></span><div><strong>${esc(item.service || item.name)}</strong><small>${esc(item.image || "")} · ${esc(item.status || item.state || "unknown")}${item.health ? ` · ${esc(item.health)}` : ""}</small></div><div class="docker-plugin-actions">${iconButton("▶", "Start container", "container-start", item.id, disabled || running, false, reason)}${iconButton("■", "Stop container", "container-stop", item.id, disabled || !running, false, reason)}${iconButton("×", "Delete stopped container", "container-delete", item.id, disabled || running, true, reason)}${iconButton("↪", "Open terminal", "terminal", item.id, disabled || !running, false, reason)}${iconButton("▤", "View logs", "logs", item.id, !ready || busy.has(item.id))}</div></div>`;
+    return `<div class="docker-plugin-container"><span class="docker-plugin-dot ${esc(item.tone || "gray")}"></span><div><strong>${esc(item.service || item.name)}</strong><small>${esc(item.image || "")} · ${esc(item.status || item.state || "unknown")}${item.health ? ` · ${esc(item.health)}` : ""}</small></div><div class="docker-plugin-actions">${managed ? `${iconButton("▶", "Start container", "container-start", item.id, disabled || running, false, reason)}${iconButton("■", "Stop container", "container-stop", item.id, disabled || !running, false, reason)}${iconButton("×", "Delete stopped container", "container-delete", item.id, disabled || running, true, reason)}${iconButton("↪", "Open terminal", "terminal", item.id, disabled || !running, false, reason)}` : ""}${iconButton("▤", "View logs", "logs", item.id, !ready || busy.has(item.id))}</div></div>`;
   }
   function projectCard(item, ready) {
     const managed = !!item.managed, locked = busy.has(item.name);
     const active = ["running", "partial", "degraded"].includes(item.state);
     const readOnlyReason = managed ? "" : "External Compose projects are read only";
-    const actions = `<div class="docker-plugin-actions">${button("Up", "project-up", item.name, !managed || !ready || !item.composeFileExists || locked, false, readOnlyReason)}${button("Start", "project-start", item.name, !managed || !ready || !item.composeFileExists || item.state !== "stopped" || locked, false, readOnlyReason)}${button("Stop", "project-stop", item.name, !managed || !ready || !active || locked, false, readOnlyReason)}${button("Down", "project-down", item.name, !managed || !ready || !item.composeFileExists || item.state === "down" || locked, false, readOnlyReason)}${managed ? `${button("compose.yaml", "file-compose", item.name, locked)}${button(".env", "file-env", item.name, locked)}${button("Delete", "project-delete", item.name, !ready || item.state !== "down" || locked, true)}` : ""}</div>${managed ? "" : `<p class="meta docker-plugin-readonly">External project · read only${item.configPath ? ` · ${esc(item.configPath)}` : ""}. Lifecycle controls require a RunPilot-managed project.</p>`}`;
+    const actions = `<div class="docker-plugin-actions">${managed ? `${button("Up", "project-up", item.name, !managed || !ready || !item.composeFileExists || locked, false, readOnlyReason)}${button("Start", "project-start", item.name, !managed || !ready || !item.composeFileExists || item.state !== "stopped" || locked, false, readOnlyReason)}${button("Stop", "project-stop", item.name, !managed || !ready || !active || locked, false, readOnlyReason)}${button("Down", "project-down", item.name, !managed || !ready || !item.composeFileExists || item.state === "down" || locked, false, readOnlyReason)}${button("compose.yaml", "file-compose", item.name, locked)}${button(".env", "file-env", item.name, locked)}${button("Delete", "project-delete", item.name, !ready || item.state !== "down" || locked, true)}` : ""}</div>${managed ? "" : `<p class="meta docker-plugin-readonly"${item.configPath ? ` title="${esc(item.configPath)}"` : ""}>External project · read only. View logs for its containers.</p>`}`;
     return `<article class="docker-plugin-card"><div class="docker-plugin-card-head"><h3>${esc(item.name)}</h3><span class="status ${item.state === "running" ? "running" : item.state === "degraded" ? "failure" : "idle"}">${esc(item.state || "unknown")}</span></div>${actions}<div class="docker-plugin-container-list">${(item.containers || []).map(c => containerRow(c, managed, ready)).join("") || '<p class="meta">No containers</p>'}</div></article>`;
   }
   function resourceRow(item, kind, ready) {
@@ -91,8 +93,23 @@ export async function activate(runpilot) {
   function render() {
     if (!root) return;
     const ready = !!snapshot?.runtime?.available;
-    root.innerHTML = `<div class="docker-plugin"><div class="docker-plugin-toolbar"><div><h2>Workspace</h2><p class="meta">${(snapshot?.projects || []).length} projects · ${(snapshot?.volumes || []).length} volumes · ${(snapshot?.networks || []).length} networks</p></div><div class="docker-plugin-actions">${button("Refresh", "refresh", "")}${button("Create project", "project-create", "", !ready)}${button("Create volume", "volumes-create", "", !ready)}${button("Create network", "networks-create", "", !ready)}</div></div>${error ? `<div class="notice" role="alert">${esc(error)}</div>` : ""}${!ready ? `<div class="notice" role="status"><strong>Docker unavailable</strong> ${esc(snapshot?.runtime?.message || (loading ? "Checking Docker…" : "Docker status has not been checked."))}${snapshot?.runtime?.identity ? ` Running as ${esc(snapshot.runtime.identity)}.` : ""}${snapshot?.runtime?.diagnostic ? `<p class="meta docker-plugin-diagnostic">${esc(snapshot.runtime.diagnostic)}</p>` : ""}${permissionHelp(snapshot?.runtime)}</div>` : ""}<section><h3>Compose projects</h3><div class="docker-plugin-grid docker-plugin-projects rp-masonry">${(snapshot?.projects || []).map(item => projectCard(item, ready)).join("") || '<p class="empty">No Compose projects found.</p>'}</div></section><div class="docker-plugin-grid docker-plugin-resources"><section><h3>Volumes</h3><div class="docker-plugin-card">${(snapshot?.volumes || []).map(v => resourceRow(v, "volumes", ready)).join("") || '<p class="meta">No Docker volumes found.</p>'}</div></section><section><h3>Networks</h3><div class="docker-plugin-card">${(snapshot?.networks || []).map(n => resourceRow(n, "networks", ready)).join("") || '<p class="meta">No Docker networks found.</p>'}</div></section></div></div>`;
+    const needle = query.toLocaleLowerCase(), list = (snapshot?.[view] || []).filter(item => `${item.name} ${(item.containers || []).map(c=>`${c.name} ${c.image} ${c.service}`).join(" ")}`.toLocaleLowerCase().includes(needle));
+    const activeInput = typeof document !== "undefined" ? document.activeElement : null;
+    const filterFocused = activeInput?.classList?.contains("docker-plugin-filter"), selectionStart = filterFocused ? activeInput.selectionStart : null, selectionEnd = filterFocused ? activeInput.selectionEnd : null;
+    const tabs = [["projects","Projects"],["volumes","Volumes"],["networks","Networks"]].map(([id,title])=>`<button class="button secondary small ${view===id?"active":""}" role="tab" aria-selected="${view===id}" tabindex="${view===id?0:-1}" data-action="view" data-key="${id}">${title}<span class="docker-plugin-count">${snapshot?(snapshot[id]||[]).length:"—"}</span></button>`).join("");
+    const content = view === "projects" ? `<div class="docker-plugin-grid docker-plugin-projects rp-masonry">${list.map(item=>projectCard(item,ready)).join("") || `<div class="empty"><h3>${query?"No matching projects":loading&&!snapshot?"Loading projects…":"No Compose projects"}</h3><p>${query?"Try another project or container name.":"Create a managed project to define its Compose services."}</p></div>`}</div>` : `<div class="docker-plugin-card docker-plugin-resource-panel">${list.map(item=>resourceRow(item,view,ready)).join("") || `<div class="empty"><h3>${query?"No matching resources":`No ${view} found`}</h3><p>${query?"Try another resource name.":"Resources appear when they are available from Docker."}</p></div>`}</div>`;
+    const create = view === "projects" ? button("Create project","project-create","",!ready) : button(view === "volumes" ? "Create volume" : "Create network",`${view}-create`,"",!ready);
+    root.innerHTML = `<div class="docker-plugin"><div class="docker-plugin-toolbar"><div><h2>Container workspace</h2><p class="meta">${snapshot?`${(snapshot.projects||[]).length} projects · ${(snapshot.volumes||[]).length} volumes · ${(snapshot.networks||[]).length} networks`:"Checking Engine and Compose…"}</p></div><div class="docker-plugin-actions">${button("Refresh","refresh","")}${create}</div></div>${error?`<div class="notice" role="alert">${esc(error)}</div>`:""}${!ready?`<div class="notice" role="status"><strong>${loading&&!snapshot?"Checking Docker":"Docker unavailable"}</strong>${esc(snapshot?.runtime?.message||(loading?"Connecting to Engine and Compose…":"Docker status has not been checked."))}${snapshot?.runtime?.identity?` Running as ${esc(snapshot.runtime.identity)}.`:""}${snapshot?.runtime?.diagnostic?`<p class="meta docker-plugin-diagnostic">${esc(snapshot.runtime.diagnostic)}</p>`:""}${permissionHelp(snapshot?.runtime)}</div>`:""}<div class="docker-plugin-viewbar"><div class="docker-plugin-tabs" role="tablist" aria-label="Docker resources">${tabs}</div><input class="docker-plugin-filter" type="search" aria-label="Filter ${view}" placeholder="Find ${view}…" value="${esc(query)}"></div><section role="tabpanel" aria-label="${view}">${content}</section></div>`;
+    if (filterFocused) { const input=root.querySelector?.(".docker-plugin-filter"); input?.focus({preventScroll:true}); if(input&&Number.isInteger(selectionStart))input.setSelectionRange(selectionStart,selectionEnd); }
   }
+  const tabsKey = event => {
+    const tab = event.target.closest?.('[data-action="view"]');
+    if (!tab || !["ArrowLeft","ArrowRight","Home","End"].includes(event.key)) return;
+    event.preventDefault(); const ids=["projects","volumes","networks"], index=ids.indexOf(tab.dataset.key);
+    const next=event.key==="Home"?ids[0]:event.key==="End"?ids[2]:ids[(index+(event.key==="ArrowRight"?1:2))%3];
+    void action("view",next);root.querySelector?.(`[data-action="view"][data-key="${next}"]`)?.focus();
+  };
+  const filter = event => { if (event.target.classList?.contains("docker-plugin-filter")) { query=event.target.value; if(!event.isComposing)render(); } };
   async function refresh() {
     if (loading) return;
     loading = true; render();
@@ -136,7 +153,7 @@ export async function activate(runpilot) {
     await terminalAssets();
     closeModal();
     const node = document.createElement("dialog"); node.className = "dialog docker-plugin-terminal-dialog";
-    node.innerHTML = `<div class="dialog-head"><h2>Container terminal</h2><button class="icon-btn" type="button" data-close aria-label="Close">×</button></div><div class="docker-plugin-terminal"></div>`;
+    node.innerHTML = `<div class="dialog-head"><h2>Container terminal</h2><button class="icon-btn" type="button" data-close aria-label="Close">×</button></div><div class="docker-plugin-terminal" data-rp-interactive></div>`;
     document.body.append(node); modal = node; node.showModal();
     const term = new window.Terminal({cursorBlink: true, convertEol: true});
     const fit = new window.FitAddon.FitAddon(); term.loadAddon(fit); term.open(node.querySelector(".docker-plugin-terminal")); fit.fit();
@@ -153,6 +170,7 @@ export async function activate(runpilot) {
     } catch (cause) { term.writeln(`\r\n${cause.message}`); }
   }
   async function action(type, key) {
+    if (type === "view") { if (["projects","volumes","networks"].includes(key)) { view=key;query="";render(); } return; }
     if (type === "refresh") return refresh();
     if (type.endsWith("-create")) return create(type.split("-")[0]);
     if (type.startsWith("file-")) return editFile(key, type.slice(5));
@@ -175,16 +193,33 @@ export async function activate(runpilot) {
   };
   function renderWidget() {
     if (!widgetBody?.isConnected) return;
+    const focused = widgetBody.contains(document.activeElement) ? document.activeElement.dataset.overviewAction : null;
     widgetBody.replaceChildren();
     if (!snapshot && !error) { widgetBody.textContent = "Checking Docker…"; return; }
     if (error) {const note=document.createElement("p");note.setAttribute("role","alert");note.textContent=error;widgetBody.append(note);return;}
     if (!snapshot?.runtime?.available) {const note=document.createElement("p");note.className="overview-widget-note";note.textContent=snapshot?.runtime?.message || "Docker unavailable";widgetBody.append(note);if(snapshot?.runtime?.diagnostic) {const detail=document.createElement("p");detail.className="overview-widget-note docker-plugin-diagnostic";detail.textContent=snapshot.runtime.diagnostic;widgetBody.append(detail);}if(permissionHelp(snapshot?.runtime)) {const help=document.createElement("p");help.className="overview-widget-note docker-plugin-permission-help";const link=document.createElement("a");link.href=ASUSTOR_DOCKER_DOC;link.target="_blank";link.rel="noopener noreferrer";link.textContent="ASUSTOR Docker permission guidance";help.append(link);widgetBody.append(help);}}
-    const summary=dockerOverviewSummary(snapshot);
-    const stats=document.createElement("div");stats.className="overview-stat-row";
-    for(const [label,value] of [["Total",summary.total],["Running",summary.running],["Stopped",summary.stopped],["Unhealthy",summary.unhealthy]]) {const cell=document.createElement("div");cell.className="overview-stat";const strong=document.createElement("strong");strong.textContent=value;const small=document.createElement("span");small.textContent=label;cell.append(strong,small);stats.append(cell);}
-    widgetBody.append(stats);
-    for(const item of summary.problems) {const note=document.createElement("p");note.className="overview-widget-note";note.textContent=`${item.name}: ${item.health || item.state}`;widgetBody.append(note);}
-    const open=document.createElement("button");open.type="button";open.className="button secondary small";open.textContent="Open Docker";open.onclick=()=>runpilot.navigation.open("docker");widgetBody.append(open);
+    if (snapshot?.runtime?.available) {
+      const summary=dockerOverviewSummary(snapshot);
+      const stats=document.createElement("div");stats.className="overview-summary";
+      for(const [label,value] of [["Total",summary.total],["Running",summary.running],["Stopped",summary.stopped],["Unhealthy",summary.unhealthy]]) {const cell=document.createElement("span");const strong=document.createElement("strong");strong.textContent=value;cell.append(strong,` ${label}`);stats.append(cell);}
+      widgetBody.append(stats);
+      for(const item of summary.problems) {const note=document.createElement("p");note.className="overview-widget-note";note.textContent=`${item.name}: ${item.health || item.state}`;widgetBody.append(note);}
+      const list=document.createElement("div");list.className="overview-list";
+      for (const item of summary.active) {
+        const row=document.createElement("button");row.type="button";row.className="overview-list-item";row.dataset.overviewAction=item.id;row.setAttribute("aria-label",`View logs for ${item.name || item.service || item.id}`);
+        row.onclick=()=>void action("logs",item.id).catch(cause=>runpilot.ui.toast(cause.message));
+        const glyph=document.createElement("span");glyph.className="feature-icon";glyph.textContent="◇";glyph.setAttribute("aria-hidden","true");
+        const copy=document.createElement("span");copy.className="overview-list-copy";
+        const name=document.createElement("strong");name.textContent=item.name || item.service || item.id;
+        const image=document.createElement("small");image.textContent=item.image || "Container";copy.append(name,image);
+        const state=document.createElement("span");state.className=`status ${item.health==="unhealthy" ? "failure" : "running"}`;state.textContent=item.health==="unhealthy" ? "Unhealthy" : "Running";
+        row.append(glyph,copy,state);list.append(row);
+      }
+      widgetBody.append(list);
+      if (!summary.active.length) {const note=document.createElement("p");note.className="overview-widget-note";note.textContent="No running containers.";widgetBody.append(note);}
+    }
+    const open=document.createElement("button");open.type="button";open.className="button secondary small";open.dataset.overviewAction="open";open.textContent="Open Docker";open.onclick=()=>runpilot.navigation.open("docker");widgetBody.append(open);
+    if (focused) [...widgetBody.querySelectorAll("[data-overview-action]")].find(node=>node.dataset.overviewAction===focused)?.focus();
   }
   async function refreshWidget() {
     if (!widgetBody?.isConnected || widgetLoading) return;
@@ -193,10 +228,10 @@ export async function activate(runpilot) {
     catch(cause) { error=cause.message; }
     finally { widgetLoading=false;renderWidget(); }
   }
-  runpilot.overview.register({id:"docker.summary",title:"Docker",size:"medium",order:40,mount(body){widgetBody=body;renderWidget();return refreshWidget();},refresh:refreshWidget,dispose(){widgetBody=null;}});
-  runpilot.navigation.register({id:"docker",title:"Docker",description:"Manage Compose projects, containers, volumes, and networks.",icon:{src:new URL("./icon.svg",import.meta.url).href},render:page => {root = page;root.removeEventListener("click",click);root.addEventListener("click",click);render();void refresh();}});
+  runpilot.overview.register({id:"docker.summary",title:"Containers",icon:{src:new URL("./icon.svg",import.meta.url).href},size:"medium",order:40,mount(body){widgetBody=body;renderWidget();return refreshWidget();},refresh:refreshWidget,dispose(){widgetBody=null;}});
+  runpilot.navigation.register({id:"docker",title:"Docker", shortcut:{title:"Open Docker",description:"Containers and Compose",order:20},description:"Manage Compose projects, containers, volumes, and networks.",icon:{src:new URL("./icon.svg",import.meta.url).href},render:page => {root = page;root.removeEventListener("click",click);root.addEventListener("click",click);root.removeEventListener("input",filter);root.addEventListener("input",filter);root.removeEventListener("keydown",tabsKey);root.addEventListener("keydown",tabsKey);render();void refresh();}});
   listeners.push(runpilot.ws.on(PLUGIN,"process.session.output",event => { if (terminal?.id === event?.id) terminal.term.write(dec(event.data)); }));
   listeners.push(runpilot.ws.on(PLUGIN,"process.session.error",event => { if (terminal?.id === event?.id) terminal.term.writeln(`\r\n${event.message || "Terminal I/O error"}`); }));
   listeners.push(runpilot.ws.on(PLUGIN,"process.session.exit",event => { if (terminal?.id === event?.id) {terminal.term.writeln(`\r\n[session ${event.reason || "exited"}]`);terminal.id = "";} }));
-  return () => { listeners.forEach(off => off());root?.removeEventListener("click",click);root = null;if (terminal) {const id=terminal.id;terminal.observer?.disconnect();terminal.term.dispose();terminal=null;if(id) void rpc("docker.containers.terminal.close",{id,force:true}).catch(()=>{});}closeModal(); };
+  return () => { listeners.forEach(off => off());root?.removeEventListener("click",click);root?.removeEventListener("input",filter);root?.removeEventListener("keydown",tabsKey);root = null;if (terminal) {const id=terminal.id;terminal.observer?.disconnect();terminal.term.dispose();terminal=null;if(id) void rpc("docker.containers.terminal.close",{id,force:true}).catch(()=>{});}closeModal(); };
 }

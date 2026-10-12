@@ -440,17 +440,34 @@ export function activate(runpilot) {
 
   function renderWidget() {
     if (!widgetBody?.isConnected) return;
+    const focused = widgetBody.contains(document.activeElement) ? document.activeElement.dataset.overviewAction : null;
     widgetBody.replaceChildren();
     if (state.error || state.loadError) { const note=document.createElement("p");note.setAttribute("role","alert");note.textContent=state.error||state.loadError;widgetBody.append(note);return; }
     const summary=taskOverviewSummary(state.tasks);
-    const stats=document.createElement("div");stats.className="overview-stat-row";
-    for(const [label,value] of [["Enabled",summary.enabled],["Running",summary.running],["Failed",summary.failed]]) {const cell=document.createElement("div");cell.className="overview-stat";const strong=document.createElement("strong");strong.textContent=value;const small=document.createElement("span");small.textContent=label;cell.append(strong,small);stats.append(cell);}
+    const stats=document.createElement("div");stats.className="overview-summary";
+    for(const [label,value] of [["Enabled",summary.enabled],["Running",summary.running],["Failed",summary.failed]]) {const cell=document.createElement("span");const strong=document.createElement("strong");strong.textContent=value;cell.append(strong,` ${label}`);stats.append(cell);}
     widgetBody.append(stats);
+    const activity=document.createElement("div");activity.className="overview-list";
+    for (const view of summary.recent) {
+      const row=document.createElement("button");row.type="button";row.className="overview-list-item";row.dataset.overviewAction=view.task.id;row.setAttribute("aria-label",`View run history for ${view.task.name}`);row.onclick=()=>openHistory(findTask(view.task.id));
+      const glyph=document.createElement("span");glyph.className="feature-icon";glyph.textContent="↗";glyph.setAttribute("aria-hidden","true");
+      const copy=document.createElement("span");copy.className="overview-list-copy";
+      const name=document.createElement("strong");name.textContent=view.task.name;
+      const time=document.createElement("time");time.dateTime=view.status.lastRunAt;time.textContent=fmtDate(view.status.lastRunAt);
+      copy.append(name,time);
+      const result=document.createElement("span");
+      const running=view.status.state==="running"||view.status.runningCount>0;
+      result.className=`status ${running ? "running" : view.status.lastSuccess===false ? "failure" : view.status.lastSuccess===true ? "success" : "idle"}`;
+      result.textContent=running ? "Running" : view.status.lastSuccess===false ? "Failed" : view.status.lastSuccess===true ? "Success" : "Unknown";
+      row.append(glyph,copy,result);activity.append(row);
+    }
+    widgetBody.append(activity);
+    if (!summary.recent.length) {const note=document.createElement("p");note.className="overview-widget-note";note.textContent="No task runs yet.";widgetBody.append(note);}
     for(const view of summary.scheduled) {const row=document.createElement("div");row.className="overview-fact";const name=document.createElement("span");name.textContent=view.task.name;const schedule=document.createElement("strong");schedule.textContent=scheduleText(view.task.schedule);row.append(name,schedule);widgetBody.append(row);}
-    if (summary.recent[0]) {const view=summary.recent[0];const note=document.createElement("p");note.className="overview-widget-note";note.textContent=`Last run: ${view.task.name} · ${view.status.lastSuccess === false ? "Failed" : view.status.lastSuccess === true ? "Success" : "Unknown"}`;widgetBody.append(note);}
-    const open=document.createElement("button");open.type="button";open.className="button secondary small";open.textContent="Open Tasks";open.onclick=()=>runpilot.navigation.open("tasks");widgetBody.append(open);
+    const open=document.createElement("button");open.type="button";open.className="button secondary small";open.dataset.overviewAction="open";open.textContent="Open Tasks";open.onclick=()=>runpilot.navigation.open("tasks");widgetBody.append(open);
+    if (focused) [...widgetBody.querySelectorAll("[data-overview-action]")].find(node=>node.dataset.overviewAction===focused)?.focus();
   }
-  runpilot.overview.register({id:"tasks.summary",title:"Tasks",size:"medium",order:30,mount(body){widgetBody=body;renderWidget();return load();},refresh(){renderWidget();},dispose(){widgetBody=null;}});
+  runpilot.overview.register({id:"tasks.summary",title:"Task Activity",icon:{src:new URL("./icon.svg",import.meta.url).href},size:"medium",order:30,mount(body){widgetBody=body;renderWidget();return load();},refresh(){renderWidget();},dispose(){widgetBody=null;}});
 
   // ---- events: the only refresh mechanism (no polling)
 
@@ -468,7 +485,7 @@ export function activate(runpilot) {
   ];
 
   runpilot.navigation.register({
-    id: "tasks", title: "Tasks", description: "Run continuous commands and schedule repeatable work.", icon: { src: new URL("./icon.svg", import.meta.url).href },
+    id: "tasks", title: "Tasks", shortcut:{title:"Manage Tasks",description:"Commands and schedules",order:30}, description: "Run continuous commands and schedule repeatable work.", icon: { src: new URL("./icon.svg", import.meta.url).href },
     render: root => { page = root; render(); load(); },
   });
   load();

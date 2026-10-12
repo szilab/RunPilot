@@ -69,3 +69,8 @@
 .rdp-target-advanced { border: 1px solid var(--rp-border); border-radius: var(--rp-radius); padding: 12px 14px; margin-top: 18px; }
 .rdp-target-advanced summary { cursor: pointer; font-size: 13px; font-weight: 600; }
 .rdp-target-advanced[open] .form-grid { margin-top: 16px; }
+
+.rdp-target-card-head { display: flex; align-items: center; gap: 12px; }
+.rdp-target-glyph { width: 38px; height: 38px; flex: 0 0 38px; border-radius: 11px; color: var(--rp-accent); background: var(--rp-accent-soft, var(--rp-surface)); }
+.rdp-target-glyph::before { content: ""; display: block; width: 22px; height: 22px; margin: 8px; background: currentColor; mask: url("./icon.svg") center / contain no-repeat; -webkit-mask: url("./icon.svg") center / contain no-repeat; }
+.rdp-target-card { background: var(--rp-glass-tint, var(--rp-surface-elevated)); }

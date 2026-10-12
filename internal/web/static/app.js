@@ -10,12 +10,13 @@ let overview = null;
 let systemInfo = null;
 let pluginStatuses = [], pluginBusy = new Set();
 let lastPluginSnapshot = "";
+const expandedPluginSettings = new Set();
 let pluginDiscoveryErrors = [], pluginRestartRequired = false;
 let pluginCatalog = [], pluginCatalogError = "", pluginCatalogLoaded = false, pluginCatalogLoading = false;
 let pluginExtensions = new Map();
 const pluginNavigation = new Map(), pluginSettings = new Map();
 const overviewWidgets = new RunPilotOverviewWidgets($("overviewWidgets"));
-const hostDashboard = new RunPilotDashboard.HostDashboard($("hostDashboard"), api);
+const hostDashboard = new RunPilotDashboard.HostDashboard($("hostDashboard"), api, {onUpdate:updateHostSummary,onOpenSettings:()=>setPage("settings")});
 const pluginThemeListeners = new Set();
 let applicationSocket = null, applicationSocketPromise = null, applicationSequence = 0;
 const applicationPending = new Map(), applicationListeners = new Map(), applicationStreams = new Map();
@@ -83,7 +84,7 @@ function createInteractiveSessionView({container,title="Interactive session",onB
   const fullscreen=document.createElement("button");fullscreen.type="button";fullscreen.className="button secondary small";fullscreen.textContent="Fullscreen";fullscreen.setAttribute("aria-pressed","false");
   const disconnect=document.createElement("button");disconnect.type="button";disconnect.className="button danger small";disconnect.textContent="Disconnect";disconnect.addEventListener("click",()=>onDisconnect?.());
   actions.append(fullscreen,disconnect);left.append(back,heading);toolbar.append(left,actions);
-  const surfaceElement=document.createElement("div");surfaceElement.className="rp-interactive-surface";surfaceElement.tabIndex=0;surfaceElement.setAttribute("role","application");surfaceElement.setAttribute("aria-label",`${title} interactive surface`);
+  const surfaceElement=document.createElement("div");surfaceElement.className="rp-interactive-surface";surfaceElement.tabIndex=0;surfaceElement.setAttribute("role","application");surfaceElement.dataset.rpInteractive="";surfaceElement.setAttribute("aria-label",`${title} interactive surface`);
   const loading=document.createElement("div");loading.className="rp-interactive-loading";loading.setAttribute("role","status");loading.textContent="Connecting…";
   const error=document.createElement("div");error.className="rp-interactive-error";error.setAttribute("role","alert");error.hidden=true;
   surfaceElement.append(loading,error);element.append(toolbar,surfaceElement);container.replaceChildren(element);
@@ -163,6 +164,7 @@ function registerPluginNavigation(extension, entry) {
   document.querySelector("nav").append(button);
   const page = document.createElement("section"); page.id = entry.id + "Page"; page.className = "page"; document.querySelector("main").append(page);
   pluginNavigation.set(entry.id, { ...entry, button, page, extension });
+  renderOverviewQuickActions();
   button.addEventListener("click", () => setPage(entry.id));
 }
 function registerPluginOverview(extension, entry) {
@@ -223,6 +225,72 @@ function filterPluginCards() {
   $("pluginSearchStatus").textContent = search && !shown ? "No matching plugins. Try another name." : `${shown} plugin${shown === 1 ? "" : "s"}${search ? " found" : ""}`;
 }
 $("pluginSearch").addEventListener("input", filterPluginCards);
+
+function updatePageHeading() {
+  document.body.dataset.currentPage = currentPage;
+  const entry = pluginNavigation.get(currentPage);
+  const now = new Date(), hour = now.getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  $("pageTitle").textContent = currentPage === "overview" ? `${greeting}${systemInfo?.username ? `, ${systemInfo.username}` : ""}` : (pageMeta[currentPage]?.[0] || entry?.title || currentPage);
+  $("pageEyebrow").textContent = currentPage === "overview" ? "YOUR WORKSPACE, AT A GLANCE" : "RUNPILOT WORKSPACE";
+  $("pageDescription").textContent = entry?.description || (currentPage === "settings" ? "Manage your server, account, and plugins." : "Your host and services, in one place.");
+  $("overviewClock").hidden = currentPage !== "overview";
+  $("overviewClock").innerHTML = `<span>${escapeHtml(now.toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric",year:"numeric"}))}</span><strong>${escapeHtml(now.toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"}))}</strong>`;
+}
+
+function renderOverviewQuickActions() {
+  const root = $("overviewQuickActions"); if (!root) return;
+  const entries = [...pluginNavigation.values()].filter(entry => entry.shortcut?.title).sort((a,b)=>(a.shortcut.order||0)-(b.shortcut.order||0)).slice(0,3);
+  root.replaceChildren();
+  const add = (title, description, glyph, work, tone="blue") => {
+    const button=document.createElement("button");button.className="quick-action";button.type="button";
+    button.innerHTML=`<span class="feature-icon ${tone}">${glyph}</span><span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(description)}</small></span>`;
+    button.onclick=work;root.append(button);
+  };
+  entries.forEach((entry,index)=>add(entry.shortcut.title,entry.shortcut.description||entry.title,pluginNavigationIcon(entry.icon),()=>setPage(entry.id),["blue","violet","green"][index]));
+  add("Manage plugins","Extend your workspace",RunPilotDashboard.icon("plugins"),()=>{setPage("settings");selectSettingsTab("pluginSettingsTab",true);},"violet");
+}
+
+function updateHostSummary(data) {
+  const host=data?.host||{};
+  $("sidebarHostName").textContent=host.hostname||"RunPilot host";
+  const metrics=RunPilotDashboard.readings(data), {size,uptime,icon}=RunPilotDashboard;
+  const facts = [["CPU",metrics.cpu===null?"Unavailable":`${Math.round(metrics.cpu)}% utilization`],["Memory",metrics.totalMemory?`${size(metrics.freeMemory)} available`:"Unavailable"],["Filesystems",`${metrics.disks.length} monitored`]];
+  if(host.gpuAvailable&&host.gpuMemoryTotalBytes>0)facts.push(["GPU memory",`${Math.round(Math.min(100,Math.max(0,host.gpuMemoryUsedBytes||0)*100/host.gpuMemoryTotalBytes))}% used`]);
+  $("hostHealth").innerHTML=`<div class="health-summary"><span class="feature-icon ${host.error?"amber":"green"}">${icon(host.error?"activity":"check")}</span><div><strong>${host.error?"Metrics need attention":"Host connected"}</strong><small>${escapeHtml(host.error||"Receiving live resource measurements")}</small></div></div><div class="health-facts">${facts.map(([name,value])=>`<div><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")}</div>`;
+  $("settingsHostIdentity").innerHTML=`<img src="host-device.svg" alt=""><div><strong>${escapeHtml(host.hostname||"Unknown host")}</strong><p>${escapeHtml([host.os,host.architecture].filter(Boolean).join(" · "))} · Uptime ${escapeHtml(uptime(data.hostUptimeSeconds))}</p></div>`;
+  const info=[["Operating system",host.os||"Unavailable"],["Architecture",host.architecture||"Unavailable"],["Processor",host.cpuModel||"Unavailable"],["Logical CPUs",host.cpuCount||"Unavailable"],["Total memory",metrics.totalMemory?size(metrics.totalMemory):"Unavailable"],["Host uptime",uptime(data.hostUptimeSeconds)],["RunPilot",systemInfo?.version||"Unavailable"]];
+  $("settingsHostFacts").innerHTML=info.map(([name,value])=>`<div><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
+  if (currentPage === "overview") updatePageHeading();
+}
+async function ensureHostSummary() {
+  if(hostDashboard.lastData){updateHostSummary(hostDashboard.lastData);return;}
+  try{updateHostSummary(await api("api/v1/dashboard/status"));}catch(error){$("settingsHostFacts").textContent=`Host information unavailable: ${error.message}`;}
+}
+
+function workspaceDestinations() {
+  return [{id:"overview",title:"Overview",description:"Host resources and summaries",icon:"monitor"},{id:"settings",title:"Settings",description:"Account and host configuration",icon:"monitor"},{id:"plugins",title:"Plugins",description:"Browse and manage plugin packages",icon:"monitor"},...[...pluginNavigation.values()].map(entry=>({id:entry.id,title:entry.title,description:entry.description||"Plugin page",icon:entry.icon}))];
+}
+function renderWorkspaceSearch() {
+  const field=$("workspaceSearch"),root=$("workspaceSearchResults"),query=field.value.trim().toLocaleLowerCase();
+  const entries=workspaceDestinations().filter(entry=>`${entry.title} ${entry.description}`.toLocaleLowerCase().includes(query));
+  root.replaceChildren();
+  for(const entry of entries){const button=document.createElement("button");button.type="button";button.innerHTML=`${pluginNavigationIcon(entry.icon)}<span><strong>${escapeHtml(entry.title)}</strong><small>${escapeHtml(entry.description)}</small></span>`;button.onclick=()=>{root.hidden=true;field.value="";field.setAttribute("aria-expanded","false");if(entry.id==="plugins"){setPage("settings");selectSettingsTab("pluginSettingsTab",true);}else setPage(entry.id);};root.append(button);}
+  if(!entries.length){const message=document.createElement("p");message.textContent="No matching pages or plugins.";root.append(message);}
+  root.hidden=false;field.setAttribute("aria-expanded","true");
+}
+$("workspaceSearch").addEventListener("input",renderWorkspaceSearch);
+$("workspaceSearch").addEventListener("focus",renderWorkspaceSearch);
+$("workspaceSearch").addEventListener("keydown",event=>{
+  if(event.key==="ArrowDown"||event.key==="Enter"){const first=$("workspaceSearchResults").querySelector("button");if(first){event.preventDefault();first.focus();if(event.key==="Enter")first.click();}}
+});
+$("workspaceSearchResults").addEventListener("keydown",event=>{
+  if(!["ArrowDown","ArrowUp","Escape"].includes(event.key))return;event.preventDefault();
+  if(event.key==="Escape"){$("workspaceSearchResults").hidden=true;$("workspaceSearch").setAttribute("aria-expanded","false");$("workspaceSearch").focus();$("workspaceSearchResults").hidden=true;return;}
+  const buttons=[...$("workspaceSearchResults").querySelectorAll("button")],index=buttons.indexOf(document.activeElement);buttons[(index+(event.key==="ArrowDown"?1:-1)+buttons.length)%buttons.length]?.focus();
+});
+document.addEventListener("keydown",event=>{if(event.target.closest?.("[data-rp-interactive], [role=application]"))return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="k"){event.preventDefault();$("workspaceSearch").focus();renderWorkspaceSearch();}else if(event.key==="Escape"){$("workspaceSearchResults").hidden=true;$("workspaceSearch").setAttribute("aria-expanded","false");document.querySelector(".account-menu").open=false;}});
+document.addEventListener("pointerdown",event=>{if(!event.target.closest(".workspace-search")){$("workspaceSearchResults").hidden=true;$("workspaceSearch").setAttribute("aria-expanded","false");}if(!event.target.closest(".account-menu"))document.querySelector(".account-menu").open=false;});
 
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
@@ -433,9 +501,11 @@ function renderPluginSettings() {
     const state=status ? (status.message ? `${status.state === "incompatible" ? "Incompatible" : "Failed"}: ${status.message}` : `Installed${status.loaded ? "" : ` ${manifest.version || ""}`} · ${enabled ? "Enabled" : "Disabled"}${status.loaded ? ` · Loaded ${status.loadedVersion || ""}` : ""}`) : compatible ? `Available ${compatible}` : "Incompatible";
     const stateClass=status ? (status.message ? status.state === "incompatible" ? "is-incompatible" : "is-failed" : enabled ? "is-enabled" : "is-disabled") : compatible ? "is-available" : "is-incompatible";
     const buttons = status
-      ? `<button class="button secondary small" type="button" ${busy || (!enabled && status.state === "incompatible") ? "disabled" : ""} onclick="togglePlugin('${escapeHtml(id)}',${!enabled})">${enabled ? "Disable" : "Enable"}</button>${update ? `<button class="button primary small" type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible)}')">Update to ${escapeHtml(compatible)}</button>` : ""}<button class="button danger small" type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','uninstall')">Uninstall</button>`
+      ? `<button class="plugin-enable-switch" role="switch" aria-checked="${enabled}" aria-label="${enabled ? "Disable" : "Enable"} ${escapeHtml(manifest.name || id)}" type="button" ${busy || (!enabled && status.state === "incompatible") ? "disabled" : ""} onclick="togglePlugin('${escapeHtml(id)}',${!enabled})"><span class="switch-track" aria-hidden="true"></span><span>${enabled ? "Enabled" : "Disabled"}</span></button>${update ? `<button class="button primary small" type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible)}')">Update to ${escapeHtml(compatible)}</button>` : ""}<button class="button danger small" type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','uninstall')">Uninstall</button>`
       : `<button class="button primary small" type="button" ${busy || !compatible ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible || "")}')">Install${compatible ? " " + escapeHtml(compatible) : ""}</button>`;
-    return `<article class="plugin-setting-card" data-plugin-id="${escapeHtml(id)}"><div class="plugin-setting-info"><strong>${escapeHtml(manifest.name || id)}</strong><div class="meta">${escapeHtml(manifest.description || "")}</div></div><div class="plugin-setting-actions">${buttons}</div><span class="status plugin-setting-state ${stateClass}"${entry?.incompatibility ? ` title="${escapeHtml(entry.incompatibility)}"` : ""}>${escapeHtml(busy ? "Updating…" : state)}${update ? " · Update available" : ""}${status?.restartRequired ? " · Restart required" : ""}</span></article>`;
+    const nav = [...pluginNavigation.values()].find(item => item.extension === id);
+    const glyph = nav ? pluginNavigationIcon(nav.icon) : RunPilotDashboard.icon("plugins");
+    return `<article class="plugin-setting-card" data-plugin-id="${escapeHtml(id)}"><div class="plugin-setting-info"><div class="plugin-setting-heading"><span class="feature-icon">${glyph}</span><div><strong>${escapeHtml(manifest.name || id)}</strong><div class="meta">${escapeHtml(manifest.description || "")}</div></div></div></div><div class="plugin-setting-actions">${buttons}</div><span class="status plugin-setting-state ${stateClass}"${entry?.incompatibility ? ` title="${escapeHtml(entry.incompatibility)}"` : ""}>${escapeHtml(busy ? "Updating…" : state)}${update ? " · Update available" : ""}${status?.restartRequired ? " · Restart required" : ""}</span></article>`;
   }).join("");
   filterPluginCards();
   const cards = new Map([...root.querySelectorAll(".plugin-setting-card")].map(card => [card.dataset.pluginId, card]));
@@ -449,7 +519,11 @@ function renderPluginSettings() {
       const section = document.createElement("section");
       section.className = "plugin-settings-section";
       section.append(content);
-      card.append(section);
+      const details = document.createElement("details"); details.className = "plugin-config-panel";
+      const summary = document.createElement("summary"); summary.textContent = "Configure plugin";
+      details.open = expandedPluginSettings.has(entry.extension);
+      details.append(summary); details.append(section); card.append(details);
+      details.addEventListener("toggle", () => { if (!details.isConnected) return; if (details.open) expandedPluginSettings.add(entry.extension); else expandedPluginSettings.delete(entry.extension); });
     } catch(error) { console.error(`plugin settings ${entry.id}`,error); }
   }
 }
@@ -685,6 +759,12 @@ async function loadSystemInfo() {
   window.runPilotWebSocketPayloadMode = systemInfo?.websocketPayloadMode || "disabled";
   if (connectionOnline) setConnected(true);
   $("bearerAuthEnabled").checked=!!systemInfo.bearerAuthEnabled;
+  const username = systemInfo.username || "Administrator";
+  $("accountName").textContent = username;
+  $("accountMenuName").textContent = username;
+  $("accountAvatar").textContent = username.charAt(0).toUpperCase();
+  $("settingsAccountName").textContent = username;
+  updatePageHeading();
 
 }
 
@@ -704,9 +784,8 @@ function setPage(page) {
     registered.headerActions(headerActions);
     headerActions.classList.toggle("hidden", headerActions.childElementCount === 0);
   }
-  const [title] = pageMeta[page] || [registered?.title || page];
-  $("pageTitle").textContent = title;
-  $("pageDescription").textContent = registered?.description || (page === "settings" ? "Manage your account, host preferences, and plugins." : "A live view of your host and services.");
+  updatePageHeading();
+  if (page === "settings") void ensureHostSummary();
 	if (page === "settings") renderPluginSettings();
 	if (registered) { registered.page.replaceChildren(); registered.render(registered.page); }
   window.scrollTo(0, 0);
@@ -716,6 +795,10 @@ function setPage(page) {
 
 document.querySelectorAll(".nav").forEach(n => n.addEventListener("click", () => setPage(n.dataset.page)));
 $("restartApplicationButton").addEventListener("click", requestRunPilotRestart);
+$("generalRestartButton").addEventListener("click", requestRunPilotRestart);
+$("managePluginsButton").addEventListener("click", () => selectSettingsTab("pluginSettingsTab", true));
+$("accountSettingsButton").addEventListener("click", () => { document.querySelector(".account-menu").open=false; setPage("settings"); selectSettingsTab("generalSettingsTab"); document.querySelector(".account-password-panel").open=true; $("currentPassword").focus(); });
+
 document.querySelectorAll("[data-software-tab]").forEach(button => button.addEventListener("click", () => { softwareTab = button.dataset.softwareTab; renderSoftware(); loadSoftwareView(); }));
 $("softwareSearchButton").addEventListener("click", softwareSearch);
 $("softwareUpgradeAll").addEventListener("click", softwareUpgradeAll);
@@ -782,6 +865,8 @@ $("dataRootChangeForm").addEventListener("submit",async e=>{e.preventDefault();c
 (async function init() {
   initializeSidebar();
   initializeTheme();
+  renderOverviewQuickActions();
+  updatePageHeading();
   try { const setup = await fetch("api/v1/setup", {credentials:"same-origin"}).then(response=>response.json()); if (setup.required) { location.replace("setup"); return; } } catch {}
   try { await api("api/v1/system"); authenticated = true; } catch {
     $("loginDialog").showModal();

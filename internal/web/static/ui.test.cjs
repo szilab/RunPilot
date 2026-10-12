@@ -21,11 +21,27 @@ const {chromium} = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE);
     await page.locator('[data-page="terminal"]').waitFor();
     await page.evaluate(() => document.fonts.ready);
     assert.equal(await page.evaluate(() => document.fonts.check("14px Inter")), true);
+    assert.equal(await page.locator("#accountName").textContent(), "admin");
+    await page.keyboard.press("Control+k");
+    await page.locator("#workspaceSearch").fill("terminal");
+    await page.keyboard.press("Enter");
+    await page.locator("#terminalPage.active").waitFor();
+    await page.locator(".xterm-helper-textarea").waitFor();
+    await page.locator(".xterm-helper-textarea").focus();
+    await page.keyboard.press("Control+k");
+    assert.equal(await page.locator("#workspaceSearch").getAttribute("aria-expanded"), "false", "workspace shortcut intercepted terminal input");
+    await page.locator('[data-page="overview"]').click();
+    await page.locator(".host-dashboard-storage > summary").click();
+    await page.evaluate(() => hostDashboard.refresh());
+    assert.equal(await page.locator(".host-dashboard-storage").evaluate(details => details.open), true, "refresh closed filesystem details");
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.dashboardControl), "filesystems", "refresh lost dashboard keyboard focus");
+    await page.locator(".host-dashboard-storage > summary").click();
     await page.locator('[data-page="settings"]').click();
     assert.equal(await page.evaluate(() => document.activeElement.id), "pageTitle", "navigation should focus the page introduction");
     await page.locator("#generalSettingsTab").focus();
     await page.keyboard.press("ArrowRight");
     assert.equal(await page.locator("#pluginSettingsTab").getAttribute("aria-selected"), "true");
+    await page.locator('[data-plugin-id="terminal"] .plugin-config-panel > summary').click();
     await page.locator('[data-plugin-id="terminal"] [name="command"]').waitFor({state:"visible"});
     await page.waitForFunction(() => !document.querySelector('[data-plugin-id="terminal"] [name="command"]').disabled);
     await page.locator('[data-plugin-id="terminal"] [name="command"]').fill("/bin/sh");
@@ -62,6 +78,7 @@ const {chromium} = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE);
         }
       }
     }
+    await page.locator(".account-menu > summary").click();
     await page.locator("#logoutButton").click();
     await page.locator("#loginDialog[open]").waitFor();
     assert.equal(await page.evaluate(() => localStorage.getItem("runpilot.token")), null);

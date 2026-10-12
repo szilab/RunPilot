@@ -293,7 +293,7 @@ func normalizeBasePath(value string) (string, error) {
 	return clean, nil
 }
 
-const initialSetupHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Set up RunPilot</title><script>document.documentElement.dataset.scheme="system";document.documentElement.dataset.theme=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"</script><link rel="stylesheet" href="__BASE__/styles.css"></head><body><main class="setup-screen"><section class="dialog small setup-card"><div class="dialog-head"><div><h1>Set up RunPilot</h1><p>Create the local administrator account and choose where RunPilot stores its data.</p></div></div><p>Complete setup within 5 minutes of starting RunPilot. When the window expires, setup is locked until you restart the RunPilot service.</p><form id="setup" class="settings-form setup-form"><label>Administrator username<input name="username" value="admin" minlength="3" maxlength="64" autocomplete="username" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label>Confirm password<input name="confirm" type="password" minlength="12" autocomplete="new-password" required></label>__DATA_DIR_CONTROL__<div id="error" class="form-error hidden" role="alert"></div><div class="dialog-actions"><button class="button primary">Create administrator</button></div></form></section></main><script>try{localStorage.removeItem('runpilot.token');sessionStorage.removeItem('runpilot.token')}catch{}const form=document.querySelector('#setup'),error=document.querySelector('#error');form.onsubmit=async e=>{e.preventDefault();error.textContent='';error.classList.add('hidden');if(form.password.value!==form.confirm.value){error.textContent='Passwords do not match.';error.classList.remove('hidden');return}try{const response=await fetch('__BASE__/api/v1/setup',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(Object.fromEntries(new FormData(form)))});if(!response.ok){const result=await response.json();throw Error(result.error||'Setup failed')}location.href='__BASE__/'}catch(x){error.textContent=x.message;error.classList.remove('hidden')}}</script></body></html>`
+const initialSetupHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Set up RunPilot</title><script>document.documentElement.dataset.scheme="system";document.documentElement.dataset.theme=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"</script><link rel="stylesheet" href="__BASE__/styles.css"><link rel="stylesheet" href="__BASE__/workspace.css"></head><body><main class="setup-screen"><section class="dialog small setup-card"><div class="dialog-head"><div><h1>Set up RunPilot</h1><p>Create the local administrator account and choose where RunPilot stores its data.</p></div></div><p>Complete setup within 5 minutes of starting RunPilot. When the window expires, setup is locked until you restart the RunPilot service.</p><form id="setup" class="settings-form setup-form"><label>Administrator username<input name="username" value="admin" minlength="3" maxlength="64" autocomplete="username" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label>Confirm password<input name="confirm" type="password" minlength="12" autocomplete="new-password" required></label>__DATA_DIR_CONTROL__<div id="error" class="form-error hidden" role="alert"></div><div class="dialog-actions"><button class="button primary">Create administrator</button></div></form></section></main><script>try{localStorage.removeItem('runpilot.token');sessionStorage.removeItem('runpilot.token')}catch{}const form=document.querySelector('#setup'),error=document.querySelector('#error');form.onsubmit=async e=>{e.preventDefault();error.textContent='';error.classList.add('hidden');if(form.password.value!==form.confirm.value){error.textContent='Passwords do not match.';error.classList.remove('hidden');return}try{const response=await fetch('__BASE__/api/v1/setup',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(Object.fromEntries(new FormData(form)))});if(!response.ok){const result=await response.json();throw Error(result.error||'Setup failed')}location.href='__BASE__/'}catch(x){error.textContent=x.message;error.classList.remove('hidden')}}</script></body></html>`
 
 func (s *Server) writeInitialSetup(w http.ResponseWriter) {
 	staticPrefix := s.basePath
@@ -319,7 +319,7 @@ func (s *Server) writeExpiredSetup(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusGone)
-	_, _ = io.WriteString(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Setup locked · RunPilot</title><script>document.documentElement.dataset.scheme="system";document.documentElement.dataset.theme=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"</script><link rel="stylesheet" href="`+html.EscapeString(staticPrefix)+`/styles.css"></head><body><main class="setup-screen"><section class="dialog small setup-card"><h1>Setup window expired</h1><p>The five-minute setup window has ended. Restart the RunPilot service to open a new setup window.</p></section></main></body></html>`)
+	_, _ = io.WriteString(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Setup locked · RunPilot</title><script>document.documentElement.dataset.scheme="system";document.documentElement.dataset.theme=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"</script><link rel="stylesheet" href="`+html.EscapeString(staticPrefix)+`/styles.css"><link rel="stylesheet" href="`+html.EscapeString(staticPrefix)+`/workspace.css"></head><body><main class="setup-screen"><section class="dialog small setup-card"><h1>Setup window expired</h1><p>The five-minute setup window has ended. Restart the RunPilot service to open a new setup window.</p></section></main></body></html>`)
 }
 
 func (s *Server) writeSetupPage(w http.ResponseWriter) {
@@ -332,18 +332,35 @@ func (s *Server) writeSetupPage(w http.ResponseWriter) {
 
 func (s *Server) setupGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		localPath := r.URL.Path
+		if s.basePath != "/" {
+			if localPath == s.basePath || !strings.HasPrefix(localPath, s.basePath+"/") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			localPath = strings.TrimPrefix(localPath, s.basePath)
+		}
 		serverConfig := s.ctrl.Snapshot().Server
 		setupComplete := serverConfig.AdminUsername != "" && serverConfig.AdminPasswordHash != ""
-		if setupComplete || r.URL.Path == "/healthz" || r.URL.Path == "/api/v1/setup" || r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/setup" || r.URL.Path == "/styles.css" || r.URL.Path == "/runpilot-logo.png" {
+		if setupComplete || localPath == "/healthz" || localPath == "/api/v1/setup" || localPath == "/api/v1/auth/login" || localPath == "/setup" || setupAppearanceAsset(localPath) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/" || r.URL.Path == "/setup" {
+		if localPath == "/" {
 			s.writeSetupPage(w)
 			return
 		}
-		writeJSON(w, http.StatusPreconditionRequired, map[string]string{"error": "initial setup required", "setup": "/setup"})
+		writeJSON(w, http.StatusPreconditionRequired, map[string]string{"error": "initial setup required", "setup": strings.TrimSuffix(s.basePath, "/") + "/setup"})
 	})
+}
+
+func setupAppearanceAsset(path string) bool {
+	switch path {
+	case "/styles.css", "/workspace.css", "/runpilot-logo.png", "/runpilot-mark.svg", "/workspace-alpine.png", "/fonts/InterVariable.woff2":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
@@ -774,6 +791,7 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 		"version":              version.Version,
 		"dataDir":              s.ctrl.DataDir(),
 		"bearerAuthEnabled":    cfg.Server.BearerAuthEnabled,
+		"username":             cfg.Server.AdminUsername,
 		"configPath":           s.ctrl.ConfigPath(),
 		"bind":                 cfg.Server.Bind,
 		"capabilities":         platform.CurrentCapabilities(),
