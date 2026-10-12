@@ -46,17 +46,19 @@ const fixture = {host:{hostname:"desk",os:"linux",architecture:"amd64",cpuAvaila
   renderStatus(dashboardRoot, fixture);
   const all = descendants(dashboardRoot);
   assert.equal(all.filter(node => node.className.includes("host-dashboard-card")).length, 6);
-  assert.equal(all.filter(node => node.className === "host-dashboard-disk").length, 2);
+  assert.equal(all.filter(node => node.className.split(" ").includes("host-filesystem")).length, 2);
   assert.ok(all.some(node => node.textContent === "75%"));
-  assert.ok(all.some(node => node.textContent === "desk"));
+  assert.ok(!all.some(node => node.textContent === "desk"),"Overview still has a host banner");
+  assert.equal(all.filter(node => node.tag === "details").length,0,"filesystems must always be visible");
   assert.ok(all.some(node => node.textContent === "16 logical CPUs"));
   assert.ok(all.some(node => node.textContent.includes("Load 1.70 / 1.40 / 1.20")));
   assert.ok(all.some(node => node.textContent.includes("video memory")));
   assert.equal(all.filter(node => node.attributes.role === "meter").length, 4);
   assert.equal(all.filter(node => node.className === "host-dashboard-bar").length, 2);
+  assert.deepEqual(all.filter(node => node.className === "host-dashboard-bar").map(node=>node.attributes["aria-valuenow"]),["75","50"]);
   const noGPU = new Element("root");
   renderStatus(noGPU, {...fixture, host:{...fixture.host,gpuAvailable:false,disks:[]}});
-  assert.equal(descendants(noGPU).filter(node => node.className.includes("host-dashboard-card")).length, 5);
+  assert.equal(descendants(noGPU).filter(node => node.className.includes("host-dashboard-card")).length, 3);
   assert.ok(descendants(noGPU).some(node => node.textContent === "No filesystem metrics available."));
 
   let calls=0, interval, stopped=false, pluginMounted=0;

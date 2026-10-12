@@ -449,7 +449,8 @@ provide their heading, fields, and actions using the host's shared responsive
 layout without imposing a custom section width.
 
 A navigation entry may provide an optional `description` for the page introduction,
-`shortcut: {title, description, order}` for an Overview quick action,
+`shortcut: {title, description, order}` as compatible shortcut metadata (the current
+Overview does not display quick actions),
 and `headerActions(root)` to add page-specific
 buttons to the application header beside the theme switcher. The host clears
 this slot when the user leaves that page:

@@ -16,7 +16,7 @@ let pluginCatalog = [], pluginCatalogError = "", pluginCatalogLoaded = false, pl
 let pluginExtensions = new Map();
 const pluginNavigation = new Map(), pluginSettings = new Map();
 const overviewWidgets = new RunPilotOverviewWidgets($("overviewWidgets"));
-const hostDashboard = new RunPilotDashboard.HostDashboard($("hostDashboard"), api, {onUpdate:updateHostSummary,onOpenSettings:()=>setPage("settings")});
+const hostDashboard = new RunPilotDashboard.HostDashboard($("hostDashboard"), api, {onUpdate:updateHostSummary});
 const pluginThemeListeners = new Set();
 let applicationSocket = null, applicationSocketPromise = null, applicationSequence = 0;
 const applicationPending = new Map(), applicationListeners = new Map(), applicationStreams = new Map();
@@ -164,7 +164,6 @@ function registerPluginNavigation(extension, entry) {
   document.querySelector("nav").append(button);
   const page = document.createElement("section"); page.id = entry.id + "Page"; page.className = "page"; document.querySelector("main").append(page);
   pluginNavigation.set(entry.id, { ...entry, button, page, extension });
-  renderOverviewQuickActions();
   button.addEventListener("click", () => setPage(entry.id));
 }
 function registerPluginOverview(extension, entry) {
@@ -233,31 +232,16 @@ function updatePageHeading() {
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   $("pageTitle").textContent = currentPage === "overview" ? `${greeting}${systemInfo?.username ? `, ${systemInfo.username}` : ""}` : (pageMeta[currentPage]?.[0] || entry?.title || currentPage);
   $("pageEyebrow").textContent = currentPage === "overview" ? "YOUR WORKSPACE, AT A GLANCE" : "RUNPILOT WORKSPACE";
-  $("pageDescription").textContent = entry?.description || (currentPage === "settings" ? "Manage your server and plugins." : "Your host and services, in one place.");
+  $("pageDescription").hidden = currentPage === "overview";
+  $("pageDescription").textContent = currentPage === "overview" ? "" : entry?.description || (currentPage === "settings" ? "Manage your server and plugins." : "Manage this workspace.");
   $("overviewClock").hidden = currentPage !== "overview";
   $("overviewClock").innerHTML = `<span>${escapeHtml(now.toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric",year:"numeric"}))}</span><strong>${escapeHtml(now.toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"}))}</strong>`;
-}
-
-function renderOverviewQuickActions() {
-  const root = $("overviewQuickActions"); if (!root) return;
-  const entries = [...pluginNavigation.values()].filter(entry => entry.shortcut?.title).sort((a,b)=>(a.shortcut.order||0)-(b.shortcut.order||0)).slice(0,3);
-  root.replaceChildren();
-  const add = (title, description, glyph, work, tone="blue") => {
-    const button=document.createElement("button");button.className="quick-action";button.type="button";
-    button.innerHTML=`<span class="feature-icon ${tone}">${glyph}</span><span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(description)}</small></span>`;
-    button.onclick=work;root.append(button);
-  };
-  entries.forEach((entry,index)=>add(entry.shortcut.title,entry.shortcut.description||entry.title,pluginNavigationIcon(entry.icon),()=>setPage(entry.id),["blue","violet","green"][index]));
-  add("Manage plugins","Extend your workspace",RunPilotDashboard.icon("plugins"),()=>{setPage("settings");selectSettingsTab("pluginSettingsTab",true);},"violet");
 }
 
 function updateHostSummary(data) {
   const host=data?.host||{};
   $("sidebarHostName").textContent=host.hostname||"RunPilot host";
-  const metrics=RunPilotDashboard.readings(data), {size,uptime,icon}=RunPilotDashboard;
-  const facts = [["CPU",metrics.cpu===null?"Unavailable":`${Math.round(metrics.cpu)}% utilization`],["Memory",metrics.totalMemory?`${size(metrics.freeMemory)} available`:"Unavailable"],["Filesystems",`${metrics.disks.length} monitored`]];
-  if(host.gpuAvailable&&host.gpuMemoryTotalBytes>0)facts.push(["GPU memory",`${Math.round(Math.min(100,Math.max(0,host.gpuMemoryUsedBytes||0)*100/host.gpuMemoryTotalBytes))}% used`]);
-  $("hostHealth").innerHTML=`<div class="health-summary"><span class="feature-icon ${host.error?"amber":"green"}">${icon(host.error?"activity":"check")}</span><div><strong>${host.error?"Metrics need attention":"Host connected"}</strong><small>${escapeHtml(host.error||"Receiving live resource measurements")}</small></div></div><div class="health-facts">${facts.map(([name,value])=>`<div><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")}</div>`;
+  const metrics=RunPilotDashboard.readings(data), {size,uptime}=RunPilotDashboard;
   $("settingsHostIdentity").innerHTML=`<img src="host-device.svg" alt=""><div><strong>${escapeHtml(host.hostname||"Unknown host")}</strong><p>${escapeHtml([host.os,host.architecture].filter(Boolean).join(" · "))} · Uptime ${escapeHtml(uptime(data.hostUptimeSeconds))}</p></div>`;
   const info=[["Operating system",host.os||"Unavailable"],["Architecture",host.architecture||"Unavailable"],["Processor",host.cpuModel||"Unavailable"],["Logical CPUs",host.cpuCount||"Unavailable"],["Total memory",metrics.totalMemory?size(metrics.totalMemory):"Unavailable"],["Host uptime",uptime(data.hostUptimeSeconds)],["RunPilot",systemInfo?.version||"Unavailable"]];
   $("settingsHostFacts").innerHTML=info.map(([name,value])=>`<div><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
@@ -876,7 +860,6 @@ $("dataRootChangeForm").addEventListener("submit",async e=>{e.preventDefault();c
 (async function init() {
   initializeSidebar();
   initializeTheme();
-  renderOverviewQuickActions();
   updatePageHeading();
   try { const setup = await fetch("api/v1/setup", {credentials:"same-origin"}).then(response=>response.json()); if (setup.required) { location.replace("setup"); return; } } catch {}
   try { await api("api/v1/system"); authenticated = true; } catch {

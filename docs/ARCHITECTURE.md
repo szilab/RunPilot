@@ -145,8 +145,9 @@ semantics. Plugin CSS should use public semantic design tokens rather than
 hard-code RunPilot's current colors or spacing.
 
 Overview currently presents a built-in, host-only monitoring dashboard with
-a host identity banner, CPU, memory, primary-filesystem and optional GPU cards,
-plus expandable filesystem details. Its metrics reuse the existing platform
+CPU, memory, primary-filesystem and optional GPU cards, followed by always-visible
+filesystem capacity cards using the same responsive columns. Host identity stays
+in Settings and the sidebar. Its metrics reuse the existing platform
 adapters. Sparklines retain at most 32 actual successful samples in browser
 local storage, scoped to the application base path and host name. Collection
 continues on other pages while the authenticated app is visible; reloads restore
@@ -154,8 +155,9 @@ the retained samples. Hidden or closed browsers do not collect measurements.
 This is recent browser history, not a server metrics archive; it does not use
 execution history or synthesize measurements. Plugin summary widgets appear below the
 host dashboard through the generic frontend widget registration contract. Their
-mount, refresh, and disposal follow Overview visibility. Pages can contribute
-shortcut metadata to the host quick-action panel. Existing launcher configuration
+mount, refresh, and disposal follow Overview visibility. Navigation shortcut
+metadata remains accepted for compatibility; Overview has no quick-action panel.
+Existing launcher configuration
 remains separate; the visual redesign does not change its semantics. The current System package remains a
 technical fixture, not the user-facing System feature.
 

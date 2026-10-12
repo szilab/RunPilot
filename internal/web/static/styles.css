@@ -486,7 +486,6 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 .host-dashboard-section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
 .host-dashboard-section-head .host-dashboard-title { margin:0; }
 .host-dashboard-count { color:var(--rp-text-muted); font-size:12px; }
-.host-dashboard-disks { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr)); gap:10px; }
 .host-dashboard-disk { width:100%; max-width:none; min-width:0; padding:12px; border:1px solid var(--rp-border); border-radius:var(--rp-radius); background:var(--rp-surface); }
 .host-dashboard-disk-head { display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
 .host-dashboard-disk-path { min-width:0; overflow:hidden; color:var(--rp-text-strong); font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
@@ -496,7 +495,7 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 .host-dashboard-empty, .host-dashboard-loading, .host-dashboard-error { margin:0; color:var(--rp-text-muted); font-size:13px; }
 .host-dashboard-error { color:var(--rp-text-strong); }
 @media (max-width:700px) { .host-dashboard-top { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media (max-width:460px) { .host-dashboard-top { grid-template-columns:1fr; } .host-dashboard-card { padding:15px; } .host-dashboard-disks { grid-template-columns:repeat(2,minmax(0,1fr)); } .host-dashboard-disk { padding:10px; } .host-dashboard-disk-size { white-space:normal; } }
+@media (max-width:460px) { .host-dashboard-top { grid-template-columns:1fr; } .host-dashboard-card { padding:15px; } .host-dashboard-disk { padding:10px; } .host-dashboard-disk-size { white-space:normal; } }
 
 /* Generic plugin widget surface. */
 .overview-widget { min-width:0; padding:18px; border:1px solid var(--rp-border); border-radius:var(--rp-radius-large); background:var(--rp-surface-elevated); }

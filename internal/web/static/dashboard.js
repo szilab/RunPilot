@@ -37,7 +37,6 @@
     restart:'<path d="M4 9a8 8 0 1 1 0 6m0-12v6h6"/>',
   };
   function icon(name) { return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.plugins}</svg>`; }
-  function card(title, extra = "") { const node = element("article", `host-dashboard-card ${extra}`.trim()); node.append(element("h2", "host-dashboard-title", title)); return node; }
   function bar(label, value) {
     const track = element("div", "host-dashboard-bar"); track.setAttribute("role", "progressbar"); track.setAttribute("aria-label", label); track.setAttribute("aria-valuemin", "0"); track.setAttribute("aria-valuemax", "100"); track.setAttribute("aria-valuenow", String(Math.round(utilization(value))));
     const fill = element("span", "host-dashboard-bar-fill"); fill.style.width = `${utilization(value)}%`; track.append(fill); return track;
@@ -71,16 +70,20 @@
     if (model) { const text = element("p", "host-dashboard-model", model); text.title = model; node.append(text); }
     return node;
   }
-  function renderStatus(root, data, {samples = [], onOpenSettings} = {}) {
-    const focusKey = root.contains?.(document.activeElement) ? document.activeElement?.dataset?.dashboardControl : null;
+  function diskCard(disk) {
+    const total=Number(disk.totalBytes)||0, free=Math.min(total,Math.max(0,Number(disk.freeBytes)||0)), used=total-free;
+    const node=element("article","host-dashboard-card host-metric host-filesystem");node.dataset.filesystem=disk.path || "";
+    const heading=element("div","host-metric-heading"), title=element("h2","host-dashboard-title",disk.path || "Filesystem"), glyph=element("span","feature-icon");
+    title.title=disk.path || "Filesystem";glyph.innerHTML=icon("storage");heading.append(title,glyph);
+    const visual=element("div","host-metric-visual"), capacity=element("div","host-filesystem-capacity"), reading=element("div","host-metric-reading");
+    capacity.append(bar(disk.path || "Filesystem",fraction(used,total)));
+    reading.append(element("strong","host-dashboard-value",percentage(fraction(used,total))),element("span","host-metric-current","Used"));
+    visual.append(capacity,reading);
+    node.append(heading,visual,element("p","host-dashboard-detail",`${size(used)} / ${size(total)}`),element("p","host-dashboard-model",`${size(free)} available`));
+    return node;
+  }
+  function renderStatus(root, data, {samples = []} = {}) {
     const host = data?.host || {}, values = readings(data);
-    const identity = card("Host", "host-dashboard-identity");
-    const device = element("img", "host-device"); device.src = "host-device.svg"; device.alt = "";
-    const copy = element("div", "host-identity-copy"), heading = element("div", "host-identity-heading");
-    heading.append(element("strong", "host-dashboard-name", host.hostname || "Unknown host"), element("span", "host-online", "Connected"));
-    copy.append(heading, element("p", "host-dashboard-platform", [host.os, host.architecture].filter(Boolean).join(" · ") || "Platform unavailable"), element("p", "host-dashboard-uptime", `Uptime ${uptime(data?.hostUptimeSeconds)}`));
-    identity.append(device, copy);
-    if (onOpenSettings) { const manage = element("button", "button secondary small", "Host settings →"); manage.type="button"; manage.dataset.dashboardControl="settings"; manage.onclick=onOpenSettings; identity.append(manage); }
     const top = element("div", "host-dashboard-top");
     const load = Array.isArray(host.loadAverage) && host.loadAverage.length === 3 ? `Load ${host.loadAverage.map(value => Number(value).toFixed(2)).join(" / ")}` : "";
     top.append(metricCard("CPU", "cpu", values.cpu, [host.cpuCount > 0 ? `${host.cpuCount} logical CPUs` : "CPU metrics unavailable"], load || host.cpuModel || "", samples));
@@ -93,32 +96,25 @@
       top.append(gpu);
     }
     top.dataset.count = String(top.childElementCount);
-    const storage = element("details", "host-dashboard-card host-dashboard-storage"), storageHeading = element("summary", "host-dashboard-section-head");
-    storageHeading.dataset.dashboardControl="filesystems";
-    storage.open = !!root.querySelector?.("details.host-dashboard-storage")?.open;
-    storageHeading.append(element("h2", "host-dashboard-title", "Filesystems"), element("span", "host-dashboard-count", `${values.disks.length} filesystem${values.disks.length === 1 ? "" : "s"}`)); storage.append(storageHeading);
+    const storage = element("section", "host-filesystems");storage.setAttribute("aria-label","Filesystems");
+    storage.append(element("h2","host-filesystems-title","Filesystems"));
     if (values.disks.length) {
-      const grid = element("div", "host-dashboard-disks");
-      for (const disk of values.disks) {
-        const total = Number(disk.totalBytes) || 0, free = Math.min(total, Math.max(0, Number(disk.freeBytes) || 0)), used = total-free;
-        const item = element("article", "host-dashboard-disk"), headline = element("div", "host-dashboard-disk-head"), path = element("strong", "host-dashboard-disk-path", disk.path || "Filesystem"); path.title = disk.path || "Filesystem";
-        headline.append(path, element("strong", "host-dashboard-disk-percent", percentage(fraction(used,total)))); item.append(headline, element("p", "host-dashboard-disk-size", `${size(used)} / ${size(total)}`), bar(disk.path || "Filesystem", fraction(used,total))); grid.append(item);
-      }
+      const grid = element("div", "host-dashboard-top host-dashboard-disks");grid.dataset.count=top.dataset.count;
+      for (const disk of values.disks) grid.append(diskCard(disk));
       storage.append(grid);
     } else storage.append(element("p", "host-dashboard-empty", "No filesystem metrics available."));
-    root.replaceChildren(identity, top, storage);
-    if (["filesystems", "settings"].includes(focusKey)) root.querySelector?.(`[data-dashboard-control="${focusKey}"]`)?.focus({preventScroll:true});
+    root.replaceChildren(top, storage);
   }
   class HostDashboard {
-    constructor(root, api, {interval = 8000, setIntervalFn = (callback, delay) => setInterval(callback, delay), clearIntervalFn = id => clearInterval(id), storage = historyStorage(), storageKey = historyStorageKey(), nowFn = () => Date.now(), onUpdate, onOpenSettings} = {}) {
-      this.root=root; this.api=api; this.interval=interval; this.setIntervalFn=setIntervalFn; this.clearIntervalFn=clearIntervalFn; this.onUpdate=onUpdate; this.onOpenSettings=onOpenSettings;
+    constructor(root, api, {interval = 8000, setIntervalFn = (callback, delay) => setInterval(callback, delay), clearIntervalFn = id => clearInterval(id), storage = historyStorage(), storageKey = historyStorageKey(), nowFn = () => Date.now(), onUpdate} = {}) {
+      this.root=root; this.api=api; this.interval=interval; this.setIntervalFn=setIntervalFn; this.clearIntervalFn=clearIntervalFn; this.onUpdate=onUpdate;
       this.storage=storage; this.storageKey=storageKey; this.nowFn=nowFn; this.sampleHost=null;
       this.active=false; this.running=false; this.timer=null; this.controller=null; this.busy=false; this.generation=0; this.samples=[]; this.lastData=null;
     }
     setActive(active) {
       if (this.active===active) return; this.active=active;
       if (!active) return;
-      if (this.lastData) renderStatus(this.root,this.lastData,{samples:this.samples,onOpenSettings:this.onOpenSettings});
+      if (this.lastData) renderStatus(this.root,this.lastData,{samples:this.samples});
       else this.root.replaceChildren(element("p","host-dashboard-loading","Loading host metrics…"));
     }
     start() {
@@ -158,7 +154,7 @@
           this.samples.push({at:this.nowFn(),cpu,memory,storage,gpu});
           if(this.samples.length>historyLimit)this.samples.shift();
           this.saveSamples();this.lastData=data;
-          if(this.active)renderStatus(this.root,data,{samples:this.samples,onOpenSettings:this.onOpenSettings});
+          if(this.active)renderStatus(this.root,data,{samples:this.samples});
           this.onUpdate?.(data);
         }
       } catch(error) {
