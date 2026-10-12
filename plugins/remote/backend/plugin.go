@@ -112,6 +112,7 @@ type storedTargets struct {
 
 type plugin struct {
 	sessions       map[string]session
+	vncSessions    map[string]vncSession
 	diagnostics    map[string][]string
 	diagnosticIDs  []string
 	sessionDiagIDs map[string]string
@@ -119,7 +120,7 @@ type plugin struct {
 }
 
 func newPlugin() *plugin {
-	return &plugin{sessions: map[string]session{}, diagnostics: map[string][]string{}, sessionDiagIDs: map[string]string{}, nextDiagnostic: 1}
+	return &plugin{sessions: map[string]session{}, vncSessions: map[string]vncSession{}, diagnostics: map[string][]string{}, sessionDiagIDs: map[string]string{}, nextDiagnostic: 1}
 }
 
 func validDiagnosticID(value string) bool {
@@ -224,6 +225,9 @@ func decode(raw json.RawMessage, value any) *rpcError {
 }
 
 func (p *plugin) handle(method string, raw json.RawMessage) (any, *rpcError) {
+	if strings.HasPrefix(method, "vnc.") {
+		return p.handleVNC(method, raw)
+	}
 	switch method {
 	case "rdp.settings.get":
 		settings, failure := p.readSettings()
@@ -975,10 +979,15 @@ func (p *plugin) event(name string, raw json.RawMessage) *rpcError {
 		p.addDiagnostic(current.DiagnosticID, "network stream closed")
 		delete(p.sessions, event.ID)
 	}
+	delete(p.vncSessions, event.ID)
 	return nil
 }
 
 func (p *plugin) shutdown() {
+	for id, current := range p.vncSessions {
+		_ = callHost("network.stream.close", map[string]string{"id": current.StreamID}, nil)
+		delete(p.vncSessions, id)
+	}
 	p.sessions = map[string]session{}
 	p.diagnostics = map[string][]string{}
 	p.diagnosticIDs = nil

@@ -29,7 +29,7 @@ jobs:
           tinygo-version: "0.38.0"
 
       - name: Build System ABI test fixture
-        run: go generate ./plugins/system/backend
+        run: go generate ./internal/plugins/system_fixture/backend
 
       - name: Build Tasks plugin backend
         run: go generate ./plugins/tasks/backend
@@ -53,9 +53,9 @@ jobs:
           mkdir -p dist
           mkdir -p dist/bundle/plugins
           if [[ "$GITHUB_REF_NAME" == "main" ]]; then
-            BUILD_VERSION="1.0.4"
+            BUILD_VERSION="1.0.5"
           else
-            BUILD_VERSION="1.0.4-dev.${GITHUB_SHA::7}"
+            BUILD_VERSION="1.0.5-dev.${GITHUB_SHA::7}"
           fi
           go build -trimpath -ldflags="-s -w -X github.com/szilab/RunPilot/internal/version.Version=${BUILD_VERSION}" -o dist/runpilot-linux-amd64 ./cmd/runpilot
           cp dist/runpilot-linux-amd64 dist/bundle/runpilot
@@ -112,11 +112,11 @@ jobs:
             dist/install.sh \
             --clobber
 
-      - name: Create immutable v1.0.4 release
+      - name: Create immutable v1.0.5 release
         if: github.ref_name == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION_TAG: v1.0.4
+          VERSION_TAG: v1.0.5
         shell: bash
         run: |
           if gh release view "$VERSION_TAG" >/dev/null 2>&1; then
@@ -134,5 +134,5 @@ jobs:
             dist/runpilot-windows-amd64.version \
             dist/install.sh \
             --target "$GITHUB_SHA" \
-            --title "RunPilot v1.0.4" \
+            --title "RunPilot v1.0.5" \
             --generate-notes

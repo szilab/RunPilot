@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createVNCChannelAdapter } from "./raw-channel.js";
+import { createVNCChannelAdapter } from "./vnc-channel.js";
 
 globalThis.WebSocket ??= { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 };
 

@@ -57,10 +57,12 @@ host-owned buffers and copy-only imports. First-party TinyGo code should use
 than managing WASM pointers or response handles. The precise wire contracts
 are in [PLUGIN_API.md](PLUGIN_API.md).
 
-First-party backend sources are built with TinyGo 0.38.0. The checked-in
-System plugin is the reference source implementation: run
-`go generate ./plugins/system/backend` before packaging it. The Tasks plugin is
-the first feature backend: run `go generate ./plugins/tasks/backend` after
+First-party backend sources are built with TinyGo 0.38.0. The internal System
+test fixture is the reference source implementation: run
+`go generate ./internal/plugins/system_fixture/backend` to rebuild it. Shared
+plugin-runtime test fixtures live under `internal/plugins/testdata`; they are
+not distributable plugins. The Tasks plugin is the first feature backend: run
+`go generate ./plugins/tasks/backend` after
 changing it (the checked-in `plugin.wasm` is verified against the source when
 TinyGo is available). Stateful backends must build with `-gc=conservative`:
 TinyGo's default `wasm-unknown` collector never frees memory. TinyGo is never a
@@ -140,6 +142,12 @@ Plugins should use the RunPilot shared UI library wherever practical. Shared con
 
 Custom CSS may use public semantic design tokens for surfaces, text, borders, spacing, radii and related properties. Plugins must not hard-code assumptions about the default style or light/dark mode.
 
+Use the shared `rp-card`, `button` variants (including `button icon`),
+`rp-segmented`, form controls, status indicators and notices for common
+interface elements. Plugin CSS should
+handle feature layout only; it should not redefine shared control sizing or
+introduce a plugin-specific color palette.
+
 Style selection is framework-owned. System/Light/Dark color scheme is separate from the selected style. The architecture is prepared for future non-executable `.rptheme` packages containing metadata and CSS/token overrides; themes are deliberately separate from WASM plugins.
 
 ## Overview and Settings
@@ -164,13 +172,12 @@ First-party plugins live under `plugins/<plugin-id>` and build into deterministi
 The `system` package remains a nonpublic technical fixture for ABI, host
 capability, WebSocket and frontend extension tests. It is not automatically
 installed or enabled on fresh RunPilot startup. Its checked-in source and WASM
-remain intact; generate them with `go generate ./plugins/system/backend` when
+remain intact; generate them with `go generate ./internal/plugins/system_fixture/backend` when
 changing the fixture. Existing ABI-v1/v2 tests remain useful and supported.
 
 `plugins/publication.json` explicitly excludes System from public publication.
-The frontend-only `plugins/examples/hello` example exercises local packaging and
-registry testing. Production publication is an explicit version-driven action;
-application release workflows no longer bundle plugin artifacts.
+Production publication is an explicit version-driven action; application
+release workflows no longer bundle plugin artifacts.
 
 Host metrics presentation is built into Overview. No System plugin expansion is
 part of the registry implementation.
@@ -196,16 +203,15 @@ process session with the entered command and arguments, without saving them
 or interrupting existing sessions. Regenerate its WASM backend with
 `go generate ./plugins/terminal/backend` after backend changes.
 
-`plugins/remote-rdp` and `plugins/remote-vnc` are publishable ABI-v2 plugins
-with plugin-owned targets and navigation pages. RDP owns Guacamole negotiation
-over the generic TCP/TLS stream capability and includes its browser client.
-VNC owns target storage and ephemeral sessions over `network.stream.*`, adapts
-`runpilot.ws.openStream()` to noVNC 1.7.0, and packages noVNC plus its license
-files. Both use `runpilot.ui.createInteractiveSessionView()` for shared session
-controls. Passwords are never persisted. Core no longer contains the legacy
-RDP/VNC providers, transports, or combined Remote page. Xpra remains a
-temporary internal legacy implementation without normal UI exposure; its
-migration is deferred while reusable host lifecycle capabilities are designed.
+`plugins/remote` is published as plugin ID `remote`, providing RDP and VNC.
+It owns both target lists and session types, uses the generic
+`network.stream.*` capability, packages Guacamole and noVNC 1.7.0 with their
+license files, and provides one protocol-tabbed navigation page. Passwords are
+never persisted. Core no longer contains legacy RDP/VNC providers or
+transports.
+Xpra remains a temporary internal legacy implementation without normal UI
+exposure; its migration is deferred while reusable host lifecycle capabilities
+are designed.
 
 Browser regression checks are opt-in: set `RUNPILOT_PLAYWRIGHT_MODULE` to a local
 Playwright module and optionally `RUNPILOT_BROWSER_EXECUTABLE` to its browser,

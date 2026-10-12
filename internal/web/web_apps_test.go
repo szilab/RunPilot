@@ -230,7 +230,7 @@ func TestWebAppsWASMEncryptedGatewayAndPublication(t *testing.T) {
 			if err != nil || !bytes.Contains(data, []byte("forbidden")) {
 				t.Fatal("scoped ticket allowed RPC", string(data), err)
 			}
-			for _, control := range []map[string]string{{"type": "stream.attach", "plugin": "remote.vnc", "streamId": opened.Session.ID}, {"type": "stream.attach", "plugin": "web.apps", "streamId": foreign.Session.ID}} {
+			for _, control := range []map[string]string{{"type": "stream.attach", "plugin": "remote", "streamId": opened.Session.ID}, {"type": "stream.attach", "plugin": "web.apps", "streamId": foreign.Session.ID}} {
 				raw, _ := json.Marshal(control)
 				_ = secure.Write(ctx, websocket.MessageText, raw)
 				_, data, err = secure.Read(ctx)

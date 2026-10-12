@@ -37,7 +37,65 @@ type project struct {
 	Containers        []container `json:"containers"`
 }
 
-func (p *plugin) init() { _ = workspace("mkdir", "projects", nil, nil) }
+func (p *plugin) init() {
+	var raw json.RawMessage
+	if callHost("storage.get", map[string]any{"key": "settings"}, &raw) == nil {
+		var settings struct {
+			ProjectsFolder string `json:"projectsFolder"`
+		}
+		if json.Unmarshal(raw, &settings) == nil && validProjectsFolder(settings.ProjectsFolder) {
+			p.projectsFolder = filepath.Clean(settings.ProjectsFolder)
+		}
+	}
+	if filepath.IsAbs(filepath.FromSlash(p.projectsFolder)) {
+		_ = p.workspace("mkdir", ".", nil, nil)
+	} else {
+		_ = workspace("mkdir", p.projectsFolder, nil, nil)
+	}
+}
+func (p *plugin) externalRoot() string {
+	if filepath.IsAbs(filepath.FromSlash(p.projectsFolder)) {
+		return filepath.FromSlash(p.projectsFolder)
+	}
+	return ""
+}
+func (p *plugin) workspace(op, name string, extra map[string]any, out any) *rpcError {
+	return workspace(op, name, extra, out, p.externalRoot())
+}
+func (p *plugin) listDir(name string) ([]struct {
+	Name      string `json:"name"`
+	Directory bool   `json:"directory"`
+	Symlink   bool   `json:"symlink"`
+}, *rpcError) {
+	return listDir(name, p.externalRoot())
+}
+func (p *plugin) readFile(name string) (string, *rpcError) { return readFile(name, p.externalRoot()) }
+func (p *plugin) writeFile(name, content string) *rpcError {
+	return writeFile(name, content, p.externalRoot())
+}
+func (p *plugin) projectsWorkspaceRoot() string {
+	if p.externalRoot() != "" {
+		return "."
+	}
+	return p.projectsFolder
+}
+func (p *plugin) projectWorkspacePath(parts ...string) string {
+	if p.externalRoot() == "" {
+		return p.projectPath(parts...)
+	}
+	name := ""
+	for _, part := range parts {
+		name = filepath.ToSlash(filepath.Join(filepath.FromSlash(name), part))
+	}
+	return name
+}
+func (p *plugin) projectPath(parts ...string) string {
+	path := p.projectsFolder
+	for _, part := range parts {
+		path = filepath.ToSlash(filepath.Join(filepath.FromSlash(path), part))
+	}
+	return path
+}
 func (p *plugin) runtime() dockerRuntime {
 	rt := dockerRuntime{Supported: true, State: "ready", Message: "Docker Compose is ready."}
 	var identity struct {
@@ -110,7 +168,7 @@ func classifyDockerFailure(err *rpcError) dockerFailure {
 	}
 }
 func (p *plugin) managedProjects() ([]project, *rpcError) {
-	entries, e := listDir("projects")
+	entries, e := p.listDir(p.projectsWorkspaceRoot())
 	if e != nil {
 		return nil, e
 	}
@@ -119,16 +177,16 @@ func (p *plugin) managedProjects() ([]project, *rpcError) {
 		if !v.Directory || v.Symlink || !validName(v.Name) {
 			continue
 		}
-		filename, exists := composeFile(v.Name)
+		filename, exists := p.composeFile(v.Name)
 		out = append(out, project{Name: v.Name, Managed: true, ComposeFile: filename, ConfigPath: filename, ComposeFileExists: exists, State: "down", Containers: []container{}})
 	}
 	return out, nil
 }
-func composeFile(name string) (string, bool) {
+func (p *plugin) composeFile(name string) (string, bool) {
 	if !validName(name) {
 		return "", false
 	}
-	entries, e := listDir("projects/" + name)
+	entries, e := p.listDir(p.projectWorkspacePath(name))
 	if e != nil {
 		return "", false
 	}
@@ -145,7 +203,7 @@ func (p *plugin) requireProject(name string) *rpcError {
 	if !validName(name) {
 		return fail("invalid_argument", "invalid Compose project name")
 	}
-	entries, e := listDir("projects")
+	entries, e := p.listDir(p.projectsWorkspaceRoot())
 	if e != nil {
 		return e
 	}
@@ -160,7 +218,7 @@ func (p *plugin) createProject(name string) (any, *rpcError) {
 	if !validName(name) {
 		return nil, fail("invalid_argument", "invalid Compose project name")
 	}
-	entries, e := listDir("projects")
+	entries, e := p.listDir(p.projectsWorkspaceRoot())
 	if e != nil {
 		return nil, e
 	}
@@ -178,12 +236,11 @@ func (p *plugin) createProject(name string) (any, *rpcError) {
 			return nil, fail("already_exists", "an external Docker Compose project already uses this name")
 		}
 	}
-	dir := "projects/" + name
-	if e = workspace("mkdir", dir, nil, nil); e != nil {
+	if e = p.workspace("mkdir", p.projectWorkspacePath(name), nil, nil); e != nil {
 		return nil, e
 	}
-	if e = writeFile(dir+"/compose.yaml", "services: {}\n"); e != nil {
-		_ = workspace("remove", dir, map[string]any{"recursive": true}, nil)
+	if e = p.writeFile(p.projectWorkspacePath(name, "compose.yaml"), "services: {}\n"); e != nil {
+		_ = p.workspace("remove", p.projectWorkspacePath(name), map[string]any{"recursive": true}, nil)
 		return nil, e
 	}
 	return project{Name: name, Managed: true, ComposeFile: "compose.yaml", ComposeFileExists: true, State: "down", Containers: []container{}}, nil
@@ -261,7 +318,7 @@ func (p *plugin) projectAction(name, action string) (any, *rpcError) {
 	if action != "up" && action != "start" && action != "stop" && action != "down" {
 		return nil, fail("invalid_argument", "invalid Compose action")
 	}
-	file, exists := composeFile(name)
+	file, exists := p.composeFile(name)
 	if !exists {
 		return nil, fail("failed_precondition", "Compose file is missing")
 	}
@@ -283,7 +340,7 @@ func (p *plugin) projectAction(name, action string) (any, *rpcError) {
 		// Keep relative bind mounts and other project-relative paths at their
 		// original location, while the editable Compose file stays in workspace.
 		args = append(args, "--project-directory", dirs[1])
-		if entries, e := listDir("projects/" + name); e != nil {
+		if entries, e := p.listDir(p.projectWorkspacePath(name)); e != nil {
 			return nil, e
 		} else {
 			for _, entry := range entries {
@@ -298,7 +355,7 @@ func (p *plugin) projectAction(name, action string) (any, *rpcError) {
 	if action == "up" {
 		args = append(args, "-d")
 	}
-	_, e := run(args, "projects/"+name, 2<<20)
+	_, e := run(args, p.projectPath(name), 2<<20)
 	if e != nil {
 		return nil, e
 	}
@@ -339,7 +396,14 @@ func (p *plugin) activeProjectPaths(name string) ([]string, *rpcError) {
 }
 func (p *plugin) projectDirectories(name string) ([]string, *rpcError) {
 	var out runResult
-	err := callHost("process.run", map[string]any{"command": "pwd", "args": []string{"-P"}, "workspaceDirectory": "projects/" + name, "timeoutSeconds": 5, "maxOutputBytes": 4096}, &out)
+	input := map[string]any{"command": "pwd", "args": []string{"-P"}, "timeoutSeconds": 5, "maxOutputBytes": 4096}
+	projectDir := p.projectPath(name)
+	if filepath.IsAbs(filepath.FromSlash(projectDir)) {
+		input["workingDirectory"] = filepath.FromSlash(projectDir)
+	} else {
+		input["workspaceDirectory"] = projectDir
+	}
+	err := callHost("process.run", input, &out)
 	if err != nil || !out.Success || out.TimedOut {
 		return nil, fail("failed", "cannot resolve managed project directory")
 	}
@@ -348,7 +412,7 @@ func (p *plugin) projectDirectories(name string) ([]string, *rpcError) {
 		return nil, fail("invalid_data", "invalid managed project directory")
 	}
 	dirs := []string{filepath.Clean(dir)}
-	if origin, e := readFile("projects/" + name + "/.runpilot-legacy-origin"); e == nil {
+	if origin, e := p.readFile(p.projectWorkspacePath(name, ".runpilot-legacy-origin")); e == nil {
 		origin = strings.TrimSpace(origin)
 		if filepath.IsAbs(origin) {
 			dirs = append(dirs, filepath.Clean(origin))
@@ -394,14 +458,14 @@ func (p *plugin) deleteProject(name string) (any, *rpcError) {
 	if len(cs[name]) > 0 {
 		return nil, fail("failed_precondition", "project must be down before deletion")
 	}
-	if e = workspace("remove", "projects/"+name, map[string]any{"recursive": true}, nil); e != nil {
+	if e = p.workspace("remove", p.projectWorkspacePath(name), map[string]any{"recursive": true}, nil); e != nil {
 		return nil, e
 	}
 	return map[string]any{"ok": true}, nil
 }
-func kindFile(name, kind string) string {
+func (p *plugin) kindFile(name, kind string) string {
 	if kind == "compose" {
-		file, _ := composeFile(name)
+		file, _ := p.composeFile(name)
 		return file
 	}
 	if kind == "env" {
@@ -413,11 +477,11 @@ func (p *plugin) getFile(name, kind string) (any, *rpcError) {
 	if e := p.requireProject(name); e != nil {
 		return nil, e
 	}
-	filename := kindFile(name, kind)
+	filename := p.kindFile(name, kind)
 	if filename == "" {
 		return nil, fail("invalid_argument", "invalid project file")
 	}
-	content, e := readFile("projects/" + name + "/" + filename)
+	content, e := p.readFile(p.projectWorkspacePath(name, filename))
 	if e != nil {
 		if e.Code == "not_found" {
 			return map[string]any{"content": "", "file": filename}, nil
@@ -430,14 +494,14 @@ func (p *plugin) setFile(name, kind, content string) (any, *rpcError) {
 	if e := p.requireProject(name); e != nil {
 		return nil, e
 	}
-	filename := kindFile(name, kind)
+	filename := p.kindFile(name, kind)
 	if filename == "" {
 		return nil, fail("invalid_argument", "invalid project file")
 	}
 	if len(content) > 1<<20 {
 		return nil, fail("resource_limit", "Compose file exceeds 1 MiB")
 	}
-	if e := writeFile("projects/"+name+"/"+filename, content); e != nil {
+	if e := p.writeFile(p.projectWorkspacePath(name, filename), content); e != nil {
 		return nil, e
 	}
 	return map[string]any{"ok": true}, nil

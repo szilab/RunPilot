@@ -86,7 +86,7 @@ func TestCoreShellLeavesFeatureNavigationToPlugins(t *testing.T) {
 }
 
 func TestFirstPartyPluginNavigationImages(t *testing.T) {
-	for _, name := range []string{"remote-vnc", "remote-rdp", "tasks", "terminal", "web-apps", "docker"} {
+	for _, name := range []string{"remote", "tasks", "terminal", "web-apps", "docker"} {
 		pluginDir := filepath.Join("..", "..", "plugins", name, "web")
 		source, err := os.ReadFile(filepath.Join(pluginDir, "plugin.js"))
 		if err != nil {
@@ -109,12 +109,12 @@ func TestFirstPartyPluginNavigationImages(t *testing.T) {
 	}
 }
 
-func TestPluginSettingsUseSharedSectionsAndNamedNavigationIcons(t *testing.T) {
+func TestPluginSettingsUseSharedDialogsAndNamedNavigationIcons(t *testing.T) {
 	app, err := staticFS.ReadFile("static/app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`pluginNavigationIcon(entry.icon)`, `icon === "monitor"`, `viewBox="0 0 24 24" aria-hidden="true"`, `section.className = "plugin-settings-section"`, `data-plugin-id="${escapeHtml(id)}"`, `if (!installed.get(entry.extension)?.enabled) continue;`, `const card = cards.get(entry.extension);`, `card.append(details);`} {
+	for _, want := range []string{`pluginNavigationIcon(entry.icon)`, `icon === "monitor"`, `viewBox="0 0 24 24" aria-hidden="true"`, `section.className = "plugin-settings-section"`, `data-plugin-id="${escapeHtml(id)}"`, `function openPluginSettings(id)`, `dialog.className = "dialog plugin-settings-dialog"`, `const settingsEntries=[...pluginSettings.values()].filter(item=>item.extension===id);`} {
 		if !strings.Contains(string(app), want) {
 			t.Fatalf("shared plugin presentation is missing %q", want)
 		}
@@ -128,7 +128,7 @@ func TestPluginSettingsUseSharedSectionsAndNamedNavigationIcons(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`.rp-masonry { columns:var(--rp-masonry-columns,2);`, `.plugin-settings-grid { --rp-masonry-columns:2;`, `.plugin-settings-section > form`, `.plugin-settings-section { grid-column:1 / -1;`, `.plugin-settings-section .form-grid { grid-template-columns:minmax(0,1fr); }`, `.plugin-settings-grid .plugin-setting-state { white-space:normal`, `.plugin-settings-grid .plugin-setting-actions { grid-column:2; grid-row:1;`, `.plugin-settings-section .plugin-settings-actions { display:flex; align-items:center; justify-content:flex-end;`, `.plugin-settings-section .plugin-settings-actions button[type="submit"] { order:1; }`, `.plugin-settings-footer > .plugin-settings-actions { grid-column:1; grid-row:2; }`} {
+	for _, want := range []string{`.rp-masonry { columns:var(--rp-masonry-columns,2);`, `.plugin-settings-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr));`, `.plugin-settings-section > form`, `.plugin-settings-section { grid-column:1 / -1;`, `.plugin-settings-section .form-grid { grid-template-columns:minmax(0,1fr); }`, `.plugin-settings-grid .plugin-setting-version { white-space:normal`, `.plugin-settings-grid .plugin-setting-actions { grid-column:1; grid-row:2;`, `.plugin-settings-section .plugin-settings-actions { display:flex; align-items:center; justify-content:flex-end;`, `.plugin-settings-section .plugin-settings-actions button[type="submit"] { order:1; }`, `.plugin-settings-footer > .plugin-settings-actions { grid-column:1; grid-row:2; }`} {
 		if !strings.Contains(string(styles), want) {
 			t.Fatalf("shared settings layout is missing %q", want)
 		}

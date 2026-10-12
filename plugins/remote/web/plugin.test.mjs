@@ -74,7 +74,7 @@ test("session surface hides the local cursor on every Guacamole layer", () => {
 
 test("RDP navigation uses its packaged icon and targets own responsive themed cards", () => {
   const css = readFileSync(new URL("./plugin.css", import.meta.url), "utf8");
-  assert.match(frontendSource, /title: "RDP", description: "Remote desktops through your Guacamole connection.", icon: \{ src: new URL\("\.\/icon\.svg", import\.meta\.url\)\.href \}/);
+  assert.match(frontendSource, /title: "Remote", description: "Connect to RDP and VNC remote desktops.", icon: \{ src: new URL\("\.\/icon\.svg", import\.meta\.url\)\.href \}/);
   assert.match(frontendSource, /headerActions\(root\)/);
   assert.doesNotMatch(frontendSource, /<h2>RDP targets<\/h2>/);
   assert.match(frontendSource, /settingsForm.className = "plugin-settings-form rdp-plugin-settings"/);
@@ -95,17 +95,18 @@ test("RDP navigation uses its packaged icon and targets own responsive themed ca
 
 test("guacd TLS uses a labeled native checkbox styled as a sliding switch", () => {
   const css = readFileSync(new URL("./plugin.css", import.meta.url), "utf8");
+  const sharedCSS = readFileSync(new URL("../../../internal/web/static/styles.css", import.meta.url), "utf8");
   assert.match(frontendSource, /class="check span-2 rdp-tls-toggle"/);
   assert.match(frontendSource, /name="tls" type="checkbox" role="switch"/);
   assert.match(frontendSource, /<span>Use TLS for GUACD endpoint<\/span>/);
   assert.match(frontendSource, /tls: fields\.tls\.checked/);
-  assert.match(css, /input:checked::before \{[^}]*transform: translateX\(16px\)/);
-  assert.match(css, /input:focus-visible/);
-  assert.match(css, /prefers-reduced-motion: reduce/);
+  assert.match(sharedCSS, /input\[type="checkbox"\]\[role="switch"\]:checked::before \{[^}]*transform: translateX\(18px\)/);
+  assert.match(sharedCSS, /input\[type="checkbox"\]\[role="switch"\]:focus-visible/);
+  assert.doesNotMatch(css, /rdp-tls-toggle input::before/);
 });
 
 test("guacd settings keep host and port visible and group other options in advanced settings", () => {
-  assert.match(frontendSource, /name="port"[^\n]*<\/label><\/div><div class="plugin-settings-footer"><details class="rdp-settings-advanced"/);
+  assert.match(frontendSource, /name="port"[^\n]*<\/label><\/div><div class="plugin-settings-footer"><details class="rp-disclosure rdp-settings-advanced"/);
   assert.match(frontendSource, /<summary>Advanced settings<\/summary><div class="form-grid"><label>Connect timeout/);
   assert.match(frontendSource, /settingsForm\.querySelector\("\.rdp-settings-advanced"\)\?\.open/);
   assert.match(frontendSource, /<\/details><div class="plugin-settings-actions rdp-settings-actions">/);
@@ -182,8 +183,8 @@ test("Guacamole loader obtains plugin asset with no core preload and memoizes co
 });
 
 test("plugin asset URL stays under root and non-root plugin module paths", () => {
-  assert.equal(guacamoleAssetURL("https://host/plugins/remote.rdp/web/plugin.js"), "https://host/plugins/remote.rdp/web/vendor/guacamole/guacamole-common-js-1.6.0.min.js");
-  assert.equal(guacamoleAssetURL("https://host/runpilot/plugins/remote.rdp/web/plugin.js"), "https://host/runpilot/plugins/remote.rdp/web/vendor/guacamole/guacamole-common-js-1.6.0.min.js");
+  assert.equal(guacamoleAssetURL("https://host/plugins/remote/web/plugin.js"), "https://host/plugins/remote/web/vendor/guacamole/guacamole-common-js-1.6.0.min.js");
+  assert.equal(guacamoleAssetURL("https://host/runpilot/plugins/remote/web/plugin.js"), "https://host/runpilot/plugins/remote/web/vendor/guacamole/guacamole-common-js-1.6.0.min.js");
 });
 
 test("plugin package owns its frontend runtime and licensing files", () => {

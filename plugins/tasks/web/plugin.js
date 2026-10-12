@@ -175,7 +175,7 @@ export function activate(runpilot) {
       .map(([key, label]) => `<button class="button secondary small ${state.filter === key ? "active" : ""}" aria-pressed="${state.filter === key}" data-action="filter" data-filter="${key}">${label}</button>`).join("");
     const readOnly = !!state.loadError;
     page.innerHTML = `<div class="tasks-plugin">
-      <div class="section-head tasks-plugin-toolbar"><div class="task-filters" role="group" aria-label="Task type">${filters}</div>
+      <div class="section-head tasks-plugin-toolbar"><div class="task-filters rp-segmented" role="group" aria-label="Task type">${filters}</div>
         <div class="row-actions"><button class="button primary small" data-action="add" data-type="continuous" ${readOnly ? "disabled" : ""}>Add continuous</button><button class="button primary small" data-action="add" data-type="scheduled" ${readOnly ? "disabled" : ""}>Add scheduled</button></div></div>
       ${state.loadError ? `<div class="notice" role="alert"><strong>Task configuration is unavailable</strong><span>${esc(state.loadError)}</span><span>The stored configuration was left untouched. Repair or remove plugins/${PLUGIN}/data/storage.json and restart RunPilot.</span></div>` : ""}
       ${state.error ? `<div class="notice" role="alert"><span>${esc(state.error)}</span></div>` : ""}
@@ -336,7 +336,7 @@ export function activate(runpilot) {
         <label class="span-2">Executable, script, or inline command<input name="path" required placeholder="/opt/runpilot/myapp, C:\\Tools\\task.ps1, or ls -la /" value="${esc(command.path || "")}"></label>
         <label class="span-2">Arguments<input name="args" placeholder="--port 8080 --mode service" value="${esc(formatArgs(command.args))}"></label>
         ${type === "continuous" ? continuousFields : scheduledFields}
-        <details class="tasks-plugin-advanced span-2">
+        <details class="rp-disclosure tasks-plugin-advanced span-2">
           <summary>Advanced parameters</summary>
           <div class="form-grid tasks-plugin-advanced-fields">
             <label class="span-2">Description<input name="description" maxlength="2000" placeholder="Optional" value="${esc(task?.description || "")}"></label>

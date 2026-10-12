@@ -8,7 +8,8 @@ RunPilot is a lightweight Windows/Linux host-management application written in G
 
 The normal UI provides plugin management and a host monitoring Overview with
 CPU, memory, GPU when available, and filesystem usage. Tasks, Docker, Terminal,
-RDP and VNC have first-party plugins; installing and enabling them is explicit.
+Remote desktop access for RDP and VNC is provided by one first-party plugin;
+installing and enabling it is explicit.
 Legacy backup, storage and
 software backends remain available through their existing APIs and
 configuration, but their pages are hidden.
@@ -33,7 +34,7 @@ currently hidden:
 - Local and Docker-backed storage access
 - Software Management through the RunPilot-owned Scoop provider
 - Interactive Terminal tabs backed by Linux PTY or Windows ConPTY
-- Remote desktop access through the optional RDP and VNC plugins
+- Remote desktop access through the optional Remote Desktop plugin (RDP and VNC)
 - Embedded authenticated web UI
 - Plugin package/runtime support with independent backend/frontend contracts
 - GitHub-backed plugin catalog with explicit install/update/enable lifecycle
@@ -42,8 +43,8 @@ currently hidden:
 
 The target core is a small plugin host: package/runtime management, versioned
 host capabilities, one authenticated application WebSocket, the web shell,
-shared UI/theme primitives and framework settings. Tasks, Docker, Terminal, RDP and VNC
-are plugin-owned in the normal UI. Storage, Software and Backup remain
+shared UI/theme primitives and framework settings. Tasks, Docker, Terminal and
+Remote Desktop are plugin-owned in the normal UI. Storage, Software and Backup remain
 transitional core implementations. Xpra remains a temporary internal core exception
 with no user-facing navigation while its plugin capabilities are designed.
 
@@ -390,18 +391,19 @@ running RunPilot. On Linux this is the installing user's normal account; on
 Windows it is the configured service identity. It is protected by the same administrator session as process and job management. Plugin requests and session
 events use the authenticated application WebSocket.
 
-## Remote desktop plugins
+## Remote Desktop plugin
 
-RDP and VNC are separate first-party plugins. Install the desired package and
-enable it in **Settings → Plugins**, then restart RunPilot. Each plugin owns its
-target list and session page. RDP uses its packaged Guacamole client and the
-generic network stream capability; VNC packages noVNC 1.7.0 and uses the same
-authenticated RunPilot application WebSocket for binary stream traffic.
-Connection passwords are requested only when needed and remain in memory for
-the active browser session.
+The Remote Desktop plugin provides RDP and VNC from one page. Install and enable
+it in **Settings → Plugins**, then restart RunPilot. RDP uses its packaged
+Guacamole client and the generic network stream capability; VNC packages noVNC
+1.7.0 and uses the authenticated RunPilot application WebSocket for binary
+stream traffic. Existing VNC targets are imported from an installed, enabled
+legacy VNC plugin when the VNC tab is opened. Passwords are requested only when
+needed and remain in memory for the active browser session.
 
-The old combined Remote page has been removed. Xpra's legacy core runtime is
-temporarily retained without user-facing navigation. Its migration to a
+The old standalone VNC package is no longer published. After its targets have
+been imported and verified, uninstall it from **Settings → Plugins**. Xpra's
+legacy core runtime is temporarily retained without user-facing navigation. Its migration to a
 `remote.xpra` plugin is deferred while reusable process, listener, and browser
 publication capabilities are designed; Xpra is not currently available from
 the RunPilot GUI.

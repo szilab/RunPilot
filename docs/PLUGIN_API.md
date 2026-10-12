@@ -235,19 +235,22 @@ with `success: false` and the exit code; a timeout sets `timedOut: true`.
 ### Plugin workspace
 
 `workspace.*` exposes real files under
-`<dataDir>/plugins/<owner>/data/workspace/`. The host supplies `owner`. All
-paths use relative `/` separated components; absolute paths, `..`, empty
-components and backslashes are rejected. Operations cannot follow symlinks
-outside the workspace. Reads and writes are capped at 1 MiB and file writes
-replace atomically. Directories list at most 4096 entries per call.
+`<dataDir>/plugins/<owner>/data/workspace/` by default. The host supplies
+`owner`. All operation paths use relative `/` separated components; absolute
+paths, `..`, empty components and backslashes are rejected. Operations cannot
+follow symlinks outside the selected root. Reads and writes are capped at 1 MiB
+and file writes replace atomically. Directories list at most 4096 entries per
+call. An optional absolute `root` selects a user-configured directory for that
+operation; the host creates it if needed and confines the operation to that
+directory. Plugins should expose such a path only as an explicit user setting.
 
 ```text
-workspace.list   {path?}                 -> {entries:[{name,directory,symlink}]}
-workspace.stat   {path?}                 -> {path,directory,size,symlink}
-workspace.read   {path}                  -> {data}  # base64
-workspace.write  {path,data}             -> {}      # base64
-workspace.mkdir  {path}                  -> {}      # creates parents
-workspace.remove {path,recursive?}       -> {}
+workspace.list   {path?,root?}            -> {entries:[{name,directory,symlink}]}
+workspace.stat   {path?,root?}            -> {path,directory,size,symlink}
+workspace.read   {path,root?}             -> {data}  # base64
+workspace.write  {path,data,root?}        -> {}      # base64
+workspace.mkdir  {path,root?}             -> {}      # creates parents
+workspace.remove {path,recursive?,root?}  -> {}
 ```
 
 `workspace.remove` never removes the workspace root. Recursive removal treats
@@ -406,6 +409,10 @@ instead of opening their own application WebSocket. Navigation/pages, Overview
 cards and Settings sections are registered through the corresponding extension
 hosts.
 
+Plugins can register a Settings section with `runpilot.settings.register()`.
+After a settings save succeeds, call `runpilot.settings.close()` to dismiss its
+Settings overlay. Do not close the overlay on validation or save errors.
+
 Overview widget registration remains part of the compatible frontend 1.x
 surface. Widgets appear below the built-in host metrics and follow Overview
 visibility. The following lifecycle applies:
@@ -489,6 +496,7 @@ const stopObserving = view.surface.onResize(({width, height}) => {
 });
 view.surface.fitScale({width: remoteWidth, height: remoteHeight});
 await view.surface.enterFullscreen();
+view.setPageView(true); // fills the RunPilot tab without browser fullscreen
 view.surface.focus();
 view.dispose(); // idempotent; removes observers and listeners
 ```
@@ -507,7 +515,7 @@ Interactive plugins may use `runpilot.ws.openStream(plugin, streamId)` to attach
 one owned stream to that same authenticated socket:
 
 ```javascript
-const stream = await runpilot.ws.openStream("remote.rdp", streamId);
+const stream = await runpilot.ws.openStream("remote", streamId);
 stream.ondata = bytes => { /* Uint8Array */ };
 stream.onclose = event => { /* closed or disconnected */ };
 stream.send(bytes); // Uint8Array, ArrayBuffer, or typed-array view; <= 32 KiB
@@ -530,9 +538,12 @@ and radius tokens, the default style provides `--rp-field`, `--rp-glass`,
 `--rp-shadow`, `--rp-action`, `--rp-accent-soft`, and semantic
 `--rp-success`, `--rp-danger`, `--rp-warning` colors with `-soft` backgrounds.
 Use a fallback to existing tokens when supporting older hosts. The shared
-`rp-card`, `button`, `form-grid`, `notice`, `status`, and `empty` classes are
-available to core and plugins; feature layouts and dependencies remain owned
-by each plugin. Frosting is applied selectively with an opaque fallback, and
+`rp-card`, `button` variants (including `button icon`), `rp-segmented`,
+`rp-disclosure`, `form-grid`, `notice`, `status`, and `empty` classes are
+available to core and plugins. Checkbox inputs with
+`role="switch"` use the shared switch styling. Plugins should use these common
+elements and reserve their CSS for feature layouts. Frosting is applied
+selectively with an opaque fallback, and
 reduced-motion preferences are honored. The bundled Inter font and scenic background need no network. Shared primitives
 live in `styles.css`; `workspace.css` owns the application frame, dashboard and
 Settings composition. Plugins continue to own their feature layouts and assets.
@@ -552,9 +563,9 @@ First-party WASM backends use TinyGo 0.38.0 with the repository's
 `-stack-size` for JSON-heavy backends such as Tasks) and are shipped precompiled inside
 `.rpplugin` packages. TinyGo is build-time tooling only.
 
-The System package is a nonpublic reference fixture for ABI, host capability,
-WebSocket and frontend-extension tests. It uses ABI 2 and is excluded from the
-public catalog; it should not grow into the permanent host-monitoring feature.
+An internal System package fixture exercises ABI, host capability, WebSocket
+and frontend-extension tests. It uses ABI 2 and is not published or shipped as
+a user-facing plugin; host monitoring belongs to Overview.
 
 ## Browser publications and restricted streams
 

@@ -8,7 +8,7 @@ import (
 )
 
 func TestReferenceSystemWASMMatchesSourceArtifact(t *testing.T) {
-	root := filepath.Join("..", "..", "plugins", "system")
+	root := "system_fixture"
 	sourceManifest, err := loadManifest(filepath.Join(root, "plugin.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestReferenceSystemWASMMatchesSourceArtifact(t *testing.T) {
 func TestEnsureReferenceSystemUpgradesExistingABIV1Package(t *testing.T) {
 	dataDir := t.TempDir()
 	root := filepath.Join(dataDir, "plugins")
-	sourceManifest, err := loadManifest(filepath.Join("..", "..", "plugins", "system", "plugin.yaml"))
+	sourceManifest, err := loadManifest(filepath.Join("system_fixture", "plugin.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}

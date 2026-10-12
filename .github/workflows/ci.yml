@@ -17,13 +17,13 @@ jobs:
         with:
           tinygo-version: "0.38.0"
       - name: Build System ABI test fixture
-        run: go generate ./plugins/system/backend
+        run: go generate ./internal/plugins/system_fixture/backend
       - name: Build Tasks plugin backend
         run: go generate ./plugins/tasks/backend
       - name: Check plugin frontend JavaScript
         run: |
           node --input-type=module --check < plugins/tasks/web/plugin.js
-          node --test plugins/test-fixtures/tasks-web/plugin.test.mjs
+          node --test internal/plugins/testdata/tasks-web/plugin.test.mjs
       - name: Format check
         run: test -z "$(gofmt -l .)"
       - name: Test

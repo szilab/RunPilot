@@ -104,7 +104,11 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err := ctrl.SetBrowserBasePath(basePath); err != nil {
 		return nil, err
 	}
-	return &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, dockerTerminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), dockerAttachTickets: map[string]dockerAttachTicket{}, remoteTickets: map[string]remoteClientTicket{}, applicationTickets: map[string]applicationTicket{}, docker: ctrl.Docker(), sessions: map[string]authSession{}, sessionConnections: map[string]map[uint64]func(){}, browserTickets: map[string]sessionTicket{}, loginFailures: map[string]loginFailure{}, loginVerify: make(chan struct{}, 2), dataRootSwitchAllowed: true}, nil
+	server := &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, dockerTerminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), dockerAttachTickets: map[string]dockerAttachTicket{}, remoteTickets: map[string]remoteClientTicket{}, applicationTickets: map[string]applicationTicket{}, docker: ctrl.Docker(), sessions: map[string]authSession{}, sessionConnections: map[string]map[uint64]func(){}, browserTickets: map[string]sessionTicket{}, loginFailures: map[string]loginFailure{}, loginVerify: make(chan struct{}, 2), dataRootSwitchAllowed: true}
+	if err := server.loadSessions(); err != nil {
+		return nil, err
+	}
+	return server, nil
 }
 
 func (s *Server) BasePath() string { return s.basePath }
@@ -545,21 +549,26 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "csrf validation failed"})
 		return
 	}
-	s.clearSession(w, r)
+	if err := s.clearSession(w, r); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "session could not be revoked durably"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 }
 
-func (s *Server) revokeAllSessions() {
+func (s *Server) revokeAllSessions() error {
 	s.sessionMu.Lock()
 	connections := s.sessionConnections
 	s.sessions = map[string]authSession{}
 	s.sessionConnections = map[string]map[uint64]func(){}
+	err := s.revokePersistedSessionsLocked()
 	s.sessionMu.Unlock()
 	for _, set := range connections {
 		for _, closeConnection := range set {
 			closeConnection()
 		}
 	}
+	return err
 }
 
 func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
@@ -599,8 +608,15 @@ func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "account changed during request"})
 		return
 	}
-	s.revokeAllSessions()
-	s.clearSession(w, r)
+	if err := s.revokeAllSessions(); err != nil {
+		_ = s.clearSession(w, r)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "password changed but sessions could not be revoked durably"})
+		return
+	}
+	if err := s.clearSession(w, r); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "password changed but session store could not be updated"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 }
 

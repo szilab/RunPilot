@@ -10,7 +10,7 @@ being refactored into a small **plugin host and management framework**.
 The target core owns infrastructure that multiple features need: plugin
 installation/runtime, versioned host capabilities, one authenticated application
 WebSocket, the web shell, shared UI/theme primitives, and framework settings.
-Tasks, Docker, Terminal, RDP and VNC are plugin-owned in the normal UI. Storage,
+Tasks, Docker, Terminal and Remote Desktop are plugin-owned in the normal UI. Storage,
 Software and Backup remain transitional core implementations without normal
 navigation. Xpra is the temporary Remote exception described below.
 
@@ -158,8 +158,8 @@ host dashboard through the generic frontend widget registration contract. Their
 mount, refresh, and disposal follow Overview visibility. Navigation shortcut
 metadata remains accepted for compatibility; Overview has no quick-action panel.
 Existing launcher configuration
-remains separate; the visual redesign does not change its semantics. The current System package remains a
-technical fixture, not the user-facing System feature.
+remains separate; the visual redesign does not change its semantics. The
+internal System package fixture is used for tests, not as a user-facing feature.
 
 ## Plugin publication and installation
 
@@ -187,8 +187,11 @@ in [PLUGIN_API.md](PLUGIN_API.md).
 ## Migration direction
 
 Core authentication uses one local administrator account, Argon2id password
-hashes, HttpOnly server-managed browser sessions, CSRF checks and the common
-application WebSocket. Existing bearer API-token clients remain a separately
+hashes, revocable HttpOnly server-managed browser sessions, CSRF checks and the
+common application WebSocket. Browser sessions are stored as secret hashes
+under `<dataDir>/internal`, survive service restarts, and expire 24 hours after
+login; logout and password changes revoke them. Existing bearer API-token
+clients remain a separately
 controlled compatibility path. Fresh installations allow administrator setup
 for five minutes after startup; when the window expires, setup remains locked
 until the user restarts the service to open another window.
@@ -207,7 +210,7 @@ The next work is feature migration, not further expansion of the core plugin
 framework. Migrate one feature at a time and remove its legacy core/API code only
 after plugin parity and automated regression coverage.
 
-Tasks, Docker, Terminal, RDP and VNC have migrated in the normal UI. Storage is the
+Tasks, Docker, Terminal and Remote Desktop have migrated in the normal UI. Storage is the
 next active feature migration. Software, Backup and Xpra follow as separate
 plugin work; see the [backlog](../BACKLOG.md).
 
@@ -230,16 +233,17 @@ Storage still uses Docker-volume integration. They are not used by the plugin UI
 
 ### Remote status
 
-`remote.rdp` and `remote.vnc` are independently packaged, publishable ABI-v2
-plugins. The legacy RDP and VNC providers, browser transports, and combined
-Remote page have been removed from core. Xpra's legacy provider/runtime remains
+`remote` is the publishable ABI-v2 Remote Desktop plugin for RDP and VNC.
+It packages Guacamole and noVNC clients and owns targets for both protocols.
+The legacy RDP and VNC providers, browser transports, and combined Remote page
+have been removed from core. Xpra's legacy provider/runtime remains
 internal with no normal UI or navigation. Its plugin migration is deferred
 until reusable process, listener, and browser-publication lifecycle capabilities
 are designed; see the concise [backlog](../BACKLOG.md).
 
 ### Tasks status
 
-Tasks has a publishable first-party plugin (`plugins/tasks`, source version `0.1.3`,
+Tasks has a publishable first-party plugin (`plugins/tasks`, source version `0.1.4`,
 ABI v2, never auto-enabled). It covers continuous command tasks and
 scheduled command tasks, owns their definitions and semantics, and talks to the
 browser only through the common WebSocket. It runs on the generic storage,

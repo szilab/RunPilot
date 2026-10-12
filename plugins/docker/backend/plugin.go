@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/szilab/RunPilot/internal/pluginapi"
+	"path/filepath"
 	"strings"
 )
 
@@ -22,11 +23,14 @@ func hostError(err error) *rpcError {
 }
 
 type plugin struct {
-	busy     map[string]bool
-	sessions map[string]bool
+	busy           map[string]bool
+	sessions       map[string]bool
+	projectsFolder string
 }
 
-func newPlugin() *plugin { return &plugin{busy: map[string]bool{}, sessions: map[string]bool{}} }
+func newPlugin() *plugin {
+	return &plugin{busy: map[string]bool{}, sessions: map[string]bool{}, projectsFolder: "projects"}
+}
 func (p *plugin) shutdown() {
 	for id := range p.sessions {
 		_ = callHost("process.session.terminate", map[string]any{"id": id, "force": true}, nil)
@@ -63,6 +67,20 @@ func (p *plugin) handle(method string, raw json.RawMessage) (any, *rpcError) {
 	switch method {
 	case "docker.snapshot":
 		return p.snapshot()
+	case "docker.settings.get":
+		folder := p.projectsFolder
+		if !filepath.IsAbs(filepath.FromSlash(folder)) {
+			folder = ""
+		}
+		return map[string]any{"projectsFolder": folder, "usesDefault": folder == ""}, nil
+	case "docker.settings.set":
+		var q struct {
+			ProjectsFolder string `json:"projectsFolder"`
+		}
+		if e := decode(raw, &q); e != nil {
+			return nil, e
+		}
+		return p.setProjectsFolder(q.ProjectsFolder)
 	case "docker.projects.create":
 		var q struct {
 			Name string `json:"name"`
@@ -149,6 +167,25 @@ func (p *plugin) handle(method string, raw json.RawMessage) (any, *rpcError) {
 	}
 }
 
+func (p *plugin) setProjectsFolder(folder string) (any, *rpcError) {
+	if !validProjectsFolder(folder) {
+		return nil, fail("invalid_argument", "folder must be an absolute path on this system")
+	}
+	folder = filepath.Clean(folder)
+	if e := workspace("mkdir", ".", nil, nil, folder); e != nil {
+		return nil, e
+	}
+	if err := callHost("storage.set", map[string]any{"key": "settings", "value": map[string]any{"projectsFolder": folder}}, nil); err != nil {
+		return nil, hostError(err)
+	}
+	p.projectsFolder = folder
+	return map[string]any{"projectsFolder": folder}, nil
+}
+
+func validProjectsFolder(folder string) bool {
+	return len(folder) > 0 && len(folder) <= 4096 && !strings.ContainsRune(folder, 0) && filepath.IsAbs(filepath.FromSlash(folder))
+}
+
 type runResult struct {
 	ExitCode        int    `json:"exitCode"`
 	Success         bool   `json:"success"`
@@ -166,7 +203,11 @@ func run(args []string, dir string, max int, tail ...bool) (runResult, *rpcError
 		in["tailOutput"] = true
 	}
 	if dir != "" {
-		in["workspaceDirectory"] = dir
+		if filepath.IsAbs(filepath.FromSlash(dir)) {
+			in["workingDirectory"] = filepath.FromSlash(dir)
+		} else {
+			in["workspaceDirectory"] = dir
+		}
 	}
 	if err := callHost("process.run", in, &out); err != nil {
 		return out, hostError(err)
@@ -192,8 +233,11 @@ func run(args []string, dir string, max int, tail ...bool) (runResult, *rpcError
 	}
 	return out, nil
 }
-func workspace(op, path string, extra map[string]any, out any) *rpcError {
+func workspace(op, path string, extra map[string]any, out any, root ...string) *rpcError {
 	in := map[string]any{"path": path}
+	if len(root) > 0 && root[0] != "" {
+		in["root"] = root[0]
+	}
 	for k, v := range extra {
 		in[k] = v
 	}
@@ -202,11 +246,11 @@ func workspace(op, path string, extra map[string]any, out any) *rpcError {
 	}
 	return nil
 }
-func readFile(path string) (string, *rpcError) {
+func readFile(path string, root ...string) (string, *rpcError) {
 	var out struct {
 		Data string `json:"data"`
 	}
-	if e := workspace("read", path, nil, &out); e != nil {
+	if e := workspace("read", path, nil, &out, root...); e != nil {
 		return "", e
 	}
 	b, err := base64.StdEncoding.DecodeString(out.Data)
@@ -215,10 +259,10 @@ func readFile(path string) (string, *rpcError) {
 	}
 	return string(b), nil
 }
-func writeFile(path, content string) *rpcError {
-	return workspace("write", path, map[string]any{"data": base64.StdEncoding.EncodeToString([]byte(content))}, nil)
+func writeFile(path, content string, root ...string) *rpcError {
+	return workspace("write", path, map[string]any{"data": base64.StdEncoding.EncodeToString([]byte(content))}, nil, root...)
 }
-func listDir(path string) ([]struct {
+func listDir(path string, root ...string) ([]struct {
 	Name      string `json:"name"`
 	Directory bool   `json:"directory"`
 	Symlink   bool   `json:"symlink"`
@@ -230,7 +274,7 @@ func listDir(path string) ([]struct {
 			Symlink   bool   `json:"symlink"`
 		} `json:"entries"`
 	}
-	if e := workspace("list", path, nil, &out); e != nil {
+	if e := workspace("list", path, nil, &out, root...); e != nil {
 		return nil, e
 	}
 	return out.Entries, nil

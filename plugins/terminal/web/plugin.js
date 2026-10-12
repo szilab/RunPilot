@@ -128,6 +128,7 @@ export async function activate(runpilot) {
       settings.command = result.settings.command || "";
       settings.args = formatArgs(result.settings.args || []);
       ui.toast("Terminal settings saved");
+      runpilot.settings.close?.();
     } catch (error) { settings.error = error.message; }
     finally { settings.saving = false; renderSettingsForm(); }
   }

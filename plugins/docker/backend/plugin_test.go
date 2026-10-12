@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -19,10 +20,11 @@ type fakeHost struct {
 	commands      [][]string
 	sessions      []map[string]any
 	deployment    string
+	settings      map[string]any
 }
 
 func newFake() *fakeHost {
-	return &fakeHost{files: map[string]string{}, dirs: map[string]bool{"projects": true}, outputs: map[string]runResult{}, commandErrors: map[string]error{}}
+	return &fakeHost{files: map[string]string{}, dirs: map[string]bool{"projects": true}, outputs: map[string]runResult{}, commandErrors: map[string]error{}, settings: map[string]any{}}
 }
 func (f *fakeHost) set(args []string, out string) {
 	f.outputs[strings.Join(args, "\x00")] = runResult{Success: true, Stdout: out}
@@ -40,6 +42,24 @@ func assign(dst any, value any) error {
 func (f *fakeHost) call(method string, params any, result any) error {
 	raw, _ := json.Marshal(params)
 	switch method {
+	case "storage.get":
+		var q struct {
+			Key string `json:"key"`
+		}
+		_ = json.Unmarshal(raw, &q)
+		value, ok := f.settings[q.Key]
+		if !ok {
+			value = json.RawMessage("null")
+		}
+		return assign(result, value)
+	case "storage.set":
+		var q struct {
+			Key   string `json:"key"`
+			Value any    `json:"value"`
+		}
+		_ = json.Unmarshal(raw, &q)
+		f.settings[q.Key] = q.Value
+		return nil
 	case "system.identity":
 		return assign(result, map[string]string{"username": "alice", "deployment": f.deployment})
 	case "process.run":
@@ -149,6 +169,26 @@ func (f *fakeHost) call(method string, params any, result any) error {
 		return nil
 	}
 	return errors.New("unknown capability: " + method)
+}
+
+func TestProjectsFolderSettingIsValidatedAndStored(t *testing.T) {
+	f := newFake()
+	old := callHost
+	callHost = f.call
+	t.Cleanup(func() { callHost = old })
+	p := newPlugin()
+	for _, invalid := range []string{"", "projects", "../compose", `C:\\compose`} {
+		if _, err := p.setProjectsFolder(invalid); err == nil {
+			t.Fatalf("accepted invalid folder %q", invalid)
+		}
+	}
+	want := filepath.Join(t.TempDir(), "compose-projects")
+	if _, err := p.setProjectsFolder(want); err != nil {
+		t.Fatal(err)
+	}
+	if p.projectsFolder != want || f.settings["settings"] == nil || !f.dirs["."] {
+		t.Fatalf("folder setting was not applied and stored: folder=%q settings=%v dirs=%v", p.projectsFolder, f.settings, f.dirs)
+	}
 }
 func fakePlugin(t *testing.T) (*plugin, *fakeHost) {
 	t.Helper()

@@ -1,8 +1,8 @@
 apiVersion: runpilot.plugin/v1
-id: remote.rdp
-name: RDP / Guacamole
-description: RDP remote access provider
-version: 1.0.3
+id: remote
+name: Remote Desktop
+description: RDP and VNC remote desktop access
+version: 1.0.0
 requires:
   backend: ">=1.0.0 <2.0.0"
   frontend: ">=1.0.0 <2.0.0"

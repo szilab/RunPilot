@@ -14,16 +14,16 @@ func TestGitHubRecords(t *testing.T) {
 	const assetURL = "https://api.github.com/repos/example/RunPilot/releases/assets/1"
 	for _, name := range []string{"valid", "missing record", "tag mismatch", "missing package", "untrusted asset URL", "HTTP failure"} {
 		t.Run(name, func(t *testing.T) {
-			record := plugins.PublicationRecord{SchemaVersion: 1, Plugin: plugins.CatalogEntry{ID: "hello", Name: "Hello", Latest: "1.0.0", Versions: []plugins.CatalogVersion{{Version: "1.0.0", URL: "https://github.com/example/RunPilot/releases/download/plugin-hello-v1.0.0/hello-1.0.0.rpplugin", SHA256: strings.Repeat("a", 64)}}}}
-			tag := "plugin-hello-v1.0.0"
+			record := plugins.PublicationRecord{SchemaVersion: 1, Plugin: plugins.CatalogEntry{ID: "sample", Name: "Sample extension", Latest: "1.0.0", Versions: []plugins.CatalogVersion{{Version: "1.0.0", URL: "https://github.com/example/RunPilot/releases/download/plugin-sample-v1.0.0/sample-1.0.0.rpplugin", SHA256: strings.Repeat("a", 64)}}}}
+			tag := "plugin-sample-v1.0.0"
 			if name == "tag mismatch" {
-				tag = "plugin-hello-v2.0.0"
+				tag = "plugin-sample-v2.0.0"
 			}
 			url := assetURL
 			if name == "untrusted asset URL" {
 				url = "https://untrusted.example/asset"
 			}
-			assets := []map[string]string{{"name": "publication.json", "url": url}, {"name": "hello-1.0.0.rpplugin"}, {"name": "hello-1.0.0.rpplugin.sha256"}}
+			assets := []map[string]string{{"name": "publication.json", "url": url}, {"name": "sample-1.0.0.rpplugin"}, {"name": "sample-1.0.0.rpplugin.sha256"}}
 			if name == "missing record" {
 				assets = assets[1:]
 			}

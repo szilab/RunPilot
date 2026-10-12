@@ -143,7 +143,7 @@ func TestEventPublishPreservesHostFailure(t *testing.T) {
 // TestSystemSourceWASM proves the checked-in System module is produced by a
 // real compiler and uses the normal ABI/capability bridge, not a core bypass.
 func TestSystemSourceWASM(t *testing.T) {
-	dir := filepath.Join("..", "..", "plugins", "system")
+	dir := "system_fixture"
 	manifest, err := loadManifest(filepath.Join(dir, "plugin.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -224,7 +224,7 @@ func TestSystemSourceWASM(t *testing.T) {
 }
 
 func TestSystemRPPluginInstallsAndLoadsThroughNormalPath(t *testing.T) {
-	sourceRoot := filepath.Join("..", "..", "plugins", "system")
+	sourceRoot := "system_fixture"
 	assets := make(map[string]string)
 	for _, name := range []string{"plugin.yaml", "backend/plugin.wasm", "web/plugin.js", "web/plugin.css"} {
 		data, err := os.ReadFile(filepath.Join(sourceRoot, filepath.FromSlash(name)))

@@ -16,7 +16,7 @@ import (
 	"github.com/szilab/RunPilot/internal/model"
 )
 
-const remoteVNCPluginID = "remote.vnc"
+const remoteVNCPluginID = "remote"
 
 func TestRemoteVNCPluginWASMOwnsTargetsAndTCPSessionLifecycle(t *testing.T) {
 	dataDir := t.TempDir()
@@ -189,7 +189,7 @@ func pluginResponseHasError(raw json.RawMessage) bool {
 
 func copyRemoteVNCPlugin(t *testing.T, dataDir string) {
 	t.Helper()
-	source := filepath.Join("..", "..", "plugins", "remote-vnc")
+	source := filepath.Join("..", "..", "plugins", "remote")
 	destination := filepath.Join(dataDir, "plugins", remoteVNCPluginID, "releases", sourcePluginVersion(t, source))
 	err := filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {

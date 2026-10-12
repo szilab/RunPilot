@@ -53,7 +53,26 @@ func (c *Controller) workspaceRoot(owner string) (*os.Root, error) {
 	}
 	return base.OpenRoot(name)
 }
-func (c *Controller) workspaceHostPath(owner, relative string) (string, error) {
+func workspaceExternalRoot(rootPath string) (*os.Root, string, error) {
+	if len(rootPath) > 4096 || !filepath.IsAbs(rootPath) || strings.ContainsRune(rootPath, 0) {
+		return nil, "", workspaceInvalid("workspace root must be an absolute path")
+	}
+	absolute := filepath.Clean(rootPath)
+	if err := os.MkdirAll(absolute, 0700); err != nil {
+		return nil, "", err
+	}
+	root, err := os.OpenRoot(absolute)
+	return root, absolute, err
+}
+
+func (c *Controller) workspaceHostPath(owner, relative string, roots ...string) (string, error) {
+	externalRoot := ""
+	if len(roots) > 0 {
+		externalRoot = roots[0]
+	}
+	if externalRoot != "" {
+		return filepath.Join(externalRoot, filepath.FromSlash(relative)), nil
+	}
 	base, err := filepath.Abs(filepath.Join(c.dataDir, "plugins", owner, "data", "workspace"))
 	if err != nil {
 		return "", err
@@ -71,15 +90,26 @@ func workspaceParent(root *os.Root, name string) (*os.Root, string, error) {
 func (c *Controller) pluginWorkspace(owner, op string, raw json.RawMessage) (json.RawMessage, error) {
 	var in struct {
 		Path      string `json:"path"`
+		Root      string `json:"root"`
 		Data      string `json:"data"`
 		Recursive bool   `json:"recursive"`
 	}
-	if len(raw) > 2*maxWorkspaceFile || json.Unmarshal(raw, &in) != nil || !validWorkspacePath(in.Path, op == "list" || op == "stat") {
+	if len(raw) > 2*maxWorkspaceFile || json.Unmarshal(raw, &in) != nil || !validWorkspacePath(in.Path, op == "list" || op == "stat" || op == "mkdir") {
 		return nil, workspaceInvalid("invalid workspace request or path")
 	}
-	root, err := c.workspaceRoot(owner)
+	var root *os.Root
+	var err error
+	externalRoot := ""
+	if in.Root == "" {
+		root, err = c.workspaceRoot(owner)
+	} else {
+		root, externalRoot, err = workspaceExternalRoot(in.Root)
+	}
 	if err != nil {
 		return nil, err
+	}
+	if root == nil {
+		return nil, workspaceInvalid("workspace root is unavailable")
 	}
 	defer root.Close()
 	name := in.Path
@@ -155,7 +185,7 @@ func (c *Controller) pluginWorkspace(owner, op string, raw json.RawMessage) (jso
 			return nil, err
 		}
 		// A temporary file in the same directory makes replacement atomic.
-		dir, err := c.workspaceHostPath(owner, path.Dir(name))
+		dir, err := c.workspaceHostPath(owner, path.Dir(name), externalRoot)
 		if err != nil {
 			return nil, err
 		}
@@ -181,6 +211,9 @@ func (c *Controller) pluginWorkspace(owner, op string, raw json.RawMessage) (jso
 		}
 		return json.RawMessage(`{}`), nil
 	case "remove":
+		if name == "." {
+			return nil, workspaceInvalid("workspace root cannot be removed")
+		}
 		if err := workspaceRemove(root, name, in.Recursive); err != nil {
 			return nil, err
 		}

@@ -36,18 +36,16 @@
     </aside>
 
     <div class="workspace">
-      <div class="app-toolbar">
-        <div class="workspace-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input id="workspaceSearch" type="search" placeholder="Find a page or plugin…" aria-label="Find a page or plugin" aria-controls="workspaceSearchResults" aria-expanded="false" autocomplete="off"><kbd>Ctrl K</kbd><div id="workspaceSearchResults" class="workspace-search-results" hidden></div></div>
-        <div class="account-header-actions">
-          <button id="themeToggle" class="button secondary theme-toggle" type="button" aria-pressed="false" title="Switch to dark theme">☾ <span>Dark theme</span></button>
-          <details class="account-menu"><summary aria-label="Account menu"><span id="accountAvatar" class="account-avatar">A</span><span class="account-name" id="accountName">Administrator</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary><div class="account-menu-panel"><span class="eyebrow">LOCAL ADMINISTRATOR</span><strong id="accountMenuName">Administrator</strong><button class="button secondary" id="accountSettingsButton" type="button">Account settings</button><button class="button secondary" id="logoutButton" type="button">Log out</button></div></details>
-        </div>
-      </div>
       <main>
       <header>
         <div class="page-heading"><span class="eyebrow" id="pageEyebrow">YOUR WORKSPACE, AT A GLANCE</span><h1 id="pageTitle" tabindex="-1">Overview</h1><p id="pageDescription" class="page-description" hidden></p></div>
         <div class="header-actions">
-          <div id="overviewClock" class="overview-clock"></div><div id="pluginHeaderActions" class="plugin-header-actions hidden"></div>
+          <div id="overviewClock" class="overview-clock"></div>
+          <div class="account-header-actions">
+            <button id="themeToggle" class="button secondary theme-toggle" type="button" aria-pressed="false" title="Switch to dark theme">☾ <span>Dark theme</span></button>
+            <div id="pluginHeaderActions" class="plugin-header-actions hidden"></div>
+            <details class="account-menu"><summary aria-label="Account menu"><span id="accountAvatar" class="account-avatar">A</span><span class="account-name" id="accountName">Administrator</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary><div class="account-menu-panel"><span class="eyebrow">LOCAL ADMINISTRATOR</span><strong id="accountMenuName">Administrator</strong><button class="button secondary" id="accountSettingsButton" type="button">Account settings</button><button class="button secondary" id="logoutButton" type="button">Log out</button></div></details>
+          </div>
         </div>
       </header>
 
@@ -88,7 +86,6 @@
         <div id="generalSettingsPanel" role="tabpanel" aria-labelledby="generalSettingsTab">
         <section class="overview-section general-settings">
           <div class="general-settings-grid"><div class="general-settings-stack">
-            <section class="general-settings-card settings-host-card"><div class="settings-card-title"><span class="feature-icon blue" aria-hidden="true">▣</span><div><h3>Server configuration</h3><p class="meta">Your RunPilot host and its workspace.</p></div></div><div id="settingsHostIdentity" class="settings-host-identity"></div></section>
 <section class="general-settings-card">
                 <h3>Data directory</h3>
                 <form id="dataRootChangeForm" class="settings-form">
@@ -111,7 +108,7 @@
         </section>
         </div>
         <div id="pluginSettingsPanel" role="tabpanel" aria-labelledby="pluginSettingsTab" hidden>
-        <section class="overview-section"><div class="section-head"><div><h2>Plugins</h2><p class="meta">Extend your workspace. Configure each plugin in its card.</p></div><div class="header-actions"><button id="restartApplicationButton" class="button secondary" type="button">Restart RunPilot</button><button class="button secondary" type="button" onclick="refreshPluginCatalog()">Check for updates</button></div></div><div class="plugin-filter-bar"><label class="search-field"><span>Find a plugin</span><input id="pluginSearch" type="search" placeholder="Search by name or description" autocomplete="off"></label><p id="pluginSearchStatus" class="meta" role="status"></p></div><div id="pluginSettings" class="plugin-settings-grid rp-masonry"></div></section>
+        <section class="overview-section"><div class="section-head plugin-settings-actions-head"><div class="header-actions"><button id="restartApplicationButton" class="button secondary icon-btn plugin-panel-icon-action" type="button" aria-label="Restart RunPilot" title="Restart RunPilot">↻</button><button class="button secondary icon-btn plugin-panel-icon-action" type="button" aria-label="Check for updates" title="Check for updates" onclick="refreshPluginCatalog()">⟳</button></div></div><div id="pluginSettings" class="plugin-settings-grid"></div></section>
         </div>
       </section>
       </main>

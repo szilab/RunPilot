@@ -2,6 +2,7 @@ package web
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -19,7 +20,7 @@ import (
 const (
 	adminSessionCookie = "runpilot_session"
 	csrfCookie         = "runpilot_csrf"
-	adminSessionTTL    = 12 * time.Hour
+	adminSessionTTL    = 24 * time.Hour
 	argonTime          = 3
 	argonMemory        = 64 * 1024
 	argonThreads       = 2
@@ -27,8 +28,8 @@ const (
 )
 
 type authSession struct {
-	csrf    string
-	expires time.Time
+	csrfHash string
+	expires  time.Time
 }
 
 func hashPassword(password string) (string, error) {
@@ -89,6 +90,11 @@ func randomSecret(bytes int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
+func authSessionKey(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
 func (s *Server) issueSession(w http.ResponseWriter, r *http.Request) string {
 	id, err := randomSecret(32)
 	if err != nil {
@@ -98,12 +104,15 @@ func (s *Server) issueSession(w http.ResponseWriter, r *http.Request) string {
 	if err != nil {
 		return ""
 	}
+	sessionKey := authSessionKey(id)
 	s.sessionMu.Lock()
 	now := time.Now()
 	var expiredConnections []func()
+	expired := false
 	for key, value := range s.sessions {
 		if now.After(value.expires) {
 			delete(s.sessions, key)
+			expired = true
 			for _, closeConnection := range s.sessionConnections[key] {
 				expiredConnections = append(expiredConnections, closeConnection)
 			}
@@ -111,13 +120,24 @@ func (s *Server) issueSession(w http.ResponseWriter, r *http.Request) string {
 		}
 	}
 	if len(s.sessions) >= 128 {
+		if expired {
+			_ = s.saveSessionsLocked()
+		}
 		s.sessionMu.Unlock()
 		for _, closeConnection := range expiredConnections {
 			closeConnection()
 		}
 		return ""
 	}
-	s.sessions[id] = authSession{csrf: csrf, expires: now.Add(adminSessionTTL)}
+	s.sessions[sessionKey] = authSession{csrfHash: authSessionKey(csrf), expires: now.Add(adminSessionTTL)}
+	if err := s.saveSessionsLocked(); err != nil {
+		delete(s.sessions, sessionKey)
+		s.sessionMu.Unlock()
+		for _, closeConnection := range expiredConnections {
+			closeConnection()
+		}
+		return ""
+	}
 	s.sessionMu.Unlock()
 	for _, closeConnection := range expiredConnections {
 		closeConnection()
@@ -130,24 +150,28 @@ func (s *Server) issueSession(w http.ResponseWriter, r *http.Request) string {
 	w.Header().Set("Cache-Control", "no-store")
 	http.SetCookie(w, &http.Cookie{Name: adminSessionCookie, Value: id, Path: path, HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, Expires: now.Add(adminSessionTTL), MaxAge: int(adminSessionTTL.Seconds())})
 	http.SetCookie(w, &http.Cookie{Name: csrfCookie, Value: csrf, Path: path, HttpOnly: false, Secure: secure, SameSite: http.SameSiteLaxMode, Expires: now.Add(adminSessionTTL), MaxAge: int(adminSessionTTL.Seconds())})
-	return id
+	return sessionKey
 }
 
-func (s *Server) clearSession(w http.ResponseWriter, r *http.Request) {
+func (s *Server) clearSession(w http.ResponseWriter, r *http.Request) error {
+	var persistErr error
 	if cookie, err := r.Cookie(adminSessionCookie); err == nil {
+		sessionID := authSessionKey(cookie.Value)
 		s.sessionMu.Lock()
-		delete(s.sessions, cookie.Value)
-		connections := s.sessionConnections[cookie.Value]
-		delete(s.sessionConnections, cookie.Value)
+		delete(s.sessions, sessionID)
+		connections := s.sessionConnections[sessionID]
+		delete(s.sessionConnections, sessionID)
+		persistErr = s.revokePersistedSessionsLocked()
 		s.sessionMu.Unlock()
 		for _, closeConnection := range connections {
 			closeConnection()
 		}
-		s.revokeSessionTickets(cookie.Value)
+		s.revokeSessionTickets(sessionID)
 	}
 	for _, name := range []string{adminSessionCookie, csrfCookie} {
 		http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: browserpath.Escape(s.basePath), HttpOnly: name == adminSessionCookie, Secure: requestScheme(r) == "https", SameSite: http.SameSiteLaxMode, MaxAge: -1})
 	}
+	return persistErr
 }
 
 func (s *Server) revokeSessionTickets(sessionID string) {
@@ -262,7 +286,13 @@ func (s *Server) csrfValid(r *http.Request) bool {
 		return false
 	}
 	cookie, err := r.Cookie(csrfCookie)
-	return err == nil && cookie.Value != "" && cookie.Value == session.csrf && r.Header.Get("X-RunPilot-CSRF") == session.csrf
+	if err != nil || cookie.Value == "" {
+		return false
+	}
+	header := r.Header.Get("X-RunPilot-CSRF")
+	csrfHash := authSessionKey(cookie.Value)
+	headerHash := authSessionKey(header)
+	return subtle.ConstantTimeCompare([]byte(csrfHash), []byte(session.csrfHash)) == 1 && subtle.ConstantTimeCompare([]byte(headerHash), []byte(session.csrfHash)) == 1
 }
 
 func (s *Server) session(r *http.Request) (string, authSession, bool) {
@@ -271,20 +301,26 @@ func (s *Server) session(r *http.Request) (string, authSession, bool) {
 		return "", authSession{}, false
 	}
 	s.sessionMu.Lock()
-	value, ok := s.sessions[cookie.Value]
-	if !ok || time.Now().After(value.expires) {
-		delete(s.sessions, cookie.Value)
-		connections := s.sessionConnections[cookie.Value]
-		delete(s.sessionConnections, cookie.Value)
+	sessionID := authSessionKey(cookie.Value)
+	value, ok := s.sessions[sessionID]
+	if !ok {
+		s.sessionMu.Unlock()
+		return "", authSession{}, false
+	}
+	if time.Now().After(value.expires) {
+		delete(s.sessions, sessionID)
+		connections := s.sessionConnections[sessionID]
+		delete(s.sessionConnections, sessionID)
+		_ = s.saveSessionsLocked()
 		s.sessionMu.Unlock()
 		for _, closeConnection := range connections {
 			closeConnection()
 		}
-		s.revokeSessionTickets(cookie.Value)
+		s.revokeSessionTickets(sessionID)
 		return "", authSession{}, false
 	}
 	s.sessionMu.Unlock()
-	return cookie.Value, value, true
+	return sessionID, value, true
 }
 
 func (s *Server) loginAllowed(key string) bool {

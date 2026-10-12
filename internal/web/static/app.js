@@ -10,8 +10,7 @@ let overview = null;
 let systemInfo = null;
 let pluginStatuses = [], pluginBusy = new Set();
 let lastPluginSnapshot = "";
-const expandedPluginSettings = new Set();
-let pluginDiscoveryErrors = [], pluginRestartRequired = false;
+let pluginDiscoveryErrors = [];
 let pluginCatalog = [], pluginCatalogError = "", pluginCatalogLoaded = false, pluginCatalogLoading = false;
 let pluginExtensions = new Map();
 const pluginNavigation = new Map(), pluginSettings = new Map();
@@ -87,11 +86,12 @@ function createInteractiveSessionView({container,title="Interactive session",onB
   const surfaceElement=document.createElement("div");surfaceElement.className="rp-interactive-surface";surfaceElement.tabIndex=0;surfaceElement.setAttribute("role","application");surfaceElement.dataset.rpInteractive="";surfaceElement.setAttribute("aria-label",`${title} interactive surface`);
   const loading=document.createElement("div");loading.className="rp-interactive-loading";loading.setAttribute("role","status");loading.textContent="Connecting…";
   const error=document.createElement("div");error.className="rp-interactive-error";error.setAttribute("role","alert");error.hidden=true;
-  surfaceElement.append(loading,error);element.append(toolbar,surfaceElement);container.replaceChildren(element);
+  surfaceElement.append(loading,error);element.append(toolbar,surfaceElement);
+  const placeholder=document.createComment("interactive session position");container.replaceChildren(placeholder,element);
   let disposed=false,frame=0,resizeTimer=0,lastSize=null,fullscreenState=null;
   const resizeListeners=new Set(),fullscreenListeners=new Set();
   const measure=()=>({width:Math.max(0,Math.round(surfaceElement.clientWidth)),height:Math.max(0,Math.round(surfaceElement.clientHeight))});
-  const fitViewport=()=>{if(disposed)return;if(isFullscreen()){element.style.height="";return;}const main=element.closest("main"),bottom=main?parseFloat(getComputedStyle(main).paddingBottom)||0:0,height=Math.max(300,Math.floor(window.innerHeight-element.getBoundingClientRect().top-bottom));if(element.style.height!==`${height}px`)element.style.height=`${height}px`;};
+  const fitViewport=()=>{if(disposed)return;if(isFullscreen()||element.classList.contains("rp-page-view")){element.style.height="";return;}const main=element.closest("main"),bottom=main?parseFloat(getComputedStyle(main).paddingBottom)||0:0,height=Math.max(300,Math.floor(window.innerHeight-element.getBoundingClientRect().top-bottom));if(element.style.height!==`${height}px`)element.style.height=`${height}px`;};
   const reportSize=()=>{frame=0;if(disposed)return;const size=measure();if(size.width<1||size.height<1)return;if(lastSize&&lastSize.width===size.width&&lastSize.height===size.height)return;lastSize=size;for(const listener of resizeListeners)listener({...size});};
   const scheduleSize=()=>{if(disposed)return;if(frame)cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{frame=0;fitViewport();clearTimeout(resizeTimer);resizeTimer=setTimeout(reportSize,60);});};
   const isFullscreen=()=>document.fullscreenElement===element||element.contains(document.fullscreenElement);
@@ -116,7 +116,8 @@ function createInteractiveSessionView({container,title="Interactive session",onB
     focus(){surfaceElement.focus({preventScroll:true});},
     dispose(){view.dispose();},
   };
-  const view={element,surface,actions,setStatus,setLoading,setError,dispose(){if(disposed)return;disposed=true;if(frame)cancelAnimationFrame(frame);clearTimeout(resizeTimer);resizeObserver?.disconnect();window.removeEventListener("resize",scheduleSize);document.removeEventListener("fullscreenchange",reportFullscreen);resizeListeners.clear();fullscreenListeners.clear();element.remove();}};
+  const setPageView=active=>{const enabled=!!active;element.classList.toggle("rp-page-view",enabled);document.body.classList.toggle("rp-interactive-page-view",enabled);if(enabled&&element.parentElement!==document.body)document.body.append(element);else if(!enabled&&placeholder.parentNode)placeholder.parentNode.insertBefore(element,placeholder.nextSibling);scheduleSize();};
+  const view={element,surface,actions,setStatus,setLoading,setError,setPageView,dispose(){if(disposed)return;disposed=true;document.body.classList.remove("rp-interactive-page-view");if(frame)cancelAnimationFrame(frame);clearTimeout(resizeTimer);resizeObserver?.disconnect();window.removeEventListener("resize",scheduleSize);document.removeEventListener("fullscreenchange",reportFullscreen);resizeListeners.clear();fullscreenListeners.clear();element.remove();placeholder.remove();}};
   scheduleSize();return view;
 }
 function pluginUI() {
@@ -212,28 +213,16 @@ for (const tab of document.querySelectorAll(".settings-tab")) {
     selectSettingsTab(id, true);
   });
 }
-function filterPluginCards() {
-  const search = $("pluginSearch").value.trim().toLocaleLowerCase();
-  const cards = [...$("pluginSettings").querySelectorAll(".plugin-setting-card")];
-  let shown = 0;
-  for (const card of cards) {
-    const matches = `${card.dataset.pluginId} ${card.querySelector(".plugin-setting-info").textContent}`.toLocaleLowerCase().includes(search);
-    card.hidden = !matches;
-    if (matches) shown++;
-  }
-  $("pluginSearchStatus").textContent = search && !shown ? "No matching plugins. Try another name." : `${shown} plugin${shown === 1 ? "" : "s"}${search ? " found" : ""}`;
-}
-$("pluginSearch").addEventListener("input", filterPluginCards);
-
 function updatePageHeading() {
   document.body.dataset.currentPage = currentPage;
   const entry = pluginNavigation.get(currentPage);
   const now = new Date(), hour = now.getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   $("pageTitle").textContent = currentPage === "overview" ? `${greeting}${systemInfo?.username ? `, ${systemInfo.username}` : ""}` : (pageMeta[currentPage]?.[0] || entry?.title || currentPage);
-  $("pageEyebrow").textContent = currentPage === "overview" ? "YOUR WORKSPACE, AT A GLANCE" : "RUNPILOT WORKSPACE";
-  $("pageDescription").hidden = currentPage === "overview";
-  $("pageDescription").textContent = currentPage === "overview" ? "" : entry?.description || (currentPage === "settings" ? "Manage your server and plugins." : "Manage this workspace.");
+  $("pageEyebrow").textContent = currentPage === "overview" ? "YOUR WORKSPACE, AT A GLANCE" : "";
+  $("pageEyebrow").hidden = currentPage !== "overview";
+  $("pageDescription").hidden = currentPage === "overview" || currentPage === "settings";
+  $("pageDescription").textContent = currentPage === "overview" || currentPage === "settings" ? "" : entry?.description || "Manage this workspace.";
   $("overviewClock").hidden = currentPage !== "overview";
   $("overviewClock").innerHTML = `<span>${escapeHtml(now.toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric",year:"numeric"}))}</span><strong>${escapeHtml(now.toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"}))}</strong>`;
 }
@@ -241,7 +230,6 @@ function updatePageHeading() {
 function updateHostSummary(data) {
   const host=data?.host||{};
   const metrics=RunPilotDashboard.readings(data), {size,uptime}=RunPilotDashboard;
-  $("settingsHostIdentity").innerHTML=`<img src="host-device.svg" alt=""><div><strong>${escapeHtml(host.hostname||"Unknown host")}</strong><p>${escapeHtml([host.os,host.architecture].filter(Boolean).join(" · "))} · Uptime ${escapeHtml(uptime(data.hostUptimeSeconds))}</p></div>`;
   const info=[["Operating system",host.os||"Unavailable"],["Architecture",host.architecture||"Unavailable"],["Processor",host.cpuModel||"Unavailable"],["Logical CPUs",host.cpuCount||"Unavailable"],["Total memory",metrics.totalMemory?size(metrics.totalMemory):"Unavailable"],["Host uptime",uptime(data.hostUptimeSeconds)],["RunPilot",systemInfo?.version||"Unavailable"]];
   $("settingsHostFacts").innerHTML=info.map(([name,value])=>`<div><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
   if (currentPage === "overview") updatePageHeading();
@@ -251,29 +239,8 @@ async function ensureHostSummary() {
   try{updateHostSummary(await api("api/v1/dashboard/status"));}catch(error){$("settingsHostFacts").textContent=`Host information unavailable: ${error.message}`;}
 }
 
-function workspaceDestinations() {
-  return [{id:"overview",title:"Overview",description:"Host resources and summaries",icon:"monitor"},{id:"settings",title:"Settings",description:"Host configuration and plugins",icon:"monitor"},{id:"plugins",title:"Plugins",description:"Browse and manage plugin packages",icon:"monitor"},...[...pluginNavigation.values()].map(entry=>({id:entry.id,title:entry.title,description:entry.description||"Plugin page",icon:entry.icon}))];
-}
-function renderWorkspaceSearch() {
-  const field=$("workspaceSearch"),root=$("workspaceSearchResults"),query=field.value.trim().toLocaleLowerCase();
-  const entries=workspaceDestinations().filter(entry=>`${entry.title} ${entry.description}`.toLocaleLowerCase().includes(query));
-  root.replaceChildren();
-  for(const entry of entries){const button=document.createElement("button");button.type="button";button.innerHTML=`${pluginNavigationIcon(entry.icon)}<span><strong>${escapeHtml(entry.title)}</strong><small>${escapeHtml(entry.description)}</small></span>`;button.onclick=()=>{root.hidden=true;field.value="";field.setAttribute("aria-expanded","false");if(entry.id==="plugins"){setPage("settings");selectSettingsTab("pluginSettingsTab",true);}else setPage(entry.id);};root.append(button);}
-  if(!entries.length){const message=document.createElement("p");message.textContent="No matching pages or plugins.";root.append(message);}
-  root.hidden=false;field.setAttribute("aria-expanded","true");
-}
-$("workspaceSearch").addEventListener("input",renderWorkspaceSearch);
-$("workspaceSearch").addEventListener("focus",renderWorkspaceSearch);
-$("workspaceSearch").addEventListener("keydown",event=>{
-  if(event.key==="ArrowDown"||event.key==="Enter"){const first=$("workspaceSearchResults").querySelector("button");if(first){event.preventDefault();first.focus();if(event.key==="Enter")first.click();}}
-});
-$("workspaceSearchResults").addEventListener("keydown",event=>{
-  if(!["ArrowDown","ArrowUp","Escape"].includes(event.key))return;event.preventDefault();
-  if(event.key==="Escape"){$("workspaceSearchResults").hidden=true;$("workspaceSearch").setAttribute("aria-expanded","false");$("workspaceSearch").focus();$("workspaceSearchResults").hidden=true;return;}
-  const buttons=[...$("workspaceSearchResults").querySelectorAll("button")],index=buttons.indexOf(document.activeElement);buttons[(index+(event.key==="ArrowDown"?1:-1)+buttons.length)%buttons.length]?.focus();
-});
-document.addEventListener("keydown",event=>{if(event.target.closest?.("[data-rp-interactive], [role=application]"))return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="k"){event.preventDefault();$("workspaceSearch").focus();renderWorkspaceSearch();}else if(event.key==="Escape"){$("workspaceSearchResults").hidden=true;$("workspaceSearch").setAttribute("aria-expanded","false");document.querySelector(".account-menu").open=false;}});
-document.addEventListener("pointerdown",event=>{if(!event.target.closest(".workspace-search")){$("workspaceSearchResults").hidden=true;$("workspaceSearch").setAttribute("aria-expanded","false");}if(!event.target.closest(".account-menu"))document.querySelector(".account-menu").open=false;});
+document.addEventListener("keydown",event=>{if(event.target.closest?.("[data-rp-interactive], [role=application]"))return;if(event.key==="Escape")document.querySelector(".account-menu").open=false;});
+document.addEventListener("pointerdown",event=>{if(!event.target.closest(".account-menu"))document.querySelector(".account-menu").open=false;});
 
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
@@ -420,7 +387,7 @@ async function refresh() {
       currentPage === "settings" ? api("api/v1/plugins") : Promise.resolve(null),
       api("api/v1/plugins/runtime")
     ]);
-    if (pluginSnapshot && JSON.stringify(pluginSnapshot) !== lastPluginSnapshot) { lastPluginSnapshot = JSON.stringify(pluginSnapshot); pluginStatuses = pluginSnapshot.plugins || []; pluginDiscoveryErrors=pluginSnapshot.discoveryErrors || []; pluginRestartRequired=!!pluginSnapshot.restartRequired; renderPluginSettings(); if (!pluginCatalogLoaded && !pluginCatalogLoading) refreshPluginCatalog(); }
+    if (pluginSnapshot && JSON.stringify(pluginSnapshot) !== lastPluginSnapshot) { lastPluginSnapshot = JSON.stringify(pluginSnapshot); pluginStatuses = pluginSnapshot.plugins || []; pluginDiscoveryErrors=pluginSnapshot.discoveryErrors || []; renderPluginSettings(); if (!pluginCatalogLoaded && !pluginCatalogLoading) refreshPluginCatalog(); }
     if (frontendSnapshot) await loadPluginExtensions(frontendSnapshot);
     setConnected(true);
   } catch (e) {
@@ -466,7 +433,7 @@ async function loadPluginExtensions(extensions) {
       ui: pluginUI(),
       navigation: Object.freeze({ register: entry => registerPluginNavigation(extension.id, entry), open: page => setPage(page) }),
       overview: Object.freeze({ register: entry => registerPluginOverview(extension.id, entry), refresh: () => overviewWidgets.refresh(), render: () => overviewWidgets.refresh() }),
-      settings: Object.freeze({ register: entry => registerPluginSettings(extension.id, entry) }),
+      settings: Object.freeze({ register: entry => registerPluginSettings(extension.id, entry), close: () => { const dialog = document.querySelector(".plugin-settings-dialog[open]"); if (dialog?.dataset.pluginId === extension.id) dialog.close(); } }),
       ws: pluginWS,
     });
     pluginExtensions.set(extension.id, { module, root: await module.activate(runpilot) });
@@ -478,50 +445,66 @@ function renderPluginSettings() {
   const installed = new Map(pluginStatuses.map(status => [status.manifest.id, status]));
   const catalog = new Map(pluginCatalog.map(entry => [entry.id, entry]));
   const ids = [...new Set([...installed.keys(), ...catalog.keys()])].sort();
-  root.innerHTML = `${pluginRestartRequired ? '<p class="meta">Restart required to apply package and activation changes.</p>' : ""}${pluginDiscoveryErrors.map(error=>`<p class="meta">${escapeHtml(error)}</p>`).join("")}<p class="meta">${escapeHtml(pluginCatalogLoading ? "Checking catalog…" : pluginCatalogError || "Install packages, then enable them. Activation changes require a restart.")}</p>` + ids.map(id => {
+  root.innerHTML = `${pluginDiscoveryErrors.map(error=>`<p class="meta">${escapeHtml(error)}</p>`).join("")}${pluginCatalogLoading || pluginCatalogError ? `<p class="meta">${escapeHtml(pluginCatalogLoading ? "Checking catalog…" : pluginCatalogError)}</p>` : ""}` + ids.map(id => {
     const status=installed.get(id), entry=catalog.get(id), manifest=status?.manifest || entry || {}, busy=pluginBusy.has(id);
     const enabled=!!status?.enabled, compatible=entry?.latestCompatible;
     const update=!!status?.source && compatible && entry?.updateAvailable;
-    const state=status ? (status.message ? `${status.state === "incompatible" ? "Incompatible" : "Failed"}: ${status.message}` : `Installed${status.loaded ? "" : ` ${manifest.version || ""}`} · ${enabled ? "Enabled" : "Disabled"}${status.loaded ? ` · Loaded ${status.loadedVersion || ""}` : ""}`) : compatible ? `Available ${compatible}` : "Incompatible";
-    const stateClass=status ? (status.message ? status.state === "incompatible" ? "is-incompatible" : "is-failed" : enabled ? "is-enabled" : "is-disabled") : compatible ? "is-available" : "is-incompatible";
+    const version=status ? manifest.version : compatible || entry?.latestVersion || entry?.version;
+    const stateLabel=status ? `Installed${status.message ? `: ${status.message}` : ""}` : "Not installed";
+    const settingsEntries=[...pluginSettings.values()].filter(item=>item.extension===id);
     const buttons = status
-      ? `<button class="plugin-enable-switch" role="switch" aria-checked="${enabled}" aria-label="${enabled ? "Disable" : "Enable"} ${escapeHtml(manifest.name || id)}" type="button" ${busy || (!enabled && status.state === "incompatible") ? "disabled" : ""} onclick="togglePlugin('${escapeHtml(id)}',${!enabled})"><span class="switch-track" aria-hidden="true"></span><span>${enabled ? "Enabled" : "Disabled"}</span></button>${update ? `<button class="button primary small" type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible)}')">Update to ${escapeHtml(compatible)}</button>` : ""}<button class="button danger small" type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','uninstall')">Uninstall</button>`
+      ? `<button class="plugin-enable-switch" role="switch" aria-checked="${enabled}" aria-label="${enabled ? "Disable" : "Enable"} ${escapeHtml(manifest.name || id)}" type="button" ${busy || (!enabled && status.state === "incompatible") ? "disabled" : ""} onclick="togglePlugin('${escapeHtml(id)}',${!enabled})"><span class="switch-track" aria-hidden="true"></span><span>${enabled ? "Enabled" : "Disabled"}</span></button>${update ? `<button class="button primary small" type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible)}')">Update to ${escapeHtml(compatible)}</button>` : ""}${settingsEntries.length ? `<button class="button secondary small" type="button" onclick="openPluginSettings('${escapeHtml(id)}')">Settings</button>` : ""}<button class="button danger small" type="button" ${busy ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','uninstall')">Uninstall</button>`
       : `<button class="button primary small" type="button" ${busy || !compatible ? "disabled" : ""} onclick="managePlugin('${escapeHtml(id)}','install','${escapeHtml(compatible || "")}')">Install${compatible ? " " + escapeHtml(compatible) : ""}</button>`;
     const nav = [...pluginNavigation.values()].find(item => item.extension === id);
     const glyph = nav ? pluginNavigationIcon(nav.icon) : RunPilotDashboard.icon("plugins");
-    return `<article class="plugin-setting-card" data-plugin-id="${escapeHtml(id)}"><div class="plugin-setting-info"><div class="plugin-setting-heading"><span class="feature-icon">${glyph}</span><div><strong>${escapeHtml(manifest.name || id)}</strong><div class="meta">${escapeHtml(manifest.description || "")}</div></div></div></div><div class="plugin-setting-actions">${buttons}</div><span class="status plugin-setting-state ${stateClass}"${entry?.incompatibility ? ` title="${escapeHtml(entry.incompatibility)}"` : ""}>${escapeHtml(busy ? "Updating…" : state)}${update ? " · Update available" : ""}${status?.restartRequired ? " · Restart required" : ""}</span></article>`;
+    return `<article class="plugin-setting-card" data-plugin-id="${escapeHtml(id)}"><div class="plugin-setting-heading"><span class="feature-icon">${glyph}</span><div class="plugin-setting-copy"><div class="plugin-setting-title-row"><strong title="${escapeHtml(manifest.name || id)}">${escapeHtml(manifest.name || id)}</strong><span class="status plugin-setting-version ${status ? "is-installed" : "is-not-installed"}" title="${escapeHtml(stateLabel)}${entry?.incompatibility ? ` · ${escapeHtml(entry.incompatibility)}` : ""}" aria-label="${escapeHtml(stateLabel)}">${version ? `v${escapeHtml(version)}` : "—"}</span></div><div class="meta plugin-setting-description">${escapeHtml(manifest.description || "")}</div></div></div><div class="plugin-setting-actions">${buttons}</div></article>`;
   }).join("");
-  filterPluginCards();
-  const cards = new Map([...root.querySelectorAll(".plugin-setting-card")].map(card => [card.dataset.pluginId, card]));
-  for (const entry of pluginSettings.values()) {
-    if (!installed.get(entry.extension)?.enabled) continue;
-    const card = cards.get(entry.extension);
-    if (!card) continue;
-    try {
-      const content = entry.render();
-      if (!content) continue;
-      const section = document.createElement("section");
-      section.className = "plugin-settings-section";
-      section.append(content);
-      const details = document.createElement("details"); details.className = "plugin-config-panel";
-      const summary = document.createElement("summary"); summary.textContent = "Configure plugin";
-      details.open = expandedPluginSettings.has(entry.extension);
-      details.append(summary); details.append(section); card.append(details);
-      details.addEventListener("toggle", () => { if (!details.isConnected) return; if (details.open) expandedPluginSettings.add(entry.extension); else expandedPluginSettings.delete(entry.extension); });
-    } catch(error) { console.error(`plugin settings ${entry.id}`,error); }
-  }
 }
-async function requestRunPilotRestart() {
-  if (!await confirmAction({title:"Restart RunPilot?",message:"Interactive sessions will disconnect. This page will reconnect when RunPilot is ready.",confirmLabel:"Restart"})) return;
-  const button=$("restartApplicationButton"); button.disabled=true;
+function openPluginSettings(id) {
+  const entries = [...pluginSettings.values()].filter(entry => entry.extension === id);
+  if (!entries.length) return;
+  const card = [...document.querySelectorAll(".plugin-setting-card")].find(item => item.dataset.pluginId === id);
+  const title = card?.querySelector(".plugin-setting-heading strong")?.textContent || id;
+  const dialog = document.createElement("dialog"); dialog.className = "dialog plugin-settings-dialog";
+  dialog.dataset.pluginId = id;
+  dialog.innerHTML = `<div class="dialog-head"><h2>${escapeHtml(title)} settings</h2><button class="icon-btn" type="button" data-close aria-label="Close">×</button></div><div class="plugin-settings-dialog-body"></div>`;
+  const body = dialog.querySelector(".plugin-settings-dialog-body");
+  for (const entry of entries) {
+    try { const content = entry.render(); if (content) { const section = document.createElement("section"); section.className = "plugin-settings-section"; section.append(content); body.append(section); } }
+    catch(error) { console.error(`plugin settings ${entry.id}`,error); }
+  }
+  dialog.querySelector("[data-close]").addEventListener("click", () => dialog.close());
+  dialog.addEventListener("close", () => dialog.remove(), {once:true});
+  dialog.addEventListener("click", event => { if (event.target === dialog) dialog.close(); });
+  document.body.append(dialog); dialog.showModal();
+  dialog.querySelector("input:not(:disabled), select:not(:disabled), button:not(:disabled)")?.focus();
+}
+async function startRunPilotRestart(button) {
+  button.disabled=true;
   try { await api("api/v1/restart",{method:"POST"}); toast("RunPilot is restarting. This page will reconnect shortly."); }
   catch(error) { toastError(error.message); button.disabled=false; }
 }
+async function requestRunPilotRestart() {
+  if (!await confirmAction({title:"Restart RunPilot?",message:"Interactive sessions will disconnect. This page will reconnect when RunPilot is ready.",confirmLabel:"Restart"})) return;
+  await startRunPilotRestart($("restartApplicationButton"));
+}
+function showPluginRestartDialog(id, enabled) {
+  const plugin=pluginStatuses.find(item=>item.manifest.id===id), name=plugin?.manifest.name || id;
+  const dialog=document.createElement("dialog"); dialog.className="dialog plugin-restart-dialog";
+  dialog.innerHTML=`<div class="dialog-head"><div><h2>Restart required</h2><p>${escapeHtml(name)} was ${enabled?"enabled":"disabled"}. Restart RunPilot to apply this change.</p></div><button class="icon-btn" type="button" data-close aria-label="Close">×</button></div><div class="dialog-actions"><button class="button secondary" type="button" data-close>Later</button><button class="button primary" type="button" data-restart>Restart now</button></div>`;
+  dialog.querySelectorAll("[data-close]").forEach(button=>button.addEventListener("click",()=>dialog.close()));
+  dialog.querySelector("[data-restart]").addEventListener("click",async event=>{const button=event.currentTarget;await startRunPilotRestart(button);if(button.disabled)dialog.close();});
+  dialog.addEventListener("close",()=>dialog.remove(),{once:true});
+  dialog.addEventListener("click",event=>{if(event.target===dialog)dialog.close();});
+  document.body.append(dialog);dialog.showModal();dialog.querySelector("[data-close]").focus();
+}
 async function togglePlugin(id, enabled) {
   if (pluginBusy.has(id)) return; pluginBusy.add(id); renderPluginSettings();
-  try { const response=await api(`api/v1/plugins/${encodeURIComponent(id)}`,{method:"PUT",body:JSON.stringify({enabled})}); pluginStatuses=response.plugins||pluginStatuses; pluginRestartRequired=!!response.restartRequired; }
+  let changed=false, restartRequired=false;
+  try { const response=await api(`api/v1/plugins/${encodeURIComponent(id)}`,{method:"PUT",body:JSON.stringify({enabled})}); pluginStatuses=response.plugins||pluginStatuses; restartRequired=!!response.restartRequired; changed=true; }
   catch(error) { toastError(error.message); }
   finally { pluginBusy.delete(id); renderPluginSettings(); }
+  if(changed&&restartRequired)showPluginRestartDialog(id,enabled);
 }
 
 async function refreshPluginCatalog() {
@@ -537,7 +520,7 @@ async function managePlugin(id, action, version="") {
   pluginBusy.add(id); renderPluginSettings();
   try {
     const response=await api(`api/v1/plugins/${encodeURIComponent(id)}${action === "install" ? "/install" : ""}`, {method:action === "install" ? "POST" : "DELETE", ...(action === "install" ? {body:JSON.stringify({version})} : {})});
-    pluginStatuses=response.plugins || []; pluginRestartRequired=!!response.restartRequired; toast("Package changed. Restart required."); await refreshPluginCatalog();
+    pluginStatuses=response.plugins || []; toast("Package changed."); await refreshPluginCatalog();
   } catch(error) { toastError(error.message); }
   finally { pluginBusy.delete(id); renderPluginSettings(); }
 }

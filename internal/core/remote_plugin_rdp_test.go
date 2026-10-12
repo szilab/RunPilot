@@ -18,7 +18,7 @@ import (
 	"github.com/szilab/RunPilot/internal/model"
 )
 
-const remoteRDPPluginID = "remote.rdp"
+const remoteRDPPluginID = "remote"
 
 type testGuacInstruction struct {
 	Opcode string
@@ -237,7 +237,7 @@ func TestRemoteRDPPluginWASMNegotiatesThroughController(t *testing.T) {
 
 func copyRemoteRDPPlugin(t *testing.T, dataDir string) {
 	t.Helper()
-	source := filepath.Join("..", "..", "plugins", "remote-rdp")
+	source := filepath.Join("..", "..", "plugins", "remote")
 	destination := filepath.Join(dataDir, "plugins", remoteRDPPluginID, "releases", sourcePluginVersion(t, source))
 	for _, name := range []string{"plugin.yaml", "backend/plugin.wasm", "web/plugin.js", "web/plugin.css", "web/icon.svg"} {
 		data, err := os.ReadFile(filepath.Join(source, filepath.FromSlash(name)))

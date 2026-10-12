@@ -14,7 +14,7 @@
   as plugin/widget contributions to Overview; do not expand the System fixture.
 
 - **Migrate Xpra to `remote.xpra`.** Xpra intentionally remains in legacy core,
-  while its UI is intentionally not exposed after the RDP/VNC plugin migration.
+  while its UI is intentionally not exposed after the Remote Desktop plugin migration.
   The migration is deferred because Xpra owns subprocess/display lifecycle and
   a local HTTP/WebSocket HTML5 endpoint with reverse proxying. Before
   implementation, decide on reusable host capabilities for process, listener,

@@ -2,14 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const source = readFileSync(new URL("./plugin.js", import.meta.url), "utf8");
+const source = readFileSync(new URL("./vnc.js", import.meta.url), "utf8");
+const host = readFileSync(new URL("./plugin.js", import.meta.url), "utf8");
 const styles = readFileSync(new URL("./plugin.css", import.meta.url), "utf8");
 
-test("VNC Add target uses the shared application header action slot", () => {
-  assert.match(source, /id: "remote-vnc", title: "VNC"[\s\S]*?headerActions\(root\)/);
-  assert.match(source, /button\.textContent = "Add target"/);
-  assert.doesNotMatch(source, /Connect to saved VNC desktops\./);
-  assert.doesNotMatch(source, /header\.innerHTML = `[^`]*<h1>VNC<\/h1>/);
+test("VNC targets are a protocol view within the combined Remote navigation", () => {
+  assert.match(host, /id: "remote", title: "Remote", description: "Connect to RDP and VNC remote desktops\./);
+  assert.match(host, /data-protocol="vnc"/);
+  assert.match(host, /protocolTab === "vnc" \? vncFeature\.addTarget\(\)/);
+  assert.match(source, /export function createVNCFeature/);
+  assert.doesNotMatch(source, /navigation\.register/);
 });
 
 test("VNC target cards use the same responsive card structure as RDP", () => {

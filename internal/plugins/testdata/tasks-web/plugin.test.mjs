@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 // Load the plugin as a data: module so this works on any Node version
 // regardless of package "type" detection.
-const sourcePath = fileURLToPath(new URL("../../tasks/web/plugin.js", import.meta.url));
+const sourcePath = fileURLToPath(new URL("../../../../plugins/tasks/web/plugin.js", import.meta.url));
 const sourceURL = pathToFileURL(sourcePath).href;
 const source = fs.readFileSync(sourcePath, "utf8").replaceAll("import.meta.url", JSON.stringify(sourceURL));
 const plugin = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);

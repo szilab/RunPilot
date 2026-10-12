@@ -1,8 +1,6 @@
 import RFB from "./vendor/novnc/core/rfb.js";
-import { provideVNCCredentials } from "./credentials.js";
-import { createVNCChannelAdapter } from "./raw-channel.js";
-
-const PLUGIN = "remote.vnc";
+import { provideVNCCredentials } from "./vnc-credentials.js";
+import { createVNCChannelAdapter } from "./vnc-channel.js";
 const escapeHTML = value => String(value ?? "").replace(/[&<>"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[character]));
 
 function field(label, name, value, type = "text", attrs = "") {
@@ -33,14 +31,13 @@ function clearCredentials(state) {
   state.clearCredentials = null;
 }
 
-export async function activate(runpilot) {
-  const call = async (method, params = {}) => { const result = await runpilot.ws.call(PLUGIN, method, params); if (result?.error) throw new Error(result.error.message || "Plugin request failed"); return result; };
-  let page = null, targets = [], message = "", active = null, headerAction = null, disposed = false;
+export function createVNCFeature(runpilot, call, onActivity = () => {}) {
+  let page = null, targets = [], message = "", active = null, disposed = false;
 
   function addTargetDialog(existing = null) {
     const dialog = document.createElement("dialog");
     dialog.className = "dialog vnc-target-dialog";
-    dialog.innerHTML = `<form method="dialog" class="vnc-form"><div class="dialog-head"><h2>${existing ? "Edit VNC target" : "Add VNC target"}</h2><button class="icon-btn" type="button" data-cancel aria-label="Cancel">×</button></div><input type="hidden" name="id" value="${escapeHTML(existing?.id || "")}">${field("Name", "name", existing?.name || "", "text", 'maxlength="100" required autocomplete="off"')}${field("Host", "host", existing?.host || "", "text", 'maxlength="253" required autocomplete="off"')}${field("Port", "port", existing?.port || 5900, "number", 'min="1" max="65535" required')}${field("Username (optional)", "username", existing?.username || "", "text", 'maxlength="256" autocomplete="username"')}${field("Connect timeout (seconds)", "connectTimeoutSeconds", existing?.connectTimeoutSeconds || 10, "number", 'min="1" max="30" required')}<p class="vnc-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button secondary" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save target</button></div></form>`;
+    dialog.innerHTML = `<form method="dialog" class="vnc-form"><div class="dialog-head"><h2>${existing ? "Edit VNC target" : "Add VNC target"}</h2><button class="icon-btn" type="button" data-cancel aria-label="Cancel">×</button></div><input type="hidden" name="id" value="${escapeHTML(existing?.id || "")}">${field("Name", "name", existing?.name || "", "text", 'maxlength="100" required autocomplete="off"')}${field("Host", "host", existing?.host || "", "text", 'maxlength="253" required autocomplete="off"')}<details class="rp-disclosure vnc-target-advanced"><summary>Advanced settings</summary><div class="vnc-advanced-fields">${field("Port", "port", existing?.port || 5900, "number", 'min="1" max="65535" required')}${field("Username (optional)", "username", existing?.username || "", "text", 'maxlength="256" autocomplete="username"')}${field("Connect timeout (seconds)", "connectTimeoutSeconds", existing?.connectTimeoutSeconds || 10, "number", 'min="1" max="30" required')}</div></details><p class="vnc-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button secondary" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save target</button></div></form>`;
     const form = dialog.querySelector("form"), error = dialog.querySelector(".vnc-form-error");
     dialog.querySelectorAll("[data-cancel]").forEach(button => button.addEventListener("click", () => dialog.close()));
     form.addEventListener("submit", async event => {
@@ -82,14 +79,16 @@ export async function activate(runpilot) {
 
   async function loadTargets() {
     if (disposed) return;
-    try { const result = await call("vnc.targets.list"); targets = Array.isArray(result.targets) ? result.targets : []; message = ""; }
+    try {
+      const result = await call("vnc.targets.list"); targets = Array.isArray(result.targets) ? result.targets : []; message = "";
+    }
     catch (cause) { targets = []; message = cause.message || "Could not load VNC targets"; }
     renderList();
   }
 
   async function closeSession(returnToList = true) {
     const state = active; if (!state || state.closing) return; state.closing = true; active = null;
-    if (headerAction?.isConnected) headerAction.hidden = false;
+    onActivity(false);
     clearCredentials(state);
     state.stopResize?.();
     try { state.rfb?.disconnect(); } catch {}
@@ -102,22 +101,46 @@ export async function activate(runpilot) {
   async function openSession(target) {
     if (active) return;
     const view = runpilot.ui.createInteractiveSessionView({ container: page, title: target.name, onBack: () => void closeSession(true), onDisconnect: () => void closeSession(true) });
-    view.element.classList.add("vnc-interactive-view");
-    const labelIcon = (element, name, label) => { element.classList.add("vnc-toolbar-icon", `vnc-toolbar-${name}`); element.setAttribute("aria-label", label); element.title = label; };
+    view.element.classList.add("rdp-interactive-view");
+    const icons = {
+      back: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
+      fullscreen: '<path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/>',
+      "page-view": '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
+      disconnect: '<path d="m18 6-12 12M6 6l12 12"/>',
+    };
+    const labelIcon = (element, name, label) => {
+      element.classList.add("icon", "rdp-toolbar-icon", `rdp-toolbar-${name}`);
+      element.setAttribute("aria-label", label); element.title = label;
+      const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      icon.setAttribute("viewBox", "0 0 24 24"); icon.setAttribute("fill", "none"); icon.setAttribute("stroke", "currentColor");
+      icon.setAttribute("stroke-width", "1.8"); icon.setAttribute("stroke-linecap", "round"); icon.setAttribute("stroke-linejoin", "round");
+      icon.setAttribute("aria-hidden", "true"); icon.setAttribute("focusable", "false"); icon.innerHTML = icons[name] || "";
+      element.replaceChildren(icon);
+    };
     const backButton = view.element.querySelector(".rp-interactive-heading > button");
     const [fullscreenButton, disconnectButton] = view.actions.querySelectorAll("button");
     view.actions.prepend(backButton);
     labelIcon(backButton, "back", "Back to VNC targets");
     labelIcon(fullscreenButton, "fullscreen", "Toggle fullscreen");
     labelIcon(disconnectButton, "disconnect", "Disconnect");
-    const state = { view, target, session: null, stream: null, channel: null, rfb: null, clearCredentials: null, authFailure: false, closing: false };
+    view.surface.onFullscreenChange(isFullscreen => labelIcon(fullscreenButton, "fullscreen", isFullscreen ? "Exit fullscreen" : "Enter fullscreen"));
+    const pageViewButton = document.createElement("button"); pageViewButton.type = "button"; pageViewButton.className = "button secondary small";
+    labelIcon(pageViewButton, "page-view", "Use RunPilot canvas view"); pageViewButton.setAttribute("aria-pressed", "false");
+    const state = { view, target, session: null, stream: null, channel: null, rfb: null, clearCredentials: null, authFailure: false, closing: false, pageView: false };
+    pageViewButton.addEventListener("click", () => {
+      state.pageView = !state.pageView; view.setPageView(state.pageView);
+      const label = state.pageView ? "Exit RunPilot canvas view" : "Use RunPilot canvas view";
+      pageViewButton.setAttribute("aria-pressed", String(state.pageView)); labelIcon(pageViewButton, "page-view", label);
+    });
+    view.actions.insertBefore(pageViewButton, disconnectButton);
+    view.actions.replaceChildren(backButton, pageViewButton, fullscreenButton, disconnectButton);
     active = state; view.setStatus("connecting"); view.setLoading(true, `Connecting to ${target.name}…`);
-    if (headerAction?.isConnected) headerAction.hidden = true;
+    onActivity(true);
     try {
       const result = await call("vnc.session.open", { targetId: target.id });
       if (active !== state) { await call("vnc.session.close", { id: result.session.id }).catch(() => {}); return; }
       state.session = result.session;
-      state.stream = await runpilot.ws.openStream(PLUGIN, result.streamId);
+      state.stream = await runpilot.ws.openStream("remote", result.streamId);
       if (active !== state) { state.stream.close(); return; }
       state.channel = createVNCChannelAdapter(state.stream);
       const remoteSurface = document.createElement("div"); remoteSurface.className = "vnc-session-surface"; view.surface.element.append(remoteSurface);
@@ -158,14 +181,10 @@ export async function activate(runpilot) {
     }
   }
 
-  runpilot.navigation.register({
-    id: "remote-vnc", title: "VNC", description: "Connect to and manage your remote desktops.", icon: { src: new URL("./icon.svg", import.meta.url).href },
-    headerActions(root) {
-      if (active) return;
-      const button = document.createElement("button"); button.type = "button"; button.className = "button primary small"; button.textContent = "Add target"; button.addEventListener("click", () => addTargetDialog());
-      headerAction = button; root.append(button);
-    },
-    render(root) { page = root; if (active) root.append(active.view.element); else { root.replaceChildren(runpilot.ui.EmptyState({title:"Loading VNC targets…",message:"Retrieving your saved desktops."})); void loadTargets(); } },
-  });
-  return () => { disposed = true; void closeSession(false); };
+  return {
+    get active() { return !!active; },
+    addTarget: () => addTargetDialog(),
+    render(root) { page = root; if (active) { if (!active.pageView) root.append(active.view.element); } else { root.replaceChildren(runpilot.ui.EmptyState({title:"Loading VNC targets…",message:"Retrieving your saved desktops."})); void loadTargets(); } },
+    dispose() { disposed = true; void closeSession(false); },
+  };
 }

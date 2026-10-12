@@ -118,7 +118,7 @@ func EnsureReferenceSystem(root string) error {
 	return err
 }
 
-// referenceSystemWASM is built from plugins/system/backend, checked in so end-user
+// referenceSystemWASM is built from the internal System test fixture, checked in so end-user
 // installs never need TinyGo.  Build/release verifies this generated artifact.
 //
 //go:embed system_reference.wasm

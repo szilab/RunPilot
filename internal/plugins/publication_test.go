@@ -42,7 +42,7 @@ func TestPublicationCatalog(t *testing.T) {
 }
 func TestPublicationRecordMatchesArtifact(t *testing.T) {
 	path := writePackage(t, map[string]string{"plugin.yaml": validManifest, "backend/plugin.wasm": "fixture"})
-	policy := PublicationPolicy{Plugins: []PublicationRule{{ID: "remote.xpra", Source: "plugins/remote-xpra", Publish: true}, {ID: "system", Source: "plugins/system", Publish: false}}}
+	policy := PublicationPolicy{Plugins: []PublicationRule{{ID: "remote.xpra", Source: "plugins/remote-xpra", Publish: true}}}
 	record, err := RecordFromPackage(path, "szilab/RunPilot", "plugin-remote.xpra-v1.0.0", policy)
 	if err != nil {
 		t.Fatal(err)

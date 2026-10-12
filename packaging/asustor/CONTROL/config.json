@@ -2,7 +2,7 @@
   "general": {
     "package": "runpilot",
     "name": "RunPilot",
-    "version": "1.0.4-dev",
+    "version": "1.0.5-dev",
     "developer": "RunPilot contributors",
     "maintainer": "RunPilot contributors",
     "email": "szilab@users.noreply.github.com",

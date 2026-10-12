@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import vm from "node:vm";
 const source = await fs.readFile("plugins/web-apps/web/plugin.js", "utf8");
-const advanced = source.match(/<details class="webapps-advanced">([\s\S]*?)<\/details>/)?.[1];
+const advanced = source.match(/<details class="[^"]*\bwebapps-advanced\b[^"]*">([\s\S]*?)<\/details>/)?.[1];
 assert.ok(advanced, "advanced settings use a collapsible details frame");
 assert.match(advanced, /Advanced Settings/);
 assert.match(advanced, /Base path header/);

@@ -47,8 +47,9 @@ func TestXpraClientTicketRedirectStaysOnTheScopedProxyPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.sessions["auth"] = authSession{expires: time.Now().Add(time.Hour)}
-	server.remoteTickets["ticket"] = remoteClientTicket{SessionID: "session", AuthSessionID: "auth", Expires: time.Now().Add(time.Minute)}
+	authID := authSessionKey("auth")
+	server.sessions[authID] = authSession{expires: time.Now().Add(time.Hour)}
+	server.remoteTickets["ticket"] = remoteClientTicket{SessionID: "session", AuthSessionID: authID, Expires: time.Now().Add(time.Minute)}
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/runpilot/api/v1/remote/sessions/session/client/?ticket=ticket", nil)
 	request.AddCookie(&http.Cookie{Name: adminSessionCookie, Value: "auth"})
@@ -71,8 +72,9 @@ func TestXpraProxyRedirectUsesOnlySessionSnapshotParameters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.sessions["auth"] = authSession{expires: time.Now().Add(time.Hour)}
-	server.remoteTickets["ticket"] = remoteClientTicket{SessionID: "session", AuthSessionID: "auth", ClientParams: map[string]string{"encoding": "webp", "video": "no", "toolbar_position": "top-left"}, Expires: time.Now().Add(time.Minute)}
+	authID := authSessionKey("auth")
+	server.sessions[authID] = authSession{expires: time.Now().Add(time.Hour)}
+	server.remoteTickets["ticket"] = remoteClientTicket{SessionID: "session", AuthSessionID: authID, ClientParams: map[string]string{"encoding": "webp", "video": "no", "toolbar_position": "top-left"}, Expires: time.Now().Add(time.Minute)}
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/remote/sessions/session/client/?ticket=ticket&encoding=rgb", nil)
 	request.AddCookie(&http.Cookie{Name: adminSessionCookie, Value: "auth"})

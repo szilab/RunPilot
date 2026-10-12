@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { provideVNCCredentials } from "./credentials.js";
+import { provideVNCCredentials } from "./vnc-credentials.js";
 
 test("VNC credentials stay available through noVNC's deferred auth and clear afterward", async () => {
   let consumed, provided;

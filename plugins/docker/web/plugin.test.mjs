@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {activate, dockerOverviewSummary} from "./plugin.js";
+import {activate} from "./plugin.js";
 
 const source = readFileSync(new URL("./plugin.js", import.meta.url), "utf8");
 test("Docker frontend uses plugin RPC and packaged terminal assets", () => {
@@ -13,17 +13,20 @@ test("Docker frontend uses plugin RPC and packaged terminal assets", () => {
 });
 
 test("project and resource controls follow snapshot ownership and usage", async () => {
-  let nav, click, calls = [];
+  let nav, click, settings, calls = [], overviewRegistrations = 0;
   const subscriptions = [];
   const snapshot = {runtime:{available:true,state:"ready"},projects:[
     {name:"owned",managed:true,state:"running",composeFileExists:true,containers:[{id:"abcdef012345",name:"web",state:"running",tone:"green"}]},
     {name:"outside",readOnly:true,state:"running",containers:[{id:"fedcba987654",name:"external",state:"running",tone:"green"}]},
   ],volumes:[{name:"data",inUse:true,driver:"local",scope:"local"},{name:"free",inUse:false,driver:"local",scope:"local"}],networks:[{name:"bridge",inUse:false},{name:"compose_net",inUse:false,composeProject:"app"},{name:"custom",inUse:false}]};
-  const runpilot = {overview:{register:()=>{}},ui:{escape:value=>String(value).replaceAll("&","&amp;").replaceAll('"',"&quot;").replaceAll("<","&lt;"),toast:()=>{}},navigation:{register:value=>{nav=value;}},ws:{call:async (plugin,method,params)=>{calls.push([plugin,method,params]);if(method==="docker.snapshot")return snapshot;return {ok:true};},on:(...args)=>{subscriptions.push(args);return()=>{};}}};
+  const runpilot = {overview:{register:()=>{overviewRegistrations++;}},settings:{register:value=>{settings=value;}},ui:{escape:value=>String(value).replaceAll("&","&amp;").replaceAll('"',"&quot;").replaceAll("<","&lt;"),toast:()=>{}},navigation:{register:value=>{nav=value;}},ws:{call:async (plugin,method,params)=>{calls.push([plugin,method,params]);if(method==="docker.snapshot")return snapshot;return {ok:true};},on:(...args)=>{subscriptions.push(args);return()=>{};}}};
   const deactivate = await activate(runpilot);
   assert.equal(nav.id,"docker");assert.equal(nav.title,"Docker");assert.equal(subscriptions.length,3);
+  assert.equal(settings.id,"docker");
   const root={innerHTML:"",addEventListener:(name,fn)=>{if(name==="click")click=fn;},removeEventListener(){},contains:()=>true};
   nav.render(root);await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(overviewRegistrations,0);
+  assert.doesNotMatch(root.innerHTML,/docker-plugin-toolbar|data-action="settings"|data-action="refresh"/);
   assert.match(root.innerHTML,/External project · read only/);
   assert.match(root.innerHTML,/data-action="project-up" data-key="owned"/);
   assert.doesNotMatch(root.innerHTML,/data-action="project-up" data-key="outside"/);
@@ -49,28 +52,11 @@ test("project and resource controls follow snapshot ownership and usage", async 
   deactivate();
 });
 
-test("Docker Overview maps container state and health", () => {
-  const summary=dockerOverviewSummary({projects:[{containers:[{state:"running",health:"healthy"},{state:"running",health:"unhealthy",name:"bad"},{state:"exited"}]}]});
-  assert.equal(summary.total,3);assert.equal(summary.running,2);assert.equal(summary.stopped,1);assert.equal(summary.unhealthy,1);assert.equal(summary.problems[0].name,"bad");
-});
-
-test("Docker Overview lists a bounded, ordered set of actual running containers", () => {
-  const containers = [
-    {id:"z",name:"Zebra",state:"running"}, {id:"b",name:"Beta",state:"running"},
-    {id:"stopped",name:"A stopped service",state:"exited"},
-    {id:"a",name:"Alpha",state:"running"}, {id:"c",name:"Charlie",state:"running"},
-  ];
-  const summary = dockerOverviewSummary({projects:[{containers}]});
-  assert.deepEqual(summary.active.map(item=>item.id),["a","b","c"]);
-  assert.equal(summary.running,4);
-  assert.equal(containers[0].id,"z", "widget sorting must not reorder the snapshot");
-  assert.deepEqual(dockerOverviewSummary(null).active,[]);
-});
-
 async function renderRuntime(runtime) {
   let nav;
   const runpilot = {
-    overview:{register:()=>{}},
+    overview:{register:()=>assert.fail("Docker must not register an Overview widget")},
+    settings:{register:()=>{}},
     ui:{escape:value=>String(value).replaceAll("&","&amp;").replaceAll('"',"&quot;").replaceAll("<","&lt;"),toast:()=>{}},
     navigation:{register:value=>{nav=value;}},
     ws:{call:async ()=>({runtime,projects:[],volumes:[],networks:[]}),on:()=>()=>{}},

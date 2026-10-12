@@ -12,7 +12,7 @@ Neither derives from the application version. For example, this checkout has:
 | Raw WASM ABI | `1` or `2` | Calling convention selected by `requires.runpilotApi` |
 | Backend contract | `1.0.0` | Implemented host capabilities, lifecycle, communication and ABI support |
 | Frontend contract | `1.0.0` | `ws`, `navigation`, `overview`, `settings`, `ui` extension APIs |
-| Plugin package | `0.1.0` (hello example) | Independently released plugin source and assets |
+| Plugin package | `1.0.0` | Independently released plugin source and assets |
 
 ABI v1 and the ABI-v2 host infrastructure remain supported. A backend contract
 release can support multiple raw ABIs. `apiVersion: runpilot.plugin/v1` is the
@@ -25,9 +25,9 @@ folder names use hyphens. Releases use the manifest ID.
 
 ```yaml
 apiVersion: runpilot.plugin/v1
-id: hello
-name: Hello extension
-version: 0.1.0
+id: sample
+name: Sample extension
+version: 1.0.0
 requires:
   frontend: ">=1.0.0 <2.0.0"
 frontend:
@@ -64,17 +64,15 @@ part of runtime manifests. System is `publish: false`; it remains a technical
 ABI/frontend/WebSocket fixture and is no longer installed on fresh startup.
 Existing manual System installations are not deleted. The Tasks plugin is
 registered with `publish: false` until its legacy cutover is reviewed. The RDP
-plugin is publishable after its backend, authenticated stream transport, target
-management and session lifecycle implementation. The VNC plugin is publishable
-after its plugin-owned target/session implementation and packaged noVNC client.
-`remote.xpra` remains disabled while its migration is deferred. The hello example is
-buildable and locally testable; opt in using a temporary policy for publication
-tests.
+Remote Desktop is published as one `remote` package with authenticated stream
+transport, target management, session lifecycle, and both Guacamole and noVNC
+clients. Both protocols are provided by the same package and plugin ID.
+`remote.xpra` remains disabled while its migration is deferred.
 
 Build a deterministic archive locally:
 
 ```sh
-go run ./cmd/plugin-build -out dist plugins/examples/hello
+go run ./cmd/plugin-build -out dist plugins/remote
 ```
 
 The builder checks the ID, strict SemVer, contract constraints and declared
@@ -127,13 +125,13 @@ Schema version 1 groups all published versions by ID:
 {
   "schemaVersion": 1,
   "plugins": [{
-    "id": "hello",
-    "name": "Hello extension",
-    "latest": "0.1.0",
+    "id": "sample",
+    "name": "Sample extension",
+    "latest": "1.0.0",
     "versions": [{
-      "version": "0.1.0",
+      "version": "1.0.0",
       "requires": {"frontend": ">=1.0.0 <2.0.0"},
-      "url": "https://github.com/szilab/RunPilot/releases/download/plugin-hello-v0.1.0/hello-0.1.0.rpplugin",
+      "url": "https://github.com/szilab/RunPilot/releases/download/plugin-sample-v1.0.0/sample-1.0.0.rpplugin",
       "sha256": "<64 hex characters>"
     }]
   }]
@@ -148,9 +146,9 @@ of host compatibility. Clients separately select the greatest compatible version
 Repository tooling owns generation, sorting and validation:
 
 ```sh
-# For a publishable package and an explicit policy:
-go run ./cmd/plugin-catalog -package dist/hello-0.1.0.rpplugin \
-  -policy /tmp/publication-policy.json -tag plugin-hello-v0.1.0 \
+# For a publishable package:
+go run ./cmd/plugin-catalog -package dist/remote-1.0.0.rpplugin \
+  -policy plugins/publication.json -tag plugin-remote-v1.0.0 \
   -out dist/publication.json
 # Deterministic local generation from one or more immutable records:
 go run ./cmd/plugin-catalog -policy /tmp/publication-policy.json \
@@ -176,7 +174,7 @@ One optional configuration field overrides the first-party default:
 pluginRegistry:
   url: http://127.0.0.1:8080/catalog.json
 plugins:
-  hello:
+  sample:
     enabled: false
 ```
 
