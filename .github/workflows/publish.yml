@@ -66,6 +66,10 @@ jobs:
           printf '%s\n' "$BUILD_VERSION" > dist/runpilot-linux-amd64.version
           printf '%s\n' "$BUILD_VERSION" > dist/runpilot-windows-amd64.version
           cp install.sh dist/install.sh
+          APK_VERSION="${BUILD_VERSION%%-*}.r${GITHUB_RUN_NUMBER}"
+          ./tools/asustor/build.sh "$APK_VERSION" "$BUILD_VERSION"
+          (cd dist && sha256sum --check "runpilot_${APK_VERSION}_x86-64.apk.sha256")
+          echo "RUNPILOT_APK_VERSION=$APK_VERSION" >> "$GITHUB_ENV"
 
       - name: Set release metadata
         id: release
@@ -110,6 +114,8 @@ jobs:
             dist/runpilot-windows-amd64.exe.sha256 \
             dist/runpilot-windows-amd64.version \
             dist/install.sh \
+            "dist/runpilot_${RUNPILOT_APK_VERSION}_x86-64.apk" \
+            "dist/runpilot_${RUNPILOT_APK_VERSION}_x86-64.apk.sha256" \
             --clobber
 
       - name: Create immutable v1.0.5 release
@@ -121,18 +127,22 @@ jobs:
         run: |
           if gh release view "$VERSION_TAG" >/dev/null 2>&1; then
             echo "$VERSION_TAG already exists; leaving the immutable release unchanged."
-            exit 0
+          else
+            gh release create "$VERSION_TAG" \
+              dist/runpilot-linux-amd64 \
+              dist/runpilot-linux-amd64.sha256 \
+              dist/runpilot-linux-amd64.version \
+              dist/runpilot-linux-amd64.tar.gz \
+              dist/runpilot-windows-amd64.exe \
+              dist/runpilot-windows-amd64.exe.sha256 \
+              dist/runpilot-windows-amd64.version \
+              dist/install.sh \
+              --target "$GITHUB_SHA" \
+              --title "RunPilot v1.0.5" \
+              --generate-notes
           fi
 
-          gh release create "$VERSION_TAG" \
-            dist/runpilot-linux-amd64 \
-            dist/runpilot-linux-amd64.sha256 \
-            dist/runpilot-linux-amd64.version \
-            dist/runpilot-linux-amd64.tar.gz \
-            dist/runpilot-windows-amd64.exe \
-            dist/runpilot-windows-amd64.exe.sha256 \
-            dist/runpilot-windows-amd64.version \
-            dist/install.sh \
-            --target "$GITHUB_SHA" \
-            --title "RunPilot v1.0.5" \
-            --generate-notes
+          gh release upload "$VERSION_TAG" \
+            "dist/runpilot_${RUNPILOT_APK_VERSION}_x86-64.apk" \
+            "dist/runpilot_${RUNPILOT_APK_VERSION}_x86-64.apk.sha256" \
+            --clobber
