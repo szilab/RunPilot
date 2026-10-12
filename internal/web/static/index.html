@@ -37,7 +37,10 @@
       <header>
         <h1 id="pageTitle">Overview</h1>
         <div class="header-actions">
+          <div class="account-header-actions">
           <button id="themeToggle" class="button secondary theme-toggle" type="button" aria-pressed="false" title="Switch to dark theme">☾ <span>Dark theme</span></button>
+          <button class="button secondary" id="logoutButton" type="button">Log out</button>
+          </div>
           <div id="pluginHeaderActions" class="plugin-header-actions hidden"></div>
         </div>
       </header>
@@ -71,8 +74,39 @@
       </section>
 
       <section id="settingsPage" class="page">
-        <section class="overview-section"><div class="section-head"><h2>RunPilot data directory</h2></div><p id="dataRootCurrent" class="meta">Loading current data directory…</p><form id="dataRootChangeForm" class="settings-form"><label>New absolute directory<input id="dataRootDestination" required placeholder="/volume1/RunPilot"></label><p class="meta">RunPilot will stop managed activity, copy its state, verify the copy and restart. Existing directories are not merged. Docker Compose projects need a separate manual migration.</p><div id="dataRootError" class="form-error hidden"></div><div class="dialog-actions"><button class="button danger">Move data directory and restart</button></div></form></section>
-        <section class="overview-section"><div class="section-head"><h2>Administrator account</h2></div><form id="passwordChangeForm" class="settings-form"><label>Current password<input id="currentPassword" type="password" autocomplete="current-password" required></label><label>New password<input id="nextPassword" type="password" minlength="12" autocomplete="new-password" required></label><label>Confirm new password<input id="confirmPassword" type="password" minlength="12" autocomplete="new-password" required></label><div id="passwordChangeError" class="form-error hidden"></div><div class="dialog-actions"><button class="button primary">Change password</button><button class="button secondary" id="logoutButton" type="button">Log out</button></div></form><label class="check"><input id="bearerAuthEnabled" type="checkbox"> Allow API token authentication for CLI and integrations</label><p class="meta">Browser sessions use your administrator account. Disabling API token authentication revokes the compatibility route for external clients.</p></section>
+        <section class="overview-section general-settings">
+          <div class="section-head"><h2>General</h2></div>
+          <div class="general-settings-grid">
+            <section class="general-settings-card">
+              <h3>Administrator account</h3>
+              <p class="meta">Update the password used to sign in to RunPilot.</p>
+              <form id="passwordChangeForm" class="settings-form settings-password-form">
+                <label>Current password<input id="currentPassword" type="password" autocomplete="current-password" required></label>
+                <label>New password<input id="nextPassword" type="password" minlength="12" autocomplete="new-password" required></label>
+                <label>Confirm new password<input id="confirmPassword" type="password" minlength="12" autocomplete="new-password" required></label>
+                <div id="passwordChangeError" class="form-error hidden" role="alert"></div>
+                <div class="dialog-actions"><button class="button primary">Change password</button></div>
+              </form>
+            </section>
+            <div class="general-settings-stack">
+              <section class="general-settings-card">
+                <h3>Data directory</h3>
+                <form id="dataRootChangeForm" class="settings-form">
+                  <label>Absolute directory<input id="dataRootDestination" type="text" required disabled spellcheck="false" aria-describedby="dataRootHelp dataRootStatus"></label>
+                  <p id="dataRootStatus" class="meta" role="status">Loading data directory…</p>
+                  <p id="dataRootHelp" class="meta">Applies after restart. RunPilot does not copy or move data. Prepare your data in the selected directory yourself; an empty directory starts a fresh installation.</p>
+                  <div id="dataRootError" class="form-error hidden" role="alert"></div>
+                  <div class="dialog-actions"><button id="dataRootSave" class="button secondary" disabled>Change directory and restart</button></div>
+                </form>
+              </section>
+              <section class="general-settings-card">
+                <h3>API access</h3>
+                <label class="check"><input id="bearerAuthEnabled" type="checkbox"> Allow API token authentication</label>
+                <p class="meta">For CLI tools and integrations. Browser sessions use your administrator account. Disabling this blocks API token access for external clients.</p>
+              </section>
+            </div>
+          </div>
+        </section>
         <section class="overview-section"><div class="section-head"><h2>Plugins</h2><div class="header-actions"><button id="restartApplicationButton" class="button danger" type="button">Restart RunPilot</button><button class="button secondary" type="button" onclick="refreshPluginCatalog()">Check for updates</button></div></div><div id="pluginSettings" class="plugin-settings-grid rp-masonry"></div></section>
       </section>
     </main>

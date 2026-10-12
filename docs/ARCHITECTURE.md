@@ -187,8 +187,11 @@ until the user restarts the service to open another window.
 The mutable application data root is selected independently from executable
 binaries and process working directories. Explicit CLI override, environment,
 persisted deployment locator and platform default determine its location in that
-order. The locator is deployment metadata outside the selected root. Explicit
-root relocation is restart-bound and copy-verified; Docker Compose layouts with
+order. The locator is deployment metadata outside the selected root. Settings
+directory changes are restart-bound and only update the locator; no data is
+copied or moved. Users prepare existing data in the selected directory
+manually, or start with an empty directory. Initial administrator setup retains
+its copy-verified relocation into a new directory. Docker Compose layouts with
 relative bind mounts require a separate manual migration.
 
 The next work is feature migration, not further expansion of the core plugin

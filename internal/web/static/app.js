@@ -217,11 +217,11 @@ function applyTheme(theme) {
   document.documentElement.dataset.style = "runpilot-default";
   document.documentElement.dataset.theme = isDark ? "dark" : "light";
   document.documentElement.dataset.scheme = scheme;
-  localStorage.setItem(themeStorageKey, scheme);
   const toggle = $("themeToggle");
   toggle.setAttribute("aria-pressed", String(isDark));
-  toggle.title = `Color scheme: ${scheme}. Click to change.`;
-  toggle.innerHTML = `${isDark ? "☾" : "☀"} <span>${scheme === "system" ? "System theme" : `${scheme[0].toUpperCase()+scheme.slice(1)} theme`}</span>`;
+  const nextTheme = isDark ? "light" : "dark";
+  toggle.title = `Switch to ${nextTheme} theme`;
+  toggle.innerHTML = `${isDark ? "☀" : "☾"} <span>${isDark ? "Light" : "Dark"} theme</span>`;
   notifyPluginThemeListeners();
 }
 
@@ -229,8 +229,9 @@ function initializeTheme() {
   const saved = localStorage.getItem(themeStorageKey);
   applyTheme(saved || "system");
   $("themeToggle").addEventListener("click", () => {
-    const current=document.documentElement.dataset.scheme||"system";
-    applyTheme(current === "system" ? "light" : current === "light" ? "dark" : "system");
+    const nextTheme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    localStorage.setItem(themeStorageKey, nextTheme);
+    applyTheme(nextTheme);
   });
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if(document.documentElement.dataset.scheme === "system") applyTheme("system"); });
 }
@@ -683,6 +684,7 @@ $("loginForm").addEventListener("submit", async e => {
     $("loginDialog").close();
     setConnected(true);
     await loadSystemInfo();
+    await loadDataRootSettings();
     await connectApplicationSocket();
     await refresh();
     hostDashboard.setActive(currentPage === "overview");
@@ -698,7 +700,23 @@ $("passwordChangeForm").addEventListener("submit",async e=>{e.preventDefault();c
 $("logoutButton").addEventListener("click",async()=>{try{await api("api/v1/auth/logout",{method:"POST"});}finally{authenticated=false;location.reload();}});
 $("bearerAuthEnabled").addEventListener("change",async()=>{try{const result=await api("api/v1/admin/bearer-auth",{method:"PUT",body:JSON.stringify({enabled:$("bearerAuthEnabled").checked})});$("bearerAuthEnabled").checked=result.enabled;}catch(error){$("bearerAuthEnabled").checked=!$("bearerAuthEnabled").checked;toast(error.message);}});
 
-$("dataRootChangeForm").addEventListener("submit",async e=>{e.preventDefault();const error=$("dataRootError");if(!confirm("RunPilot will restart and move its stored state. Continue?"))return;error.classList.add("hidden");try{await api("api/v1/admin/data-root",{method:"POST",body:JSON.stringify({destination:$("dataRootDestination").value})});error.textContent="RunPilot is restarting. Sign in again when it is ready.";error.classList.remove("hidden");}catch(reason){error.textContent=reason.message;error.classList.remove("hidden");}});
+async function loadDataRootSettings() {
+  try {
+    const root = await api("api/v1/admin/data-root");
+    $("dataRootDestination").value = root.dataDir;
+    $("dataRootDestination").disabled = !root.changeAllowed;
+    $("dataRootSave").disabled = !root.changeAllowed;
+    $("dataRootStatus").textContent = root.changeAllowed
+      ? ""
+      : "Directory changes are unavailable here; check the service startup configuration and restart support.";
+    $("dataRootStatus").classList.toggle("hidden", root.changeAllowed);
+  } catch (error) {
+    $("dataRootStatus").textContent = `Could not load the data directory: ${error.message}`;
+    $("dataRootStatus").classList.remove("hidden");
+  }
+}
+
+$("dataRootChangeForm").addEventListener("submit",async e=>{e.preventDefault();const error=$("dataRootError");if(!confirm("RunPilot will restart using the selected directory. No data will be copied or moved. An empty directory starts a fresh installation. Continue?"))return;error.classList.add("hidden");try{await api("api/v1/admin/data-root",{method:"POST",body:JSON.stringify({destination:$("dataRootDestination").value})});error.textContent="RunPilot is restarting. Sign in again when it is ready.";error.classList.remove("hidden");}catch(reason){error.textContent=reason.message;error.classList.remove("hidden");}});
 
 (async function init() {
   initializeSidebar();
@@ -708,7 +726,7 @@ $("dataRootChangeForm").addEventListener("submit",async e=>{e.preventDefault();c
     $("loginDialog").showModal();
     return;
   }
-  try { const root=await api("api/v1/admin/data-root");$("dataRootCurrent").textContent=`Current: ${root.dataDir}${root.migrationStatus?` · Last relocation ${root.migrationStatus}`:""}`; } catch {}
+  await loadDataRootSettings();
   setConnected(false);
   startConnectionMonitor();
   try { await connectApplicationSocket(); } catch (e) { toast(e.message); }

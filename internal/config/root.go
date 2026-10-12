@@ -211,6 +211,7 @@ func CopyDataRoot(source, destination string) (bool, error) {
 type pendingDataRoot struct {
 	Source      string `json:"source"`
 	Destination string `json:"destination"`
+	SwitchOnly  bool   `json:"switchOnly,omitempty"`
 }
 
 var migrationQueueMu sync.Mutex
@@ -232,9 +233,23 @@ func dataRootStatusPath() string {
 
 // QueueDataRootMigration schedules an explicit, restart-bound relocation.
 func QueueDataRootMigration(source, destination string) error {
+	return queueDataRoot(source, destination, false)
+}
+
+// QueueDataRootSwitch selects a directory on restart without copying or moving data.
+func QueueDataRootSwitch(source, destination string) error {
+	return queueDataRoot(source, destination, true)
+}
+
+func queueDataRoot(source, destination string, switchOnly bool) error {
 	migrationQueueMu.Lock()
 	defer migrationQueueMu.Unlock()
-	destination, err := ValidateNewDataRoot(destination)
+	var err error
+	if switchOnly {
+		destination, err = ValidateDataRoot(destination)
+	} else {
+		destination, err = ValidateNewDataRoot(destination)
+	}
 	if err != nil {
 		return err
 	}
@@ -244,10 +259,12 @@ func QueueDataRootMigration(source, destination string) error {
 	if inside(source, destination) || inside(destination, source) {
 		return errors.New("source and destination data directories cannot contain one another")
 	}
-	if _, err := os.Lstat(destination); err == nil {
-		return errors.New("destination must be a new directory; RunPilot will not merge or overwrite existing contents")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+	if !switchOnly {
+		if _, err := os.Lstat(destination); err == nil {
+			return errors.New("destination must be a new directory; RunPilot will not merge or overwrite existing contents")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 	locator := pendingDataRootPath()
 	if locator == "" {
@@ -261,7 +278,7 @@ func QueueDataRootMigration(source, destination string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	value, _ := json.Marshal(pendingDataRoot{Source: source, Destination: destination})
+	value, _ := json.Marshal(pendingDataRoot{Source: source, Destination: destination, SwitchOnly: switchOnly})
 	tmp := locator + ".tmp"
 	if err := os.WriteFile(tmp, value, 0o600); err != nil {
 		return err
@@ -300,9 +317,15 @@ func ApplyPendingDataRoot() error {
 		_ = os.Remove(path)
 		return errors.New("pending data-root migration no longer matches the active deployment")
 	}
-	created, copyErr := CopyDataRoot(pending.Source, pending.Destination)
-	if copyErr == nil {
-		copyErr = VerifyDataRoot(pending.Source, pending.Destination)
+	created := false
+	var copyErr error
+	if pending.SwitchOnly {
+		_, copyErr = ValidateDataRoot(pending.Destination)
+	} else {
+		created, copyErr = CopyDataRoot(pending.Source, pending.Destination)
+		if copyErr == nil {
+			copyErr = VerifyDataRoot(pending.Source, pending.Destination)
+		}
 	}
 	if copyErr == nil {
 		copyErr = WriteDataRoot(pending.Destination)

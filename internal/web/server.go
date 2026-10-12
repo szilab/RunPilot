@@ -613,12 +613,12 @@ func (s *Server) handleDataRootGet(w http.ResponseWriter, r *http.Request) {
 			status = strings.TrimSpace(string(value))
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"dataDir": s.ctrl.DataDir(), "migrationStatus": status})
+	writeJSON(w, http.StatusOK, map[string]any{"dataDir": s.ctrl.DataDir(), "migrationStatus": status, "changeAllowed": s.dataRootSwitchAllowed && s.restartHandler != nil})
 }
 
 func (s *Server) handleDataRootChange(w http.ResponseWriter, r *http.Request) {
 	if !s.dataRootSwitchAllowed {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "this RunPilot service uses an explicit --data-dir override; change its deployment setting"})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "this RunPilot service uses an explicit --data-dir or RUNPILOT_DATA_DIR override; change its deployment setting"})
 		return
 	}
 	if s.restartHandler == nil {
@@ -636,11 +636,7 @@ func (s *Server) handleDataRootChange(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if s.hasComposeProjects(s.ctrl.DataDir()) {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "Docker Compose projects use path-relative data and need a manual migration before moving the RunPilot data directory"})
-		return
-	}
-	if err := config.QueueDataRootMigration(s.ctrl.DataDir(), input.Destination); err != nil {
+	if err := config.QueueDataRootSwitch(s.ctrl.DataDir(), input.Destination); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
