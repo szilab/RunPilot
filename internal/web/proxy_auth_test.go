@@ -12,24 +12,24 @@ func TestParseProxyAuth(t *testing.T) {
 	if auth, err := ParseProxyAuth("", ""); auth != nil || err != nil {
 		t.Fatalf("unset configuration = %v, %v", auth, err)
 	}
-	auth, err := ParseProxyAuth(" 10.0.0.5, 172.18.0.0/16 ::ffff:192.168.1.10,fd00::/8 ", "remote-user")
+	auth, err := ParseProxyAuth(" 192.0.2.5, 198.51.100.0/24 ::ffff:192.168.1.10,fd00::/8 ", "remote-user")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if auth.Header() != "Remote-User" {
 		t.Fatalf("header = %q", auth.Header())
 	}
-	if got, want := strings.Join(auth.TrustedProxies(), " "), "10.0.0.5/32 172.18.0.0/16 192.168.1.10/32 fd00::/8"; got != want {
+	if got, want := strings.Join(auth.TrustedProxies(), " "), "192.0.2.5/32 198.51.100.0/24 192.168.1.10/32 fd00::/8"; got != want {
 		t.Fatalf("trusted proxies = %q, want %q", got, want)
 	}
 	for _, tc := range []struct{ proxies, header, want string }{
-		{"10.0.0.5", "", "needs both"},
+		{"192.0.2.5", "", "needs both"},
 		{"", "Remote-User", "needs both"},
-		{"10.0.0.5", "Remote User", "not a valid HTTP header name"},
-		{"10.0.0.5", "authorization", "cannot carry"},
-		{"10.0.0.5", "Cookie", "cannot carry"},
+		{"192.0.2.5", "Remote User", "not a valid HTTP header name"},
+		{"192.0.2.5", "authorization", "cannot carry"},
+		{"192.0.2.5", "Cookie", "cannot carry"},
 		{"proxy.local", "Remote-User", "invalid address"},
-		{"10.0.0.0/33", "Remote-User", "invalid address range"},
+		{"192.0.2.0/33", "Remote-User", "invalid address range"},
 		{"0.0.0.0/0", "Remote-User", "every address"},
 		{"::/0", "Remote-User", "every address"},
 		{",", "Remote-User", "lists no proxy"},
@@ -57,7 +57,7 @@ func newProxyAuthFixture(t *testing.T, basePath string) proxyAuthFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := ParseProxyAuth("10.0.0.5, 172.18.0.0/16", "Remote-User")
+	auth, err := ParseProxyAuth("192.0.2.5, 198.51.100.0/24", "Remote-User")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func responseCookies(response *httptest.ResponseRecorder) map[string]*http.Cooki
 
 func TestProxyAuthSignsInTheAdministratorFromATrustedProxy(t *testing.T) {
 	f := newProxyAuthFixture(t, "")
-	first := f.do(http.MethodGet, "/api/v1/system", "172.18.0.3:40000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") })
+	first := f.do(http.MethodGet, "/api/v1/system", "198.51.100.3:40000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") })
 	if first.Code != http.StatusOK {
 		t.Fatalf("proxy-authenticated status = %d: %s", first.Code, first.Body.String())
 	}
@@ -104,10 +104,10 @@ func TestProxyAuthSignsInTheAdministratorFromATrustedProxy(t *testing.T) {
 		r.AddCookie(csrf)
 	}
 	// The session behaves like a password session: unsafe requests need CSRF.
-	if response := f.do(http.MethodPost, "/api/v1/ws/ticket", "172.18.0.3:40000", withSession); response.Code != http.StatusForbidden {
+	if response := f.do(http.MethodPost, "/api/v1/ws/ticket", "198.51.100.3:40000", withSession); response.Code != http.StatusForbidden {
 		t.Fatalf("missing CSRF header status = %d", response.Code)
 	}
-	ticket := f.do(http.MethodPost, "/api/v1/ws/ticket", "172.18.0.3:40000", func(r *http.Request) {
+	ticket := f.do(http.MethodPost, "/api/v1/ws/ticket", "198.51.100.3:40000", func(r *http.Request) {
 		withSession(r)
 		r.Header.Set("X-RunPilot-CSRF", csrf.Value)
 	})
@@ -118,7 +118,7 @@ func TestProxyAuthSignsInTheAdministratorFromATrustedProxy(t *testing.T) {
 		t.Fatal("an existing session was replaced")
 	}
 	// The session stays valid behind the proxy without repeating the header.
-	if response := f.do(http.MethodGet, "/api/v1/plugins", "172.18.0.3:40000", func(r *http.Request) { r.AddCookie(session) }); response.Code != http.StatusOK {
+	if response := f.do(http.MethodGet, "/api/v1/plugins", "198.51.100.3:40000", func(r *http.Request) { r.AddCookie(session) }); response.Code != http.StatusOK {
 		t.Fatalf("session without header status = %d", response.Code)
 	}
 	f.server.sessionMu.Lock()
@@ -136,37 +136,37 @@ func TestProxyAuthSignsInTheAdministratorFromATrustedProxy(t *testing.T) {
 
 func TestProxyAuthIgnoresUntrustedPeersAndForwardingHeaders(t *testing.T) {
 	f := newProxyAuthFixture(t, "")
-	for _, peer := range []string{"10.0.0.6:5000", "192.0.2.1:5000", "[2001:db8::1]:5000"} {
+	for _, peer := range []string{"192.0.2.6:5000", "192.0.2.1:5000", "[2001:db8::1]:5000"} {
 		response := f.do(http.MethodGet, "/api/v1/system", peer, func(r *http.Request) {
 			r.Header.Set("Remote-User", "admin")
-			r.Header.Set("X-Forwarded-For", "10.0.0.5")
-			r.Header.Set("X-Real-IP", "10.0.0.5")
+			r.Header.Set("X-Forwarded-For", "192.0.2.5")
+			r.Header.Set("X-Real-IP", "192.0.2.5")
 		})
 		if response.Code != http.StatusUnauthorized || len(responseCookies(response)) != 0 {
 			t.Fatalf("untrusted peer %s status = %d cookies = %v", peer, response.Code, responseCookies(response))
 		}
 	}
 	// An IPv4-mapped peer address matches the IPv4 entry.
-	if response := f.do(http.MethodGet, "/api/v1/system", "[::ffff:10.0.0.5]:5000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") }); response.Code != http.StatusOK {
+	if response := f.do(http.MethodGet, "/api/v1/system", "[::ffff:192.0.2.5]:5000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") }); response.Code != http.StatusOK {
 		t.Fatalf("IPv4-mapped trusted peer status = %d", response.Code)
 	}
 	// Without the header, a trusted proxy's requests use the normal methods.
-	bearer := f.do(http.MethodGet, "/api/v1/system", "10.0.0.5:5000", func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+f.token) })
+	bearer := f.do(http.MethodGet, "/api/v1/system", "192.0.2.5:5000", func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+f.token) })
 	if bearer.Code != http.StatusOK || len(responseCookies(bearer)) != 0 {
 		t.Fatalf("bearer through trusted proxy status = %d", bearer.Code)
 	}
-	if response := f.do(http.MethodGet, "/api/v1/system", "10.0.0.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", " ") }); response.Code != http.StatusUnauthorized {
+	if response := f.do(http.MethodGet, "/api/v1/system", "192.0.2.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", " ") }); response.Code != http.StatusUnauthorized {
 		t.Fatalf("empty proxy user status = %d", response.Code)
 	}
 	// Static assets never create sessions.
-	if response := f.do(http.MethodGet, "/", "10.0.0.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") }); len(responseCookies(response)) != 0 {
+	if response := f.do(http.MethodGet, "/", "192.0.2.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") }); len(responseCookies(response)) != 0 {
 		t.Fatal("static page request created a session")
 	}
 }
 
 func TestProxyAuthRefusesOtherUsersEvenWithCredentials(t *testing.T) {
 	f := newProxyAuthFixture(t, "")
-	login := f.do(http.MethodGet, "/api/v1/system", "10.0.0.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") })
+	login := f.do(http.MethodGet, "/api/v1/system", "192.0.2.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") })
 	session := responseCookies(login)[adminSessionCookie]
 	for name, configure := range map[string]func(*http.Request){
 		"other user":       func(r *http.Request) { r.Header.Set("Remote-User", "mallory") },
@@ -188,19 +188,19 @@ func TestProxyAuthRefusesOtherUsersEvenWithCredentials(t *testing.T) {
 			r.URL.Path = "/api/v1/ws"
 		},
 	} {
-		response := f.do(http.MethodGet, "/api/v1/system", "10.0.0.5:5000", configure)
+		response := f.do(http.MethodGet, "/api/v1/system", "192.0.2.5:5000", configure)
 		if response.Code != http.StatusForbidden || len(responseCookies(response)) != 0 {
 			t.Errorf("%s: status = %d, cookies = %v", name, response.Code, responseCookies(response))
 		}
 	}
-	if response := f.do(http.MethodGet, "/api/v1/setup", "10.0.0.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", "mallory") }); response.Code != http.StatusOK {
+	if response := f.do(http.MethodGet, "/api/v1/setup", "192.0.2.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", "mallory") }); response.Code != http.StatusOK {
 		t.Fatalf("setup status endpoint = %d", response.Code)
 	}
 }
 
 func TestProxyAuthHonorsBasePath(t *testing.T) {
 	f := newProxyAuthFixture(t, "/runpilot")
-	response := f.do(http.MethodGet, "/runpilot/api/v1/system", "10.0.0.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") })
+	response := f.do(http.MethodGet, "/runpilot/api/v1/system", "192.0.2.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") })
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
 	}
@@ -212,7 +212,7 @@ func TestProxyAuthHonorsBasePath(t *testing.T) {
 func TestProxyAuthDisabledIgnoresHeader(t *testing.T) {
 	f := newProxyAuthFixture(t, "")
 	f.server.SetProxyAuth(nil)
-	if response := f.do(http.MethodGet, "/api/v1/system", "10.0.0.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") }); response.Code != http.StatusUnauthorized {
+	if response := f.do(http.MethodGet, "/api/v1/system", "192.0.2.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") }); response.Code != http.StatusUnauthorized {
 		t.Fatalf("disabled proxy auth status = %d", response.Code)
 	}
 }
@@ -245,7 +245,7 @@ func TestProxySessionsAreEvictedBeforePasswordSessions(t *testing.T) {
 		s.sessions[authSessionKey(strings.Repeat("w", i+1))] = authSession{csrfHash: authSessionKey("csrf"), expires: now.Add(time.Hour)}
 	}
 	s.sessionMu.Unlock()
-	response := f.do(http.MethodGet, "/api/v1/system", "10.0.0.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") })
+	response := f.do(http.MethodGet, "/api/v1/system", "192.0.2.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") })
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("full password session table status = %d", response.Code)
 	}
@@ -253,7 +253,7 @@ func TestProxySessionsAreEvictedBeforePasswordSessions(t *testing.T) {
 
 func TestProxySessionFlagIsPersisted(t *testing.T) {
 	f := newProxyAuthFixture(t, "")
-	response := f.do(http.MethodGet, "/api/v1/system", "10.0.0.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") })
+	response := f.do(http.MethodGet, "/api/v1/system", "192.0.2.5:5000", func(r *http.Request) { r.Header.Set("Remote-User", "admin") })
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
@@ -298,18 +298,18 @@ func TestProxyAuthSettingsApplyImmediatelyAndPersist(t *testing.T) {
 	f := newProxyAuthFixture(t, "")
 	f.server.SetProxyAuth(nil)
 	session := f.passwordSession()
-	if response := f.do(http.MethodGet, "/api/v1/system", "10.0.0.9:1", func(r *http.Request) { r.Header.Set("Remote-User", "admin") }); response.Code != http.StatusUnauthorized {
+	if response := f.do(http.MethodGet, "/api/v1/system", "192.0.2.9:1", func(r *http.Request) { r.Header.Set("Remote-User", "admin") }); response.Code != http.StatusUnauthorized {
 		t.Fatalf("before saving: %d", response.Code)
 	}
-	saved := f.saveSettings("192.0.2.50:1", `{"trustedProxies":" 10.0.0.9 ","header":"x-forwarded-user"}`, session)
+	saved := f.saveSettings("192.0.2.50:1", `{"trustedProxies":" 192.0.2.9 ","header":"x-forwarded-user"}`, session)
 	if saved.Code != http.StatusOK || !strings.Contains(saved.Body.String(), `"enabled":true`) || !strings.Contains(saved.Body.String(), `"source":"settings"`) {
 		t.Fatalf("save = %d %s", saved.Code, saved.Body.String())
 	}
-	if response := f.do(http.MethodGet, "/api/v1/system", "10.0.0.9:1", func(r *http.Request) { r.Header.Set("X-Forwarded-User", "admin") }); response.Code != http.StatusOK {
+	if response := f.do(http.MethodGet, "/api/v1/system", "192.0.2.9:1", func(r *http.Request) { r.Header.Set("X-Forwarded-User", "admin") }); response.Code != http.StatusOK {
 		t.Fatalf("saved settings not applied: %d", response.Code)
 	}
 	cfg := f.server.ctrl.Snapshot().Server
-	if cfg.ProxyAuthTrustedProxies != "10.0.0.9" || cfg.ProxyAuthHeader != "x-forwarded-user" {
+	if cfg.ProxyAuthTrustedProxies != "192.0.2.9" || cfg.ProxyAuthHeader != "x-forwarded-user" {
 		t.Fatalf("persisted = %q / %q", cfg.ProxyAuthTrustedProxies, cfg.ProxyAuthHeader)
 	}
 	restarted, err := New(f.server.ctrl)
@@ -322,7 +322,7 @@ func TestProxyAuthSettingsApplyImmediatelyAndPersist(t *testing.T) {
 	if off := f.saveSettings("192.0.2.50:1", `{"trustedProxies":"","header":""}`, session); off.Code != http.StatusOK || !strings.Contains(off.Body.String(), `"enabled":false`) {
 		t.Fatalf("disable = %d %s", off.Code, off.Body.String())
 	}
-	if response := f.do(http.MethodGet, "/api/v1/system", "10.0.0.9:1", func(r *http.Request) { r.Header.Set("X-Forwarded-User", "admin") }); response.Code != http.StatusUnauthorized {
+	if response := f.do(http.MethodGet, "/api/v1/system", "192.0.2.9:1", func(r *http.Request) { r.Header.Set("X-Forwarded-User", "admin") }); response.Code != http.StatusUnauthorized {
 		t.Fatalf("disabled settings still applied: %d", response.Code)
 	}
 }
@@ -332,24 +332,24 @@ func TestProxyAuthSettingsValidationAndLockoutGuard(t *testing.T) {
 	f.server.SetProxyAuth(nil)
 	session := f.passwordSession()
 	for body, want := range map[string]string{
-		`{"trustedProxies":"10.0.0.9","header":""}`:             "needs both Trusted proxies and User name header",
+		`{"trustedProxies":"192.0.2.9","header":""}`:            "needs both Trusted proxies and User name header",
 		`{"trustedProxies":"0.0.0.0/0","header":"Remote-User"}`: "Trusted proxies",
-		`{"trustedProxies":"10.0.0.9","header":"Cookie"}`:       "User name header: Cookie cannot carry",
+		`{"trustedProxies":"192.0.2.9","header":"Cookie"}`:      "User name header: Cookie cannot carry",
 	} {
 		response := f.saveSettings("192.0.2.50:1", body, session)
 		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), want) {
 			t.Errorf("%s: %d %s", body, response.Code, response.Body.String())
 		}
 	}
-	// This browser comes through 10.0.0.9, whose proxy reports another user.
-	locked := f.saveSettings("10.0.0.9:1", `{"trustedProxies":"10.0.0.9","header":"Remote-User"}`, session, func(r *http.Request) { r.Header.Set("Remote-User", "mallory") })
+	// This browser comes through 192.0.2.9, whose proxy reports another user.
+	locked := f.saveSettings("192.0.2.9:1", `{"trustedProxies":"192.0.2.9","header":"Remote-User"}`, session, func(r *http.Request) { r.Header.Set("Remote-User", "mallory") })
 	if locked.Code != http.StatusConflict || !strings.Contains(locked.Body.String(), "lock you out") {
 		t.Fatalf("lockout guard = %d %s", locked.Code, locked.Body.String())
 	}
 	if f.server.ctrl.Snapshot().Server.ProxyAuthHeader != "" || f.server.proxyAuth.Load() != nil {
 		t.Fatal("a refused configuration was saved")
 	}
-	if ok := f.saveSettings("10.0.0.9:1", `{"trustedProxies":"10.0.0.9","header":"Remote-User"}`, session, func(r *http.Request) { r.Header.Set("Remote-User", "admin") }); ok.Code != http.StatusOK {
+	if ok := f.saveSettings("192.0.2.9:1", `{"trustedProxies":"192.0.2.9","header":"Remote-User"}`, session, func(r *http.Request) { r.Header.Set("Remote-User", "admin") }); ok.Code != http.StatusOK {
 		t.Fatalf("matching proxy user save = %d %s", ok.Code, ok.Body.String())
 	}
 	if csrf := f.saveSettings("192.0.2.50:1", `{"trustedProxies":"","header":""}`); csrf.Code == http.StatusOK {
@@ -359,24 +359,24 @@ func TestProxyAuthSettingsValidationAndLockoutGuard(t *testing.T) {
 
 func TestProxyAuthEnvironmentOverridesSettings(t *testing.T) {
 	f := newProxyAuthFixture(t, "")
-	if err := f.server.ctrl.SetProxyAuth("10.0.0.9", "X-Forwarded-User"); err != nil {
+	if err := f.server.ctrl.SetProxyAuth("192.0.2.9", "X-Forwarded-User"); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.server.ConfigureProxyAuth("172.18.0.1", "Remote-User"); err != nil {
+	if err := f.server.ConfigureProxyAuth("198.51.100.1", "Remote-User"); err != nil {
 		t.Fatal(err)
 	}
 	state := f.server.proxyAuthState()
-	if state["source"] != "environment" || state["trustedProxies"] != "172.18.0.1" || state["header"] != "Remote-User" {
+	if state["source"] != "environment" || state["trustedProxies"] != "198.51.100.1" || state["header"] != "Remote-User" {
 		t.Fatalf("state = %v", state)
 	}
 	session := f.passwordSession()
 	if response := f.saveSettings("192.0.2.50:1", `{"trustedProxies":"","header":""}`, session); response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "RUNPILOT_TRUSTED_PROXIES") {
 		t.Fatalf("environment-managed save = %d %s", response.Code, response.Body.String())
 	}
-	if response := f.do(http.MethodGet, "/api/v1/system", "10.0.0.9:1", func(r *http.Request) { r.Header.Set("X-Forwarded-User", "admin") }); response.Code != http.StatusUnauthorized {
+	if response := f.do(http.MethodGet, "/api/v1/system", "192.0.2.9:1", func(r *http.Request) { r.Header.Set("X-Forwarded-User", "admin") }); response.Code != http.StatusUnauthorized {
 		t.Fatalf("settings applied despite environment override: %d", response.Code)
 	}
-	if err := f.server.ConfigureProxyAuth("172.18.0.1", ""); err == nil {
+	if err := f.server.ConfigureProxyAuth("198.51.100.1", ""); err == nil {
 		t.Fatal("partial environment configuration accepted")
 	}
 }

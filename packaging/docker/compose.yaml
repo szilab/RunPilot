@@ -26,5 +26,5 @@ services:
     #   # Alpine packages to install at start, for example for tasks.
     #   RUNPILOT_EXTRA_PACKAGES: "ffmpeg"
     #   # Single sign-on through an authenticating reverse proxy.
-    #   RUNPILOT_TRUSTED_PROXIES: "172.20.0.10"
+    #   RUNPILOT_TRUSTED_PROXIES: "192.0.2.10"
     #   RUNPILOT_PROXY_AUTH_HEADER: "Remote-User"

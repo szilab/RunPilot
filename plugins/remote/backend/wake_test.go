@@ -87,10 +87,10 @@ func newNetworkHost(t *testing.T) *networkHost {
 	t.Helper()
 	host := &networkHost{storage: map[string]json.RawMessage{}, states: map[string]string{}, arp: map[string]string{}}
 	host.storage["targets"] = json.RawMessage(`{"version":1,"nextId":4,"targets":[
-		{"id":"rdp-1","name":"Desk","options":{"host":"10.0.0.20","port":3389}},
-		{"id":"rdp-2","name":"Laptop","options":{"host":"10.0.0.21"},"macAddress":"AA-BB-CC-00-00-02"},
-		{"id":"rdp-3","name":"Gone","options":{"host":"10.0.0.22"}}]}`)
-	host.storage["vncTargets"] = json.RawMessage(`{"version":1,"nextId":2,"targets":[{"id":"vnc-1","name":"Pi","host":"10.0.0.30","port":5900,"connectTimeoutSeconds":10}]}`)
+		{"id":"rdp-1","name":"Desk","options":{"host":"192.0.2.20","port":3389}},
+		{"id":"rdp-2","name":"Laptop","options":{"host":"192.0.2.21"},"macAddress":"AA-BB-CC-00-00-02"},
+		{"id":"rdp-3","name":"Gone","options":{"host":"192.0.2.22"}}]}`)
+	host.storage["vncTargets"] = json.RawMessage(`{"version":1,"nextId":2,"targets":[{"id":"vnc-1","name":"Pi","host":"192.0.2.30","port":5900,"connectTimeoutSeconds":10}]}`)
 	original := callHost
 	callHost = host.call
 	t.Cleanup(func() { callHost = original })
@@ -99,12 +99,12 @@ func newNetworkHost(t *testing.T) *networkHost {
 
 func TestTargetStatusesAndMACLearning(t *testing.T) {
 	host := newNetworkHost(t)
-	host.states["10.0.0.20:3389"] = "open"
-	host.states["10.0.0.21:3389"] = "open"
-	host.states["10.0.0.30:5900"] = "closed"
-	host.arp["10.0.0.20"] = "3C:7C:3F:12:34:56"
-	host.arp["10.0.0.21"] = "11:11:11:11:11:11"
-	host.arp["10.0.0.30"] = "dc:a6:32:00:00:01"
+	host.states["192.0.2.20:3389"] = "open"
+	host.states["192.0.2.21:3389"] = "open"
+	host.states["192.0.2.30:5900"] = "closed"
+	host.arp["192.0.2.20"] = "3C:7C:3F:12:34:56"
+	host.arp["192.0.2.21"] = "11:11:11:11:11:11"
+	host.arp["192.0.2.30"] = "dc:a6:32:00:00:01"
 	p := newPlugin()
 	out, failure := p.handle("remote.targets.status", nil)
 	if failure != nil {
@@ -123,7 +123,7 @@ func TestTargetStatusesAndMACLearning(t *testing.T) {
 	if !strings.Contains(string(host.storage["vncTargets"]), `"discoveredMac":"dc:a6:32:00:00:01"`) {
 		t.Fatalf("VNC store = %s", host.storage["vncTargets"])
 	}
-	if strings.Join(host.lookups, ",") != "10.0.0.20,10.0.0.30" {
+	if strings.Join(host.lookups, ",") != "192.0.2.20,192.0.2.30" {
 		t.Fatalf("lookups = %v", host.lookups)
 	}
 }
@@ -147,11 +147,11 @@ func TestWakeTargetPrefersConfiguredThenDiscoveredThenLookup(t *testing.T) {
 	if host.refreshs != 1 {
 		t.Fatalf("lookup did not request an ARP refresh: %d", host.refreshs)
 	}
-	host.arp["10.0.0.22"] = "00:11:22:33:44:55"
+	host.arp["192.0.2.22"] = "00:11:22:33:44:55"
 	if out, failure := wake("rdp", "rdp-3"); failure != nil || out["mac"] != "00:11:22:33:44:55" || out["source"] != "discovered" {
 		t.Fatalf("lookup wake = %v %v", out, failure)
 	}
-	delete(host.arp, "10.0.0.22")
+	delete(host.arp, "192.0.2.22")
 	if out, failure := wake("rdp", "rdp-3"); failure != nil || out["mac"] != "00:11:22:33:44:55" {
 		t.Fatalf("remembered MAC was not reused: %v %v", out, failure)
 	}
@@ -165,28 +165,28 @@ func TestWakeTargetPrefersConfiguredThenDiscoveredThenLookup(t *testing.T) {
 
 func TestSavingTargetsControlsMACFields(t *testing.T) {
 	host := newNetworkHost(t)
-	host.storage["targets"] = json.RawMessage(`{"version":1,"nextId":2,"targets":[{"id":"rdp-1","name":"Desk","options":{"host":"10.0.0.20","port":3389},"discoveredMac":"3c:7c:3f:12:34:56"}]}`)
+	host.storage["targets"] = json.RawMessage(`{"version":1,"nextId":2,"targets":[{"id":"rdp-1","name":"Desk","options":{"host":"192.0.2.20","port":3389},"discoveredMac":"3c:7c:3f:12:34:56"}]}`)
 	p := newPlugin()
 	save := func(body string) *rpcError {
 		_, failure := p.handle("rdp.targets.save", json.RawMessage(body))
 		return failure
 	}
-	if failure := save(`{"target":{"id":"rdp-1","name":"Desk","options":{"host":"10.0.0.20","port":3389},"discoveredMac":"99:99:99:99:99:99"}}`); failure != nil {
+	if failure := save(`{"target":{"id":"rdp-1","name":"Desk","options":{"host":"192.0.2.20","port":3389},"discoveredMac":"99:99:99:99:99:99"}}`); failure != nil {
 		t.Fatal(failure.Message)
 	}
 	if stored := string(host.storage["targets"]); !strings.Contains(stored, "3c:7c:3f:12:34:56") || strings.Contains(stored, "99:99") {
 		t.Fatalf("client changed the learned MAC: %s", stored)
 	}
-	if failure := save(`{"target":{"id":"rdp-1","name":"Desk","options":{"host":"10.0.0.99","port":3389},"macAddress":"AABB.CCDD.EEFF"}}`); failure != nil {
+	if failure := save(`{"target":{"id":"rdp-1","name":"Desk","options":{"host":"192.0.2.99","port":3389},"macAddress":"AABB.CCDD.EEFF"}}`); failure != nil {
 		t.Fatal(failure.Message)
 	}
 	if stored := string(host.storage["targets"]); strings.Contains(stored, "discoveredMac") || !strings.Contains(stored, `"macAddress":"aa:bb:cc:dd:ee:ff"`) {
 		t.Fatalf("host change kept the learned MAC: %s", stored)
 	}
-	if failure := save(`{"target":{"name":"New","options":{"host":"10.0.0.50"},"macAddress":"nope"}}`); failure == nil || failure.Code != "invalid_argument" {
+	if failure := save(`{"target":{"name":"New","options":{"host":"192.0.2.50"},"macAddress":"nope"}}`); failure == nil || failure.Code != "invalid_argument" {
 		t.Fatalf("invalid MAC = %v", failure)
 	}
-	_, failure := p.handle("vnc.targets.save", json.RawMessage(`{"target":{"id":"vnc-1","name":"Pi","host":"10.0.0.30","port":5900,"discoveredMac":"99:99:99:99:99:99","macAddress":"dc-a6-32-00-00-01"}}`))
+	_, failure := p.handle("vnc.targets.save", json.RawMessage(`{"target":{"id":"vnc-1","name":"Pi","host":"192.0.2.30","port":5900,"discoveredMac":"99:99:99:99:99:99","macAddress":"dc-a6-32-00-00-01"}}`))
 	if failure != nil {
 		t.Fatal(failure.Message)
 	}

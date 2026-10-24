@@ -321,13 +321,13 @@ RunPilot is configured with `basePath: /runpilot`.
 ### Single sign-on through an authenticating proxy
 
 RunPilot can trust the user name set by an authenticating reverse proxy or
-forward-auth gateway (for example Authelia, Authentik, oauth2-proxy, Pomerium
-or VoidAuth). Configure it in **Settings → Proxy single sign-on** or with two
+forward-auth gateway (for example Authelia, Authentik, oauth2-proxy or
+Pomerium). Configure it in **Settings → Proxy single sign-on** or with two
 environment variables; both values are required:
 
 | Setting | Environment variable | Example | Meaning |
 |---|---|---|---|
-| Trusted proxies | `RUNPILOT_TRUSTED_PROXIES` | `10.0.0.5, 172.20.0.0/16` | Comma- or space-separated IP addresses and CIDR ranges of the proxies |
+| Trusted proxies | `RUNPILOT_TRUSTED_PROXIES` | `192.0.2.10, 198.51.100.0/24` | Comma- or space-separated IP addresses and CIDR ranges of the proxies |
 | User name header | `RUNPILOT_PROXY_AUTH_HEADER` | `Remote-User` | Header that carries the signed-in user name |
 
 When either environment variable is set, the environment owns both values and

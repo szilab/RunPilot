@@ -9,17 +9,17 @@ import (
 
 func TestParseProcNetARP(t *testing.T) {
 	table := `IP address       HW type     Flags       HW address            Mask     Device
-10.0.0.20        0x1         0x2         3c:7c:3f:12:34:56     *        eth0
-10.0.0.30        0x1         0x0         00:00:00:00:00:00     *        eth0
-10.0.0.40        0x1         0x6         aa:bb:cc:dd:ee:01     *        eth0
+192.0.2.20        0x1         0x2         3c:7c:3f:12:34:56     *        eth0
+192.0.2.30        0x1         0x0         00:00:00:00:00:00     *        eth0
+192.0.2.40        0x1         0x6         aa:bb:cc:dd:ee:01     *        eth0
 `
-	if mac, err := parseProcNetARP(table, net.ParseIP("10.0.0.20").To4()); err != nil || mac.String() != "3c:7c:3f:12:34:56" {
+	if mac, err := parseProcNetARP(table, net.ParseIP("192.0.2.20").To4()); err != nil || mac.String() != "3c:7c:3f:12:34:56" {
 		t.Fatalf("complete entry = %v, %v", mac, err)
 	}
-	if mac, err := parseProcNetARP(table, net.ParseIP("10.0.0.40").To4()); err != nil || mac.String() != "aa:bb:cc:dd:ee:01" {
+	if mac, err := parseProcNetARP(table, net.ParseIP("192.0.2.40").To4()); err != nil || mac.String() != "aa:bb:cc:dd:ee:01" {
 		t.Fatalf("permanent entry = %v, %v", mac, err)
 	}
-	for _, ip := range []string{"10.0.0.30", "10.0.0.99"} {
+	for _, ip := range []string{"192.0.2.30", "192.0.2.99"} {
 		if _, err := parseProcNetARP(table, net.ParseIP(ip).To4()); err != ErrNeighborNotFound {
 			t.Errorf("%s: error = %v", ip, err)
 		}

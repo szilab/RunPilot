@@ -40,7 +40,7 @@ func TestListenAddrRejectsInvalidBindAddress(t *testing.T) {
 }
 
 func TestRunRefusesPartialProxyAuthConfiguration(t *testing.T) {
-	t.Setenv("RUNPILOT_TRUSTED_PROXIES", "10.0.0.5")
+	t.Setenv("RUNPILOT_TRUSTED_PROXIES", "192.0.2.5")
 	t.Setenv("RUNPILOT_PROXY_AUTH_HEADER", "")
 	err := Run(context.Background(), t.TempDir(), Options{Port: 1, BindAddress: "127.0.0.1"})
 	if err == nil || !strings.Contains(err.Error(), "RUNPILOT_PROXY_AUTH_HEADER") {
