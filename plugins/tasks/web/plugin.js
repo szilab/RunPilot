@@ -128,34 +128,54 @@ export function activate(runpilot) {
     return `<span class="status ${esc(cls)}">${esc(current)}</span>`;
   }
 
+  // Compact relative time for the card; the exact time stays in the tooltip.
+  function relativeTime(value) {
+    if (!value) return "";
+    const seconds = Math.round((Date.now() - new Date(value).getTime()) / 1000);
+    if (!Number.isFinite(seconds)) return "";
+    if (seconds < 45) return "just now";
+    if (seconds < 3600) return `${Math.round(seconds / 60)} min ago`;
+    if (seconds < 86400) return `${Math.round(seconds / 3600)} h ago`;
+    return new Date(value).toLocaleDateString();
+  }
+  const timeTag = value => `<time datetime="${esc(value)}" title="${esc(fmtDate(value))}">${esc(relativeTime(value))}</time>`;
+
   function row(view) {
     const { task, status } = view;
     const id = esc(task.id), busy = state.busy.has(task.id);
-    const kv = (label, value) => `<div class="kv"><span>${esc(label)}</span><span>${esc(value)}</span></div>`;
-    let details, actions;
+    const button = (action, label, style = "secondary", disabled = busy) => `<button class="button ${style} small" data-action="${action}" data-id="${id}" ${disabled ? "disabled" : ""}>${label}</button>`;
+    let summary, facts = [], primary;
     if (task.type === "continuous") {
       const active = ["running", "stopping"].includes(status.state);
       const stopping = status.state === "stopping";
-      details = [kv("Started", active ? fmtDate(status.startedAt) : "—"), kv("PID", status.pid || "—"),
-        kv("Restart", task.restart?.mode || "on-failure"), kv("Autostart", task.autostart ? "Yes" : "No")];
-      if (status.restartCount) details.push(kv("Restarts", status.restartCount));
-      actions = active
-        ? `<button class="button secondary small" data-action="stop" data-id="${id}" ${busy || stopping ? "disabled" : ""}>Stop</button><button class="button secondary small" data-action="restart" data-id="${id}" ${busy || stopping ? "disabled" : ""}>Restart</button>`
-        : `<button class="button primary small" data-action="start" data-id="${id}" ${busy ? "disabled" : ""}>${status.state === "restarting" ? "Start now" : "Start"}</button>${status.state === "restarting" ? `<button class="button secondary small" data-action="stop" data-id="${id}" ${busy ? "disabled" : ""}>Cancel restart</button>` : ""}`;
+      summary = `Continuous · ${task.autostart ? "Auto-start" : "Manual start"}`;
+      if (active) {
+        if (status.startedAt) facts.push(`Running since ${timeTag(status.startedAt)}`);
+        if (status.pid) facts.push(`PID <strong>${esc(status.pid)}</strong>`);
+      }
+      if (status.restartCount) facts.push(`${esc(status.restartCount)} restart${status.restartCount === 1 ? "" : "s"}`);
+      primary = active
+        ? button("stop", "Stop", "secondary", busy || stopping) + button("restart", "Restart", "secondary", busy || stopping)
+        : button("start", status.state === "restarting" ? "Start now" : "Start", "primary") + (status.state === "restarting" ? button("stop", "Cancel restart") : "");
     } else {
-      details = [kv("Schedule", scheduleText(task.schedule)), kv("Schedule enabled", task.enabled ? "Yes" : "No"),
-        kv("Overlap", task.overlapPolicy || "skip"), kv("Timeout", task.timeoutSeconds ? `${task.timeoutSeconds} s` : "None"),
-        kv("Last run", fmtDate(status.lastRunAt)), kv("Last result", status.lastSuccess == null ? "—" : status.lastSuccess ? "Success" : "Failed")];
-      if (status.runningCount > 1) details.push(kv("Running now", status.runningCount));
-      actions = `<button class="button primary small" data-action="run" data-id="${id}" ${busy ? "disabled" : ""}>Run now</button>${status.state === "running" ? `<button class="button secondary small" data-action="stop" data-id="${id}" ${busy ? "disabled" : ""}>Stop</button>` : ""}`;
+      summary = `Scheduled · ${esc(scheduleText(task.schedule))}`;
+      if (!task.enabled) facts.push(`<span class="task-card-paused">Schedule paused</span>`);
+      if (status.lastRunAt) {
+        const result = status.lastSuccess == null ? "" : status.lastSuccess
+          ? ` · <span class="task-card-result ok">Succeeded</span>` : ` · <span class="task-card-result failed">Failed</span>`;
+        facts.push(`Last run ${timeTag(status.lastRunAt)}${result}`);
+      } else facts.push("Not run yet");
+      if (status.runningCount > 1) facts.push(`${esc(status.runningCount)} running`);
+      primary = button("run", "Run now", "primary") + (status.state === "running" ? button("stop", "Stop") : "");
     }
     const notes = [status.error ? `<div class="form-error" role="alert">${esc(status.error)}</div>` : "",
-      status.message && status.message !== status.state && status.state !== "running" ? `<div class="meta">${esc(status.message)}</div>` : ""].join("");
-    return `<article class="row" data-task="${id}">
-      <div class="row-head"><div><h3>${esc(task.name)}</h3><div class="meta">${task.type === "continuous" ? "Continuous" : "Scheduled"} · ${esc(task.command.path)}</div></div>${statusBadge(view)}</div>
-      ${task.description ? `<div class="meta">${esc(task.description)}</div>` : ""}
-      <div class="row-details">${details.join("")}</div>${notes}
-      <div class="row-actions">${actions}<button class="button secondary small" data-action="history" data-id="${id}">History</button><button class="button secondary small" data-action="edit" data-id="${id}" ${busy ? "disabled" : ""}>Edit</button><button class="button danger small" data-action="delete" data-id="${id}" ${busy ? "disabled" : ""}>Delete</button></div>
+      status.message && status.message !== status.state && status.state !== "running" ? `<div class="meta task-card-note">${esc(status.message)}</div>` : ""].join("");
+    return `<article class="rp-card task-card" data-task="${id}">
+      <div class="task-card-head"><h3 title="${esc(task.name)}">${esc(task.name)}</h3>${statusBadge(view)}</div>
+      <div class="task-card-summary"><span>${summary}</span><code title="${esc(task.command.path)}">${esc(task.command.path)}</code></div>
+      ${task.description ? `<p class="meta task-card-description" title="${esc(task.description)}">${esc(task.description)}</p>` : ""}
+      <div class="task-card-facts">${facts.map(fact => `<span>${fact}</span>`).join("")}</div>${notes}
+      <div class="task-card-actions"><div>${primary}</div><div>${button("history", "History", "secondary", false)}${button("edit", "Edit")}${button("delete", "Delete", "danger")}</div></div>
     </article>`;
   }
 
@@ -170,7 +190,7 @@ export function activate(runpilot) {
         <div class="row-actions"><button class="button primary small" data-action="add" data-type="continuous" ${readOnly ? "disabled" : ""}>Add continuous</button><button class="button primary small" data-action="add" data-type="scheduled" ${readOnly ? "disabled" : ""}>Add scheduled</button></div></div>
       ${state.loadError ? `<div class="notice" role="alert"><strong>Task configuration is unavailable</strong><span>${esc(state.loadError)}</span><span>The stored configuration was left untouched. Repair or remove plugins/${PLUGIN}/data/storage.json and restart RunPilot.</span></div>` : ""}
       ${state.error ? `<div class="notice" role="alert"><span>${esc(state.error)}</span></div>` : ""}
-      ${visible.length ? `<div class="row-list">${visible.map(row).join("")}</div>` : ""}
+      ${visible.length ? `<div class="task-grid">${visible.map(row).join("")}</div>` : ""}
       ${!state.loaded ? `<div class="notice" role="status">Loading tasks…</div>` : ""}
       ${state.loaded && !visible.length && !state.loadError ? `<div class="empty"><h2>${state.tasks.length ? "No matching tasks" : "No tasks yet"}</h2><p>${state.tasks.length ? "Choose another task type to see your commands." : "Add a continuous command or schedule a command to run later."}</p></div>` : ""}
     </div>`;
