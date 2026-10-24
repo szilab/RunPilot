@@ -25,7 +25,11 @@ RUN set -eu; \
     if [ -n "$VERSION" ]; then ldflags="$ldflags -X github.com/szilab/RunPilot/internal/version.Version=$VERSION"; fi; \
     CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -trimpath -ldflags="$ldflags" -o /out/runpilot ./cmd/runpilot
 
-FROM alpine:3.23
+# Alpine 3.22 keeps apk-tools 2. apk-tools 3 (Alpine 3.23+) runs package
+# scripts from memory (memfd), which some NAS kernels kill on exec, so
+# RUNPILOT_EXTRA_PACKAGES would install packages without their triggers.
+# Check that before moving to a newer Alpine release.
+FROM alpine:3.22
 # Runtime tools used by first-party plugins and common tasks:
 #   docker-cli, docker-cli-compose  Docker plugin (Compose v2)
 #   bash                            Terminal default shell, Tasks "bash" interpreter

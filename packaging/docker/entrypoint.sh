@@ -91,7 +91,13 @@ install_extra_packages() {
         return 0
     fi
     log "installing extra packages: $*"
-    if ! apk add --no-cache "$@" >&2; then
+    if apk add --no-cache "$@" >&2; then
+        return 0
+    fi
+    # apk also fails when only a package script failed; check what is usable.
+    if apk info -e "$@" >/dev/null 2>&1; then
+        log "WARNING: extra packages installed ($*), but some package scripts failed (see the apk output above)"
+    else
         log "WARNING: could not install extra packages ($*); starting without them"
     fi
 }
