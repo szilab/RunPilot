@@ -1,0 +1,8 @@
+# The image builds only the core binary; everything else stays out of the
+# build context.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!packaging/docker/

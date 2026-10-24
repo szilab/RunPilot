@@ -28,7 +28,7 @@ func TestFirstRunCreatesSessionWithoutAuthorizationToken(t *testing.T) {
 	}
 	h := server.Handler()
 	initial := ctrl.Snapshot().Server.Token
-	for _, target := range []string{"/api/v1/system", "/api/v1/ws/ticket", "/api/v1/plugins", "/api/v1/storage"} {
+	for _, target := range []string{"/api/v1/system", "/api/v1/ws/ticket", "/api/v1/plugins", "/api/v1/overview"} {
 		r := httptest.NewRecorder()
 		h.ServeHTTP(r, httptest.NewRequest(http.MethodGet, target, nil))
 		if r.Code != http.StatusPreconditionRequired {

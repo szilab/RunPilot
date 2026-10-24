@@ -102,6 +102,10 @@ type rdpTarget struct {
 	ID      string     `json:"id"`
 	Name    string     `json:"name"`
 	Options rdpOptions `json:"options"`
+	// MACAddress is configured for Wake-on-LAN; DiscoveredMAC is learned
+	// while the target is reachable and is never set by clients.
+	MACAddress    string `json:"macAddress,omitempty"`
+	DiscoveredMAC string `json:"discoveredMac,omitempty"`
 }
 
 type storedTargets struct {
@@ -229,6 +233,10 @@ func (p *plugin) handle(method string, raw json.RawMessage) (any, *rpcError) {
 		return p.handleVNC(method, raw)
 	}
 	switch method {
+	case "remote.targets.status":
+		return p.targetStatuses()
+	case "remote.targets.wake":
+		return p.wakeTarget(raw)
 	case "rdp.settings.get":
 		settings, failure := p.readSettings()
 		if failure != nil {
@@ -357,10 +365,12 @@ func (p *plugin) readTargets() (storedTargets, *rpcError) {
 		}
 		seen[target.ID] = true
 		options, failure := normalizeOptions(target.Options)
-		if failure != nil {
+		mac, macOK := normalizeMAC(target.MACAddress)
+		discovered, discoveredOK := normalizeMAC(target.DiscoveredMAC)
+		if failure != nil || !macOK || !discoveredOK {
 			return storedTargets{}, fail("invalid_configuration", "stored RDP targets are invalid")
 		}
-		target.Options = options
+		target.Options, target.MACAddress, target.DiscoveredMAC = options, mac, discovered
 	}
 	return stored, nil
 }
@@ -409,6 +419,11 @@ func (p *plugin) saveTarget(raw json.RawMessage) (any, *rpcError) {
 		return nil, failure
 	}
 	target.Options = options
+	mac, ok := normalizeMAC(target.MACAddress)
+	if !ok {
+		return nil, fail("invalid_argument", "MAC address must look like aa:bb:cc:dd:ee:ff")
+	}
+	target.MACAddress, target.DiscoveredMAC = mac, ""
 	stored, failure := p.readTargets()
 	if failure != nil {
 		return nil, failure
@@ -439,6 +454,8 @@ func (p *plugin) saveTarget(raw json.RawMessage) (any, *rpcError) {
 		found := false
 		for index := range stored.Targets {
 			if stored.Targets[index].ID == target.ID {
+				previous := stored.Targets[index]
+				target.DiscoveredMAC = discoveredFor(previous.Options.Host, previous.DiscoveredMAC, target.Options.Host)
 				stored.Targets[index] = target
 				found = true
 				break

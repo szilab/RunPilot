@@ -75,9 +75,15 @@ func TestCapabilityBridgeReturnsStructuredResults(t *testing.T) {
 	if response.Error == nil || response.Error.Code != "unknown_capability" {
 		t.Fatalf("response = %#v", response)
 	}
-	response = runtime.dispatchCapability(context.Background(), []byte(`{"apiVersion":1,"capability":"config.set","params":{"key":"x"}}`))
+	response = runtime.dispatchCapability(context.Background(), []byte(`{"apiVersion":1,"capability":"log.write","params":{"message":" "}}`))
 	if response.Error == nil || response.Error.Code != "invalid_argument" {
 		t.Fatalf("response = %#v", response)
+	}
+	for _, removed := range []string{"config.get", "config.set"} {
+		response = runtime.dispatchCapability(context.Background(), []byte(`{"apiVersion":1,"capability":"`+removed+`","params":{"key":"x"}}`))
+		if response.Error == nil || response.Error.Code != "unknown_capability" {
+			t.Fatalf("%s response = %#v", removed, response)
+		}
 	}
 }
 
@@ -332,10 +338,6 @@ func assertSystemABIV2Module(t *testing.T, wasmPath string) {
 type testHost struct{}
 
 func (testHost) Log(context.Context, string) error { return nil }
-func (testHost) ConfigGet(context.Context, string) (json.RawMessage, error) {
-	return json.RawMessage(`null`), nil
-}
-func (testHost) ConfigSet(context.Context, string, json.RawMessage) error { return nil }
 func (testHost) SystemStatus(context.Context) (json.RawMessage, error) {
 	return json.RawMessage(`{}`), nil
 }

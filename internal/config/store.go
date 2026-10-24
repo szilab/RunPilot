@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/szilab/RunPilot/internal/model"
@@ -196,6 +197,16 @@ func (s *Store) ChangeAdminPassword(username, currentHash, nextHash string) erro
 
 func (s *Store) SetBearerAuth(enabled bool) error {
 	return s.Update(func(cfg *model.Config) error { cfg.Server.BearerAuthEnabled = enabled; return nil })
+}
+
+// SetProxyAuth stores the reverse-proxy single sign-on settings. Callers
+// validate the values; empty values disable the feature.
+func (s *Store) SetProxyAuth(trustedProxies, header string) error {
+	return s.Update(func(cfg *model.Config) error {
+		cfg.Server.ProxyAuthTrustedProxies = strings.TrimSpace(trustedProxies)
+		cfg.Server.ProxyAuthHeader = strings.TrimSpace(header)
+		return nil
+	})
 }
 
 func (s *Store) SetWebSocketPayloadMode(mode string) error {

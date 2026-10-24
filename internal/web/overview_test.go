@@ -70,7 +70,7 @@ func TestSystemEndpointProvidesCapabilities(t *testing.T) {
 	}
 }
 
-func TestHiddenLegacyFeaturesKeepTheirAuthenticatedAPIs(t *testing.T) {
+func TestHiddenLegacyFeaturesAreNotRegistered(t *testing.T) {
 	ctrl, err := openReadyController(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -80,35 +80,42 @@ func TestHiddenLegacyFeaturesKeepTheirAuthenticatedAPIs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/processes", nil)
-	request.Header.Set("Authorization", "Bearer "+ctrl.Snapshot().Server.Token)
-	removed := httptest.NewRecorder()
-	server.Handler().ServeHTTP(removed, request)
-	if removed.Code != http.StatusNotFound {
-		t.Errorf("removed Tasks process API = %d", removed.Code)
-	}
-	runsRequest := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil)
-	runsRequest.Header.Set("Authorization", "Bearer "+ctrl.Snapshot().Server.Token)
-	runsResponse := httptest.NewRecorder()
-	server.Handler().ServeHTTP(runsResponse, runsRequest)
-	if runsResponse.Code != http.StatusNotFound {
-		t.Errorf("removed legacy history API = %d", runsResponse.Code)
-	}
-	for _, path := range []string{
-		"/api/v1/jobs", "/api/v1/storage", "/api/v1/software/providers", "/api/v1/overview",
-	} {
+	token := ctrl.Snapshot().Server.Token
+	get := func(handler http.Handler, path string, authorized bool) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
-		request.Header.Set("Authorization", "Bearer "+ctrl.Snapshot().Server.Token)
+		if authorized {
+			request.Header.Set("Authorization", "Bearer "+token)
+		}
 		response := httptest.NewRecorder()
-		server.Handler().ServeHTTP(response, request)
-		if response.Code != http.StatusOK {
-			t.Errorf("%s = %d: %s", path, response.Code, response.Body.String())
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	production := server.Handler()
+	for _, path := range []string{"/api/v1/processes", "/api/v1/runs"} {
+		if response := get(production, path, true); response.Code != http.StatusNotFound {
+			t.Errorf("removed API %s = %d", path, response.Code)
 		}
 	}
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/docker", nil)
-	response := httptest.NewRecorder()
-	server.Handler().ServeHTTP(response, request)
-	if response.Code != http.StatusUnauthorized {
+	legacyPaths := []string{"/api/v1/jobs", "/api/v1/storage", "/api/v1/software/providers", "/api/v1/docker", "/api/v1/docker/attach", "/api/v1/remote/sessions/example/client/"}
+	for _, path := range legacyPaths {
+		if response := get(production, path, true); response.Code != http.StatusNotFound {
+			t.Errorf("unregistered legacy API %s = %d: %s", path, response.Code, response.Body.String())
+		}
+	}
+	if response := get(production, "/api/v1/overview", true); response.Code != http.StatusOK {
+		t.Errorf("/api/v1/overview = %d: %s", response.Code, response.Body.String())
+	}
+
+	// The handlers remain in the codebase until plugin parity; keep them
+	// authenticated and working when the routes are mounted.
+	server.legacyRoutes = true
+	legacy := server.Handler()
+	for _, path := range []string{"/api/v1/jobs", "/api/v1/storage", "/api/v1/software/providers"} {
+		if response := get(legacy, path, true); response.Code != http.StatusOK {
+			t.Errorf("legacy %s = %d: %s", path, response.Code, response.Body.String())
+		}
+	}
+	if response := get(legacy, "/api/v1/docker", false); response.Code != http.StatusUnauthorized {
 		t.Errorf("Docker legacy API authentication = %d: %s", response.Code, response.Body.String())
 	}
 }

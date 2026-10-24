@@ -33,7 +33,7 @@ func TestOverviewFrontendContracts(t *testing.T) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Overview frontend: %v\n%s", err, output)
 	}
-	plugins := exec.Command("node", "--test", "plugins/tasks/web/plugin.test.mjs", "plugins/docker/web/plugin.test.mjs")
+	plugins := exec.Command("node", "--test", "plugins/tasks/web/plugin.test.mjs", "plugins/docker/web/plugin.test.mjs", "plugins/remote/web/target-status.test.mjs")
 	plugins.Dir = filepath.Join("..", "..")
 	if output, err := plugins.CombinedOutput(); err != nil {
 		t.Fatalf("Overview plugin frontend: %v\n%s", err, output)

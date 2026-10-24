@@ -122,6 +122,10 @@ type ServerConfig struct {
 	AdminPasswordHash    string `json:"-" yaml:"adminPasswordHash,omitempty"`
 	BearerAuthEnabled    bool   `json:"bearerAuthEnabled" yaml:"bearerAuthEnabled"`
 	WebSocketPayloadMode string `json:"websocketPayloadMode,omitempty" yaml:"websocketPayloadMode,omitempty"`
+	// Reverse-proxy single sign-on. RUNPILOT_TRUSTED_PROXIES and
+	// RUNPILOT_PROXY_AUTH_HEADER replace both values when either is set.
+	ProxyAuthTrustedProxies string `json:"-" yaml:"proxyAuthTrustedProxies,omitempty"`
+	ProxyAuthHeader         string `json:"-" yaml:"proxyAuthHeader,omitempty"`
 }
 
 type Config struct {
@@ -374,7 +378,21 @@ type HostStatus struct {
 	MemoryTotalBytes  uint64       `json:"memoryTotalBytes"`
 	MemoryFreeBytes   uint64       `json:"memoryFreeBytes"`
 	Disks             []DiskStatus `json:"disks"`
-	Error             string       `json:"error,omitempty"`
+	// Container is set when RunPilot itself runs in a container. CPU, memory
+	// and filesystem readings then describe the container, not the host.
+	Container *ContainerStatus `json:"container,omitempty"`
+	Error     string           `json:"error,omitempty"`
+}
+
+// ContainerStatus describes the container RunPilot runs in. Zero limits mean
+// the container may use the whole host for that resource.
+type ContainerStatus struct {
+	Runtime          string  `json:"runtime"`
+	CPULimit         float64 `json:"cpuLimit,omitempty"`
+	MemoryLimitBytes uint64  `json:"memoryLimitBytes,omitempty"`
+	HostCPUCount     int     `json:"hostCpuCount,omitempty"`
+	HostMemoryBytes  uint64  `json:"hostMemoryBytes,omitempty"`
+	UptimeSeconds    int64   `json:"uptimeSeconds,omitempty"`
 }
 
 type HealthIssue struct {

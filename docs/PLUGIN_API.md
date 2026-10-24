@@ -11,7 +11,7 @@ The following versions are deliberately independent:
 
 - manifest schema: `apiVersion: runpilot.plugin/v1`;
 - raw WASM ABI: `requires.runpilotApi` (currently ABI 1 or 2);
-- backend contract: SemVer range, host currently `1.0.0`;
+- backend contract: SemVer range, host currently `1.1.0` (`network.probe`, `network.neighbor.lookup` and `network.wake` need `>=1.1.0`);
 - frontend contract: SemVer range, host currently `1.0.0`;
 - plugin package: independent strict SemVer.
 
@@ -163,10 +163,41 @@ The capability protocol version is separate from the raw WASM ABI.
 
 Implemented generic capability work includes logging, host status and identity,
 plugin-namespaced JSON storage and workspace files, plugin-owned scheduler registrations,
-asynchronous and bounded synchronous process execution, owner-scoped execution history, browser
-event publication, and owner-scoped TCP/TLS network streams. Config
-hooks exist in the host interface but are not yet a general plugin configuration
-service. Add new capability methods only for real reusable plugin needs.
+asynchronous and bounded synchronous process execution, interactive process
+sessions, owner-scoped execution history, browser event publication, and
+owner-scoped TCP/TLS network streams. There is no plugin configuration
+capability; plugins keep their settings in `storage.*`. Add new capability
+methods only for real reusable plugin needs.
+
+The published set is defined by one table in
+`internal/plugins/capabilities.go`; a contract test keeps this index in sync.
+An unlisted name returns `unknown_capability`.
+
+| Family | Capabilities |
+| --- | --- |
+| Logging | `log.write` `{message}` |
+| System | `system.status`, `system.identity` (no parameters) |
+| Storage | `storage.get` `{key}`, `storage.set` `{key, value}` — owner-scoped JSON values; keys are 1-128 characters of `[A-Za-z0-9._-]` |
+| Scheduler | `scheduler.register`, `scheduler.validate`, `scheduler.remove`, `scheduler.list` |
+| Processes | `process.start`, `process.run`, `process.status` `{id}`, `process.terminate` `{id}` |
+| Process sessions | `process.session.create`, `process.session.write`, `process.session.resize`, `process.session.status`, `process.session.terminate` |
+| Workspace | `workspace.list`, `workspace.stat`, `workspace.read`, `workspace.write`, `workspace.mkdir`, `workspace.remove` |
+| History | `history.begin`, `history.append`, `history.finish`, `history.list`, `history.get`, `history.output` |
+| Events | `events.publish` `{event, data}` |
+| Network streams | `network.stream.open`, `network.stream.read`, `network.stream.write`, `network.stream.close` |
+| Network tools | `network.probe`, `network.neighbor.lookup`, `network.wake` (backend contract 1.1 or later) |
+| Browser publication | `browser.runtime.register`, `browser.runtime.remove`, `browser.publication.register`, `browser.publication.remove`, `browser.stream.ticket`, `http.gateway.open`, `http.gateway.close` |
+
+### Call serialization
+
+The host serializes every call and event into one plugin runtime: while
+`runpilot_call` or `runpilot_event` runs, other browser RPCs and host events for
+the same plugin wait. Each invocation is bounded by the 120-second call timeout.
+Plugin state therefore needs no locking, but a slow RPC delays that plugin's
+other requests and event delivery. Keep handlers short: start long work with
+`process.start` or `process.session.create` and react to their events instead
+of waiting inside a call; `process.run` is only for short bounded commands.
+Other plugins are unaffected.
 
 Validation-style failures (bad interpreter, invalid schedule, unknown
 execution/process) return a stable code such as `invalid_argument` or
@@ -231,6 +262,27 @@ newest bytes rather than the first bytes, useful for bounded diagnostics.
 Timeout kills the process tree on Linux and Windows. A missing executable
 returns `not_found`; a nonzero exit returns a successful capability response
 with `success: false` and the exit code; a timeout sets `timedOut: true`.
+
+### Interactive process sessions
+
+`process.session.*` runs one PTY-backed (Linux PTY, Windows ConPTY) process
+owned by the calling plugin, for terminal-like features.
+
+```text
+process.session.create    {command, args?, workingDirectory?, environment?,
+                           size: {rows, columns}} -> {id, state}
+process.session.write     {id, data}            # base64, at most 16 KiB decoded
+process.session.resize    {id, rows, columns}   # 1-300 rows, 1-500 columns
+process.session.status    {id} -> {id, state, exitCode?, reason?}
+process.session.terminate {id, force?} -> status  # force=false allows a 5 s grace
+```
+
+A plugin may own 8 sessions (32 in total) with a 12-hour maximum lifetime.
+Output arrives as ordered `process.session.output` events
+(`{id, sequence, data}`, base64); `process.session.exit` and
+`process.session.error` report the end. Session output is not lossy: when the
+event queue cannot accept it, the session fails instead of dropping bytes.
+Sessions stop when their owner plugin stops.
 
 ### Plugin workspace
 
@@ -325,6 +377,35 @@ negotiation while leaving subsequent bytes available to a browser attachment.
 Active stream counts and retained closed records are bounded. WASM receives no
 Go connection or socket handle.
 
+### Network tools
+
+Stateless helpers that grant nothing beyond what `network.stream.open` already
+allows. They run in the RunPilot process, so in a container they see the
+container's network: use host networking for LAN discovery and Wake-on-LAN.
+
+```text
+network.probe {targets: [{host, port}], timeoutMilliseconds?}
+  -> {results: [{host, port, state, latencyMilliseconds?}]}
+network.neighbor.lookup {host, refresh?} -> {ip, mac}
+network.wake {mac, address?, port?} -> {mac, port, sentTo}
+```
+
+`network.probe` opens and immediately closes a TCP connection to up to 64
+targets in parallel (default timeout 1500 ms, 100–5000 ms). `state` is `open`,
+`closed` (the host answered but refused the port), `unreachable` (timeout or
+no route) or `unresolved` (name lookup failed); results keep request order.
+
+`network.neighbor.lookup` resolves an IPv4 host and reads the operating
+system's neighbor (ARP) table: `/proc/net/arp` on Linux, `SendARP` on Windows.
+With `refresh: true` and no entry, it first sends one empty UDP datagram to the
+host's port 9 so the system resolves the address. It returns `not_found` for
+hosts that are offline or outside the local network and `unavailable` on
+other platforms.
+
+`network.wake` sends a Wake-on-LAN magic packet to UDP port 9 (or `port`).
+Without `address` it targets 255.255.255.255 and every local interface's
+directed broadcast address; `sentTo` lists where it was sent.
+
 ### Browser publication
 
 `events.publish` publishes a plugin event through the shared application
@@ -414,8 +495,8 @@ After a settings save succeeds, call `runpilot.settings.close()` to dismiss its
 Settings overlay. Do not close the overlay on validation or save errors.
 
 Overview widget registration remains part of the compatible frontend 1.x
-surface. Widgets appear below the built-in host metrics and follow Overview
-visibility. The following lifecycle applies:
+surface. First-party plugins deliberately do not use it. Widgets appear below
+the built-in host metrics and follow Overview visibility. The following lifecycle applies:
 
 ```javascript
 const unregister = runpilot.overview.register({
@@ -733,7 +814,7 @@ socket, host queues to 1 MiB per socket, with at most 16 MiB queued per gateway;
 sockets close on excess or stalled transport. Parent stream close retires every
 socket; individual failures do not cancel unrelated HTTP exchanges or channels.
 
-Tunnel wire version 2 is independent of backend contract `1.0.0` and
+Tunnel wire version 2 is independent of the backend contract version and
 `web.apps` package SemVer `0.2.0`; it does not change the raw WASM ABI or the
 RunPilot application version.
 

@@ -230,7 +230,10 @@ function updatePageHeading() {
 function updateHostSummary(data) {
   const host=data?.host||{};
   const metrics=RunPilotDashboard.readings(data), {size,uptime}=RunPilotDashboard;
-  const info=[["Operating system",host.os||"Unavailable"],["Architecture",host.architecture||"Unavailable"],["Processor",host.cpuModel||"Unavailable"],["Logical CPUs",host.cpuCount||"Unavailable"],["Total memory",metrics.totalMemory?size(metrics.totalMemory):"Unavailable"],["Host uptime",uptime(data.hostUptimeSeconds)],["RunPilot",systemInfo?.version||"Unavailable"]];
+  const container=host.container;
+  const info=container
+    ? [["Operating system",host.os||"Unavailable"],["Runtime",RunPilotDashboard.containerLabel(container)],["Architecture",host.architecture||"Unavailable"],["Processor",host.cpuModel||"Unavailable"],["Container CPU limit",container.cpuLimit>0?String(container.cpuLimit):"None"],["Host CPUs",container.hostCpuCount||"Unavailable"],["Container memory limit",container.memoryLimitBytes>0?size(container.memoryLimitBytes):"None"],["Host memory",container.hostMemoryBytes?size(container.hostMemoryBytes):"Unavailable"],["Container uptime",uptime(container.uptimeSeconds)],["Host uptime",uptime(data.hostUptimeSeconds)],["RunPilot",systemInfo?.version||"Unavailable"]]
+    : [["Operating system",host.os||"Unavailable"],["Architecture",host.architecture||"Unavailable"],["Processor",host.cpuModel||"Unavailable"],["Logical CPUs",host.cpuCount||"Unavailable"],["Total memory",metrics.totalMemory?size(metrics.totalMemory):"Unavailable"],["Host uptime",uptime(data.hostUptimeSeconds)],["RunPilot",systemInfo?.version||"Unavailable"]];
   $("settingsHostFacts").innerHTML=info.map(([name,value])=>`<div><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
   if (currentPage === "overview") updatePageHeading();
 }
@@ -720,12 +723,26 @@ async function loadSoftwareView(force = false) {
 }
 function softwareSearch() { loadSoftwareView(true); }
 
+function renderProxyAuth(state) {
+  state = state || {};
+  const managed = state.source === "environment";
+  $("proxyAuthAdmin").textContent = systemInfo?.username || "the administrator user name";
+  $("proxyAuthTrustedProxies").value = state.trustedProxies || "";
+  $("proxyAuthHeader").value = state.header || "";
+  for (const id of ["proxyAuthTrustedProxies", "proxyAuthHeader", "proxyAuthSave"]) $(id).disabled = managed;
+  $("proxyAuthSave").hidden = managed;
+  $("proxyAuthStatus").textContent = managed
+    ? "Set by the RUNPILOT_TRUSTED_PROXIES and RUNPILOT_PROXY_AUTH_HEADER environment variables. Change them in the service or container configuration."
+    : state.enabled ? "On." : "Off.";
+}
+
 async function loadSystemInfo() {
   systemInfo = await api("api/v1/system");
   $("systemVersion").textContent = systemInfo?.version ? `v${systemInfo.version}` : "";
   window.runPilotWebSocketPayloadMode = systemInfo?.websocketPayloadMode || "disabled";
   if (connectionOnline) setConnected(true);
   $("bearerAuthEnabled").checked=!!systemInfo.bearerAuthEnabled;
+  renderProxyAuth(systemInfo.proxyAuth);
   $("websocketPayloadMode").value=systemInfo.websocketPayloadModeConfigured || systemInfo.websocketPayloadMode || "disabled";
   const username = systemInfo.username || "Administrator";
   $("accountName").textContent = username;
@@ -821,6 +838,15 @@ $("loginForm").addEventListener("submit", async e => {
 
 $("passwordChangeForm").addEventListener("submit",async e=>{e.preventDefault();const message=$("passwordChangeError");message.classList.add("hidden");try{await api("api/v1/auth/password",{method:"POST",body:JSON.stringify({current:$("currentPassword").value,next:$("nextPassword").value,confirm:$("confirmPassword").value})});authenticated=false;hostDashboard.stop();location.reload();}catch(error){message.textContent=error.message;message.classList.remove("hidden");}});
 $("logoutButton").addEventListener("click",async()=>{hostDashboard.stop();try{await api("api/v1/auth/logout",{method:"POST"});}finally{authenticated=false;location.reload();}});
+$("proxyAuthForm").addEventListener("submit",async event=>{
+  event.preventDefault();
+  const error=$("proxyAuthError"); error.classList.add("hidden");
+  try {
+    const state=await api("api/v1/admin/proxy-auth",{method:"PUT",body:JSON.stringify({trustedProxies:$("proxyAuthTrustedProxies").value,header:$("proxyAuthHeader").value})});
+    if (systemInfo) systemInfo.proxyAuth=state;
+    renderProxyAuth(state); toast("Proxy sign-in settings saved");
+  } catch (reason) { error.textContent=reason.message; error.classList.remove("hidden"); }
+});
 $("bearerAuthEnabled").addEventListener("change",async()=>{try{const result=await api("api/v1/admin/bearer-auth",{method:"PUT",body:JSON.stringify({enabled:$("bearerAuthEnabled").checked})});$("bearerAuthEnabled").checked=result.enabled;}catch(error){$("bearerAuthEnabled").checked=!$("bearerAuthEnabled").checked;toast(error.message);}});
 
 $("websocketPayloadModeForm").addEventListener("submit",async event=>{

@@ -30,6 +30,10 @@ const (
 type authSession struct {
 	csrfHash string
 	expires  time.Time
+	// proxy marks sessions created from a trusted proxy's user header. The
+	// proxy recreates them on demand, so they are evicted first when the
+	// session table is full.
+	proxy bool
 }
 
 func hashPassword(password string) (string, error) {
@@ -96,13 +100,21 @@ func authSessionKey(value string) string {
 }
 
 func (s *Server) issueSession(w http.ResponseWriter, r *http.Request) string {
+	sessionKey, _, _ := s.createSession(w, r, false)
+	return sessionKey
+}
+
+// createSession stores a new browser session and sets its cookies. It
+// returns the session key and the raw cookie and CSRF values, or empty
+// strings when no session could be created.
+func (s *Server) createSession(w http.ResponseWriter, r *http.Request, proxy bool) (string, string, string) {
 	id, err := randomSecret(32)
 	if err != nil {
-		return ""
+		return "", "", ""
 	}
 	csrf, err := randomSecret(24)
 	if err != nil {
-		return ""
+		return "", "", ""
 	}
 	sessionKey := authSessionKey(id)
 	s.sessionMu.Lock()
@@ -119,7 +131,18 @@ func (s *Server) issueSession(w http.ResponseWriter, r *http.Request) string {
 			delete(s.sessionConnections, key)
 		}
 	}
-	if len(s.sessions) >= 128 {
+	var evicted string
+	if len(s.sessions) >= maxPersistedAuthSessions {
+		evicted = s.oldestProxySessionLocked()
+		if evicted != "" {
+			delete(s.sessions, evicted)
+			for _, closeConnection := range s.sessionConnections[evicted] {
+				expiredConnections = append(expiredConnections, closeConnection)
+			}
+			delete(s.sessionConnections, evicted)
+		}
+	}
+	if len(s.sessions) >= maxPersistedAuthSessions {
 		if expired {
 			_ = s.saveSessionsLocked()
 		}
@@ -127,20 +150,23 @@ func (s *Server) issueSession(w http.ResponseWriter, r *http.Request) string {
 		for _, closeConnection := range expiredConnections {
 			closeConnection()
 		}
-		return ""
+		return "", "", ""
 	}
-	s.sessions[sessionKey] = authSession{csrfHash: authSessionKey(csrf), expires: now.Add(adminSessionTTL)}
+	s.sessions[sessionKey] = authSession{csrfHash: authSessionKey(csrf), expires: now.Add(adminSessionTTL), proxy: proxy}
 	if err := s.saveSessionsLocked(); err != nil {
 		delete(s.sessions, sessionKey)
 		s.sessionMu.Unlock()
 		for _, closeConnection := range expiredConnections {
 			closeConnection()
 		}
-		return ""
+		return "", "", ""
 	}
 	s.sessionMu.Unlock()
 	for _, closeConnection := range expiredConnections {
 		closeConnection()
+	}
+	if evicted != "" {
+		s.revokeSessionTickets(evicted)
 	}
 	secure := requestScheme(r) == "https"
 	path := browserpath.Escape(s.basePath)
@@ -150,7 +176,20 @@ func (s *Server) issueSession(w http.ResponseWriter, r *http.Request) string {
 	w.Header().Set("Cache-Control", "no-store")
 	http.SetCookie(w, &http.Cookie{Name: adminSessionCookie, Value: id, Path: path, HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, Expires: now.Add(adminSessionTTL), MaxAge: int(adminSessionTTL.Seconds())})
 	http.SetCookie(w, &http.Cookie{Name: csrfCookie, Value: csrf, Path: path, HttpOnly: false, Secure: secure, SameSite: http.SameSiteLaxMode, Expires: now.Add(adminSessionTTL), MaxAge: int(adminSessionTTL.Seconds())})
-	return sessionKey
+	return sessionKey, id, csrf
+}
+
+// oldestProxySessionLocked returns the proxy-created session that expires
+// first, or "" when there is none. sessionMu must be held.
+func (s *Server) oldestProxySessionLocked() string {
+	oldest := ""
+	var oldestExpiry time.Time
+	for key, session := range s.sessions {
+		if session.proxy && (oldest == "" || session.expires.Before(oldestExpiry)) {
+			oldest, oldestExpiry = key, session.expires
+		}
+	}
+	return oldest
 }
 
 func (s *Server) clearSession(w http.ResponseWriter, r *http.Request) error {

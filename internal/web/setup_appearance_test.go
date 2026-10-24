@@ -25,7 +25,7 @@ func TestSetupAppearanceAssetsRespectBasePathAndSetupGate(t *testing.T) {
 			}
 			s.SetRestartHandler(func() {})
 			prefix := strings.TrimSuffix(base, "/")
-			for _, asset := range []string{"styles.css", "workspace.css", "runpilot-mark.svg", "workspace-alpine.png", "fonts/InterVariable.woff2"} {
+			for _, asset := range []string{"styles.css", "workspace.css", "runpilot-mark.svg", "workspace-alpine.webp", "fonts/InterVariable.woff2"} {
 				response := httptest.NewRecorder()
 				s.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, prefix+"/"+asset, nil))
 				if response.Code != http.StatusOK || response.Body.Len() == 0 {

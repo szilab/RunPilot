@@ -16,6 +16,12 @@
     const days = Math.floor(seconds / 86400), hours = Math.floor(seconds % 86400 / 3600), minutes = Math.floor(seconds % 3600 / 60);
     return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes}m` : `${Math.max(1, minutes)}m`;
   };
+  const runtimeNames = {docker:"Docker container", podman:"Podman container"};
+  // Container status means CPU, memory and the root filesystem describe the
+  // container RunPilot runs in, not the whole host.
+  const containerLabel = container => container ? runtimeNames[container.runtime] || (container.runtime && container.runtime !== "container" ? `Container (${container.runtime})` : "Container") : "";
+  const cpuCount = value => `${value} ${Number(value) === 1 ? "CPU" : "CPUs"}`;
+  const filesystemTitle = (disk, container) => container && disk?.path === "/" ? "Container filesystem" : disk?.path || "Filesystem";
   const historyLimit = 32;
   function historyStorage() {
     try { return global.localStorage; } catch { return null; }
@@ -70,26 +76,40 @@
     if (model) { const text = element("p", "host-dashboard-model", model); text.title = model; node.append(text); }
     return node;
   }
-  function diskCard(disk) {
-    const total=Number(disk.totalBytes)||0, free=Math.min(total,Math.max(0,Number(disk.freeBytes)||0)), used=total-free;
+  function diskCard(disk, container) {
+    const name=filesystemTitle(disk,container), total=Number(disk.totalBytes)||0, free=Math.min(total,Math.max(0,Number(disk.freeBytes)||0)), used=total-free;
     const node=element("article","host-dashboard-card host-metric host-filesystem");node.dataset.filesystem=disk.path || "";
-    const heading=element("div","host-metric-heading"), title=element("h2","host-dashboard-title",disk.path || "Filesystem"), glyph=element("span","feature-icon");
-    title.title=disk.path || "Filesystem";glyph.innerHTML=icon("storage");heading.append(title,glyph);
+    const heading=element("div","host-metric-heading"), title=element("h2","host-dashboard-title",name), glyph=element("span","feature-icon");
+    title.title=disk.path || name;glyph.innerHTML=icon("storage");heading.append(title,glyph);
     const visual=element("div","host-metric-visual"), capacity=element("div","host-filesystem-capacity"), reading=element("div","host-metric-reading");
-    capacity.append(bar(disk.path || "Filesystem",fraction(used,total)));
+    capacity.append(bar(name,fraction(used,total)));
     reading.append(element("strong","host-dashboard-value",percentage(fraction(used,total))),element("span","host-metric-current","Used"));
     visual.append(capacity,reading);
     node.append(heading,visual,element("p","host-dashboard-detail",`${size(used)} / ${size(total)}`),element("p","host-dashboard-model",`${size(free)} available`));
     return node;
   }
+  function containerDetails(host) {
+    const container = host.container, hostCPUs = container.hostCpuCount || 0, hostMemory = container.hostMemoryBytes || 0;
+    const cpu = container.cpuLimit > 0 ? `Limit ${cpuCount(container.cpuLimit)}` : host.cpuCount > 0 ? `No CPU limit · ${cpuCount(host.cpuCount)} available` : "CPU metrics unavailable";
+    const cpuContext = hostCPUs ? `Host has ${cpuCount(hostCPUs)}` : host.cpuModel || "";
+    const memoryContext = container.memoryLimitBytes > 0 ? "Container memory limit" : hostMemory ? `No memory limit · ${size(hostMemory)} host memory` : "No memory limit";
+    return {cpu, cpuContext, memoryContext};
+  }
   function renderStatus(root, data, {samples = []} = {}) {
-    const host = data?.host || {}, values = readings(data);
+    const host = data?.host || {}, values = readings(data), container = host.container || null;
     const top = element("div", "host-dashboard-top");
     const load = Array.isArray(host.loadAverage) && host.loadAverage.length === 3 ? `Load ${host.loadAverage.map(value => Number(value).toFixed(2)).join(" / ")}` : "";
-    top.append(metricCard("CPU", "cpu", values.cpu, [host.cpuCount > 0 ? `${host.cpuCount} logical CPUs` : "CPU metrics unavailable"], load || host.cpuModel || "", samples));
-    top.append(metricCard("Memory", "memory", values.memory, [values.totalMemory ? `${size(values.totalMemory-values.freeMemory)} / ${size(values.totalMemory)}` : "Memory metrics unavailable"], values.totalMemory ? `${size(values.freeMemory)} available` : "", samples));
+    const memoryUsage = values.totalMemory ? `${size(values.totalMemory-values.freeMemory)} / ${size(values.totalMemory)}` : "Memory metrics unavailable";
+    if (container) {
+      const details = containerDetails(host);
+      top.append(metricCard("Container CPU", "cpu", values.cpu, [details.cpu], details.cpuContext, samples));
+      top.append(metricCard("Container memory", "memory", values.memory, [memoryUsage], details.memoryContext, samples));
+    } else {
+      top.append(metricCard("CPU", "cpu", values.cpu, [host.cpuCount > 0 ? `${host.cpuCount} logical CPUs` : "CPU metrics unavailable"], load || host.cpuModel || "", samples));
+      top.append(metricCard("Memory", "memory", values.memory, [memoryUsage], values.totalMemory ? `${size(values.freeMemory)} available` : "", samples));
+    }
     const disk = values.primary;
-    top.append(metricCard("Storage", "storage", values.storage, [disk ? `${size(Math.max(0,disk.totalBytes-disk.freeBytes))} / ${size(disk.totalBytes)}` : "Storage metrics unavailable"], disk ? disk.path : "", samples));
+    top.append(metricCard("Storage", "storage", values.storage, [disk ? `${size(Math.max(0,disk.totalBytes-disk.freeBytes))} / ${size(disk.totalBytes)}` : "Storage metrics unavailable"], disk ? filesystemTitle(disk, container) : "", samples));
     if (host.gpuAvailable) {
       const used = Math.min(host.gpuMemoryTotalBytes || 0, Math.max(0, host.gpuMemoryUsedBytes || 0));
       const gpu = metricCard("GPU", "gpu", values.gpu, [host.gpuMemoryTotalBytes > 0 ? `${size(used)} / ${size(host.gpuMemoryTotalBytes)} video memory` : "Utilization"], host.gpuName || "", samples);
@@ -100,10 +120,14 @@
     storage.append(element("h2","host-filesystems-title","Filesystems"));
     if (values.disks.length) {
       const grid = element("div", "host-dashboard-top host-dashboard-disks");grid.dataset.count=top.dataset.count;
-      for (const disk of values.disks) grid.append(diskCard(disk));
+      for (const disk of values.disks) grid.append(diskCard(disk, container));
       storage.append(grid);
     } else storage.append(element("p", "host-dashboard-empty", "No filesystem metrics available."));
-    root.replaceChildren(top, storage);
+    if (container) {
+      const notice = element("p", "host-dashboard-context", `Running in a ${containerLabel(container).replace(/^Container/, "container")}. CPU and memory show this container's own usage and limits; host-wide load is not shown.`);
+      notice.dataset.runtime = container.runtime || "container";
+      root.replaceChildren(notice, top, storage);
+    } else root.replaceChildren(top, storage);
   }
   class HostDashboard {
     constructor(root, api, {interval = 8000, setIntervalFn = (callback, delay) => setInterval(callback, delay), clearIntervalFn = id => clearInterval(id), storage = historyStorage(), storageKey = historyStorageKey(), nowFn = () => Date.now(), onUpdate} = {}) {
@@ -166,6 +190,6 @@
       finally {if(generation===this.generation){this.busy=false;this.controller=null;}}
     }
   }
-  global.RunPilotDashboard={HostDashboard,renderStatus,readings,icon,size,uptime};
+  global.RunPilotDashboard={HostDashboard,renderStatus,readings,icon,size,uptime,containerLabel};
   if(typeof module!=="undefined")module.exports=global.RunPilotDashboard;
 })(typeof window==="undefined"?globalThis:window);

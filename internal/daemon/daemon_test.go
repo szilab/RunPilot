@@ -1,6 +1,10 @@
 package daemon
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
 
 func TestListenAddrBindAddressOverride(t *testing.T) {
 	tests := []struct {
@@ -32,5 +36,14 @@ func TestListenAddrRejectsInvalidBindAddress(t *testing.T) {
 		if _, err := listenAddr("127.0.0.1:9070", 0, 9070, address); err == nil {
 			t.Errorf("listenAddr accepted bind address %q", address)
 		}
+	}
+}
+
+func TestRunRefusesPartialProxyAuthConfiguration(t *testing.T) {
+	t.Setenv("RUNPILOT_TRUSTED_PROXIES", "10.0.0.5")
+	t.Setenv("RUNPILOT_PROXY_AUTH_HEADER", "")
+	err := Run(context.Background(), t.TempDir(), Options{Port: 1, BindAddress: "127.0.0.1"})
+	if err == nil || !strings.Contains(err.Error(), "RUNPILOT_PROXY_AUTH_HEADER") {
+		t.Fatalf("Run error = %v", err)
 	}
 }

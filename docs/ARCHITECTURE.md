@@ -72,9 +72,9 @@ These versions are independent and must not be collapsed into one number:
 | --- | --- |
 | RunPilot version | Native application release |
 | Raw WASM ABI | Binary calling convention; v1 and v2 are currently supported |
-| Backend contract | Host capability/runtime compatibility; currently `1.0.0` |
+| Backend contract | Host capability/runtime compatibility; currently `1.1.0` (1.1 added network tools) |
 | Frontend contract | Public browser extension compatibility; currently `1.0.0` |
-| Plugin version | Independent SemVer release of one plugin |
+| Plugin version | Independent SemVer release of one plugin; the source of truth is `plugins/<id>/plugin.yaml` |
 
 Plugin manifests use SemVer ranges for backend/frontend contracts and
 `requires.runpilotApi` only for the raw WASM ABI. Compatibility is therefore
@@ -93,15 +93,21 @@ RunPilot internals. Generic functionality is exposed through explicit host
 capabilities such as:
 
 ```text
-host.process.*
-host.workspace.*
-host.scheduler.*
-host.storage.*
-host.history.*
-host.system.*
-host.config.*
 host.log.*
+host.system.*
+host.storage.*
+host.scheduler.*
+host.process.*          # including process.session.* (PTY/ConPTY)
+host.workspace.*
+host.history.*
+host.events.*
+host.network.stream.*
+host.browser.* / host.http.gateway.*
 ```
+
+The exact published names are indexed in [PLUGIN_API.md](PLUGIN_API.md) and
+served from one table in `internal/plugins/capabilities.go`. There is no plugin
+configuration capability; plugins persist settings through `storage.*`.
 
 `host.history.*` is a generic, owner-scoped execution record with captured
 output. Each plugin's SQLite history and run logs live in its mutable data
@@ -127,8 +133,11 @@ request identifies a plugin and method:
 
 Responses use the same correlation ID; asynchronous events use the same
 connection. Static HTML/JS/CSS and plugin assets remain ordinary HTTP resources.
-Legacy feature REST endpoints may remain during migration, but new plugin
-features must not create feature-specific REST APIs or WebSockets.
+New plugin features must not create feature-specific REST APIs or WebSockets.
+The REST routes of unmigrated legacy features (Docker manager, Storage,
+Software, Backup jobs, Xpra client) are not mounted; their handlers remain in
+`internal/web/legacy_*.go`, registered only by tests through
+`registerLegacyRoutes`, until each plugin migration reaches parity.
 
 The public frontend surface is built around:
 
@@ -148,7 +157,10 @@ Overview currently presents a built-in, host-only monitoring dashboard with
 CPU, memory, primary-filesystem and optional GPU cards, followed by always-visible
 filesystem capacity cards using the same responsive columns. Host identity stays
 in Settings. Its metrics reuse the existing platform
-adapters. Sparklines retain at most 32 actual successful samples in browser
+adapters. When RunPilot itself runs in a container, the Linux adapter reports
+the container's cgroup CPU and memory use against its limits (host totals as
+context), lists the container root and mounted directory filesystems, and
+omits the host-wide load average; Overview labels the readings accordingly. Sparklines retain at most 32 actual successful samples in browser
 local storage, scoped to the application base path and host name. Collection
 continues on other pages while the authenticated app is visible; reloads restore
 the retained samples. Hidden or closed browsers do not collect measurements.
@@ -196,6 +208,17 @@ controlled compatibility path. Fresh installations allow administrator setup
 for five minutes after startup; when the window expires, setup remains locked
 until the user restarts the service to open another window.
 
+Optional reverse-proxy single sign-on is configured in Settings (stored in
+`runpilot.yaml`, applied without restart) or through
+`RUNPILOT_TRUSTED_PROXIES` and `RUNPILOT_PROXY_AUTH_HEADER`, which take
+precedence and make the Settings values read-only. On `/api/` requests
+whose direct TCP peer is a trusted proxy, a header value equal to the
+administrator username creates an ordinary server session, so CSRF, WebSocket
+tickets and revocation are unchanged; forwarding headers are never used to
+identify the peer. A trusted proxy asserting a different user is
+authoritative and the request is refused, even with a session or bearer token.
+Proxy-created sessions are evicted first when the session table is full.
+
 The mutable application data root is selected independently from executable
 binaries and process working directories. Explicit CLI override, environment,
 persisted deployment locator and platform default determine its location in that
@@ -216,7 +239,7 @@ plugin work; see the [backlog](../BACKLOG.md).
 
 ### Docker status
 
-Docker has a Linux-only first-party plugin (`plugins/docker`, source version `0.1.2`,
+Docker has a Linux-only first-party plugin (`plugins/docker`,
 ABI v2) for Compose projects, containers, volumes, networks and interactive
 container terminals. It owns the normal `docker` page and uses generic bounded
 `process.run`, owner-scoped `workspace.*`, and `process.session.*` capabilities.
@@ -228,13 +251,17 @@ can be verified against their original Compose directory; external name
 collisions remain read only.
 External containers allow bounded log viewing but no lifecycle mutations or
 interactive terminal.
-The legacy Docker manager and HTTP handlers remain transitional because hidden
-Storage still uses Docker-volume integration. They are not used by the plugin UI.
+The legacy Docker manager remains transitional because hidden Storage still
+uses Docker-volume integration. Its HTTP handlers are kept but not mounted, and
+the plugin UI does not use them.
 
 ### Remote status
 
 `remote` is the publishable ABI-v2 Remote Desktop plugin for RDP and VNC.
-It packages Guacamole and noVNC clients and owns targets for both protocols.
+It packages Guacamole and noVNC clients and owns targets for both protocols. Target
+status and Wake-on-LAN are plugin semantics on top of the generic
+`network.probe`, `network.neighbor.lookup` and `network.wake` capabilities
+(backend contract 1.1).
 The legacy RDP and VNC providers, browser transports, and combined Remote page
 have been removed from core. Xpra's legacy provider/runtime remains
 internal with no normal UI or navigation. Its plugin migration is deferred
@@ -243,8 +270,8 @@ are designed; see the concise [backlog](../BACKLOG.md).
 
 ### Tasks status
 
-Tasks has a publishable first-party plugin (`plugins/tasks`, source version `0.1.4`,
-ABI v2, never auto-enabled). It covers continuous command tasks and
+Tasks has a publishable first-party plugin (`plugins/tasks`, ABI v2, never
+auto-enabled). It covers continuous command tasks and
 scheduled command tasks, owns their definitions and semantics, and talks to the
 browser only through the common WebSocket. It runs on the generic storage,
 scheduler, process, history and event capabilities without adding a Task host
@@ -267,8 +294,9 @@ ordered/bounded event delivery. See [PLUGIN_API.md](PLUGIN_API.md).
 The async ABI-v2 process/scheduler/event path remains covered by real-WASM
 race/integration tests.
 
-Tasks and Docker provide compact summary widgets below the host dashboard.
-Their business logic and backend RPCs remain plugin-owned.
+First-party plugins do not contribute Overview widgets; Overview shows only
+the built-in host dashboard. The widget registration contract remains available
+to plugins, and a repository test keeps first-party frontends from using it.
 
 ## Security and guardrails
 
@@ -288,7 +316,7 @@ Their business logic and backend RPCs remain plugin-owned.
 
 ### Web Apps
 
-The unpublished `web.apps` 0.2.0 ABI-v2 plugin is a working first-party
+The publishable `web.apps` ABI-v2 plugin is a working first-party
 capability. It owns target CRUD, persisted target configuration and its browser
 UI, and established reusable browser publication,
 restricted stream ticket and native Go HTTP gateway capabilities; core owns no

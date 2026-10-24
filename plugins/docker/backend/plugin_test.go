@@ -253,20 +253,20 @@ func TestDockerRuntimeStates(t *testing.T) {
 			}
 		})
 	}
-	f.deployment = "asustor-appcentral"
+	f.deployment = "docker"
 	f.outputs["info"] = runResult{Success: false, Stderr: "permission denied while opening unix:///var/run/docker.sock"}
-	if rt := p.runtime(); rt.Deployment != "asustor-appcentral" || rt.State != "permission-denied" {
-		t.Fatalf("ASUSTOR permission state: %+v", rt)
+	if rt := p.runtime(); rt.Deployment != "docker" || rt.State != "permission-denied" {
+		t.Fatalf("deployment permission state: %+v", rt)
 	}
 }
 
 func TestDockerRuntimeKeepsSocketPermissionFailureVisibleInSnapshot(t *testing.T) {
 	p, f := fakePlugin(t)
-	f.deployment = "asustor-appcentral"
+	f.deployment = "docker"
 	f.outputs["info"] = runResult{Success: false, Stderr: "permission denied while connecting to unix:///var/run/docker.sock"}
 	value := mustSuccess(t, func() (any, *rpcError) { return p.snapshot() }).(map[string]any)
 	runtime := value["runtime"].(dockerRuntime)
-	if runtime.Available || runtime.State != "permission-denied" || runtime.Deployment != "asustor-appcentral" || runtime.Diagnostic == "" {
+	if runtime.Available || runtime.State != "permission-denied" || runtime.Deployment != "docker" || runtime.Diagnostic == "" {
 		t.Fatalf("runtime: %+v", runtime)
 	}
 	if len(value["projects"].([]project)) != 0 || len(value["volumes"].([]volume)) != 0 || len(value["networks"].([]network)) != 0 {

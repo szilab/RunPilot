@@ -180,23 +180,6 @@ func (m *Manager) Statuses() []Status {
 	return out
 }
 
-// Start and Stop retain only the manager's narrow lifecycle API while
-// activation remains restart-only; neither starts a process.
-func (m *Manager) StartEnabled() []error { return nil }
-func (m *Manager) Start(id string) error {
-	if _, ok := m.Manifest(id); !ok {
-		return fmt.Errorf("unknown plugin %q", id)
-	}
-	return nil
-}
-func (m *Manager) Stop(id string) error {
-	if _, ok := m.Manifest(id); !ok {
-		return fmt.Errorf("unknown plugin %q", id)
-	}
-	return nil
-}
-func (m *Manager) Close() error { return nil }
-
 func (m *Manager) Manifest(id string) (Manifest, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

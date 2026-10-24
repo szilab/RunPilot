@@ -18,6 +18,7 @@ func TestLegacyRemotePageAndProviderAPIsAreGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	server.legacyRoutes = true
 	token := ctrl.Snapshot().Server.Token
 	for _, path := range []string{"/remote/session/example", "/api/v1/remote/providers", "/api/v1/remote/targets", "/api/v1/remote/sessions", "/api/v1/remote/sessions/example/transport"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
@@ -47,6 +48,7 @@ func TestXpraClientTicketRedirectStaysOnTheScopedProxyPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	server.legacyRoutes = true
 	authID := authSessionKey("auth")
 	server.sessions[authID] = authSession{expires: time.Now().Add(time.Hour)}
 	server.remoteTickets["ticket"] = remoteClientTicket{SessionID: "session", AuthSessionID: authID, Expires: time.Now().Add(time.Minute)}
@@ -72,6 +74,7 @@ func TestXpraProxyRedirectUsesOnlySessionSnapshotParameters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	server.legacyRoutes = true
 	authID := authSessionKey("auth")
 	server.sessions[authID] = authSession{expires: time.Now().Add(time.Hour)}
 	server.remoteTickets["ticket"] = remoteClientTicket{SessionID: "session", AuthSessionID: authID, ClientParams: map[string]string{"encoding": "webp", "video": "no", "toolbar_position": "top-left"}, Expires: time.Now().Add(time.Minute)}

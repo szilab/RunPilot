@@ -65,6 +65,12 @@ func Run(ctx context.Context, dataDir string, options ...Options) error {
 		return err
 	}
 	ui.SetDataRootSwitchAllowed(dataDir == "" && os.Getenv("RUNPILOT_DATA_DIR") == "")
+	if err := ui.ConfigureProxyAuth(os.Getenv(webui.TrustedProxiesEnv), os.Getenv(webui.ProxyAuthHeaderEnv)); err != nil {
+		return err
+	}
+	if header, proxies, ok := ui.ProxyAuthSummary(); ok {
+		log.Printf("RunPilot proxy authentication: %s from %s", header, strings.Join(proxies, ", "))
+	}
 	ui.SetRestartHandler(func() {
 		restartOnce.Do(func() {
 			close(restartRequested)

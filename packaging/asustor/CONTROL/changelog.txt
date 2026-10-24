@@ -1,1 +1,0 @@
-Native ASUSTOR App Central package for x86-64 ADM 5.0 and later.

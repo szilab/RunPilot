@@ -4,15 +4,16 @@
   <img src="internal/web/static/runpilot-logo.png" width="120">
 </div>
 
-RunPilot is a lightweight Windows/Linux host-management application written in Go. One native service manages configured workloads and operations and exposes an embedded local web UI. Windows uses Windows Service Control Manager; Linux uses a systemd user service.
+RunPilot is a lightweight Windows/Linux host-management application written in Go. One native service manages configured workloads and operations and exposes an embedded local web UI. On Linux the preferred deployment is the container image (see [Run In Docker](#run-in-docker-recommended-on-linux)); a native systemd user service remains available. Windows uses Windows Service Control Manager.
 
 The normal UI provides plugin management and a host monitoring Overview with
 CPU, memory, GPU when available, and filesystem usage. Tasks, Docker, Terminal,
 Remote desktop access for RDP and VNC is provided by one first-party plugin;
 installing and enabling it is explicit.
 Legacy backup, storage and
-software backends remain available through their existing APIs and
-configuration, but their pages are hidden.
+software backends remain in the codebase until their plugins reach parity, but
+their pages are hidden and their REST APIs are no longer mounted. Configured
+Backup jobs keep running from the configuration file.
 
 > **RunPilot provides the framework; plugins provide the features.**
 
@@ -55,6 +56,53 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the architectural source of
 truth, [docs/PLUGINS.md](docs/PLUGINS.md) for plugin development, and
 [docs/PLUGIN_REGISTRY.md](docs/PLUGIN_REGISTRY.md) for publication and
 installation.
+
+## Run In Docker (recommended on Linux)
+
+The repository's `Dockerfile` builds a Linux image with the tools the
+first-party plugins use: Docker CLI and Compose v2, bash, Python 3 and the
+OpenSSH client. The defaults need no extra settings:
+
+```sh
+docker build -t runpilot .
+docker run -d --name runpilot --restart unless-stopped -p 9070:9070 \
+  -v /var/lib/runpilot:/var/lib/runpilot \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  runpilot
+```
+
+Or use [packaging/docker/compose.yaml](packaging/docker/compose.yaml):
+`docker compose -f packaging/docker/compose.yaml up -d --build`.
+
+Open `http://<host>:9070` and complete administrator setup within five
+minutes; restart the container to open a new setup window.
+
+- **Data** lives in `/var/lib/runpilot`. Mount it at the **same path** on the
+  host: Docker Compose projects managed by the Docker plugin pass relative bind
+  mounts to the host's Docker Engine, which resolves them as host paths. The
+  container logs a warning when the path differs or no volume is mounted.
+- **User**: the entrypoint runs RunPilot as the unprivileged `runpilot` user
+  (UID/GID 1000; change with `PUID`/`PGID`), hands it the data directory, and
+  grants the mounted Docker socket's group. `PUID=0` runs as root; starting
+  with `--user` skips these adjustments.
+- **Init**: `tini` is the container's init process, so orphaned processes from
+  tasks and terminals are reaped without `--init`.
+- **Extra packages**: `RUNPILOT_EXTRA_PACKAGES="ffmpeg git"` installs Alpine
+  packages (space- or comma-separated, version constraints allowed) with `apk`
+  before RunPilot starts. A restarted container keeps them; a recreated one
+  installs them again. Invalid names stop the container; a failed download
+  only logs a warning. It needs the default root start (not `--user`).
+- **Docker socket** is optional; without it the Docker plugin reports that no
+  Engine is available. Access to the socket is equivalent to root on the host.
+
+Inside a container, Tasks and Terminal run in the container, with its tools
+and mounted directories, not on the host. Overview detects the container
+(`/.dockerenv`, `/run/.containerenv` or `RUNPILOT_CONTAINER`) and shows the
+container's own CPU and memory use against its limits, the host totals for
+context, and the container and mounted filesystems; the host-wide load
+average is hidden. Inside the container `localhost` is the container itself;
+Web Apps and Remote targets on the host use the host's address or
+`host.docker.internal`.
 
 ## Install On Linux
 
@@ -147,110 +195,6 @@ the restart fails. Keep another way to reach the host, such as SSH, local consol
 access, or a separate systemd user session, before enabling an unattended update
 task.
 
-## Install On ASUSTOR ADM
-
-RunPilot has a native x86-64 App Central package for AS67 models, including the
-AS6702T. It requires ADM 5.0 or newer, runs as the ADM `admin` account, and does
-not use Docker to run RunPilot. Build the APKG 2.0 package from the repository:
-
-```bash
-./tools/asustor/build.sh 1.0.5.r121
-```
-
-The builder creates `dist/runpilot_1.0.5.r121_x86-64.apk` and its SHA-256 file.
-The first argument is the App Central package version; the optional second
-argument is the embedded RunPilot core version. CI uses
-`1.0.5.r${GITHUB_RUN_NUMBER}` for package builds. GitHub Actions run numbers
-increase for each workflow run, so retries of the same run keep the same
-package version and later runs receive a higher revision. For manual builds,
-use a revision higher than every previously built or installed package for the
-same `major.minor.patch` base. The `.rN` suffix follows the dotted revision
-form used in ASUSTOR's own package examples. App Central Ref. 6001 reports that
-the uploaded package version is already installed; the developer guide defines
-`general.version` as the package version but does not document that error code
-or its comparison algorithm. Earlier hash-suffixed development versions were
-not monotonic. On the AS6702T running ADM 5.1.4, App Central installed
-`1.0.5.r121` and accepted an upgrade to `1.0.5.r122`; the installed app list
-reported `1.0.5.r122` and Ref. 6001 did not occur. Reinstalling an identical
-package version was not tested. CI's increasing workflow run number now supplies
-the numeric revision, separate from the embedded RunPilot core version.
-
-In ADM, open **App Central → Management → Manual Install** and select the APK.
-App Central owns start-at-boot and shutdown lifecycle through the package's
-`CONTROL/start-stop.sh` hook. The ADM desktop icon opens `http://NAS:9070/`.
-RunPilot binds to all NAS interfaces on port 9070 so LAN clients can connect.
-RunPilot routes require an administrator session or the separately enabled API
-token. Plain HTTP does not protect passwords, tokens or session traffic from
-network observers. Keep direct access on a trusted LAN. For remote access, configure an HTTPS reverse proxy in ADM and
-restrict access there. The App Central desktop privilege controls launcher
-visibility; it is not a substitute for RunPilot authentication. Package
-installation does not change ADM's reverse proxy, certificates, firewall or
-other network settings.
-
-The default mutable state root is
-`/volume1/.@plugins/AppCentral/runpilot/data/`. Setup may select another
-absolute path on any available NAS volume. RunPilot does not change ownership or
-permissions on a selected custom directory; it must be writable by the `admin`
-service identity. The separate `data-root` locator, PID and lifecycle log remain
-under `/volume1/.@plugins/AppCentral/runpilot/`. Upgrades retain both. Uninstall
-stops RunPilot but deliberately leaves user data and locator metadata in place.
-
-RunPilot uses the normal published plugin catalog. These current catalog
-releases downloaded, installed, enabled, loaded at startup, and served their
-frontend assets in an isolated RunPilot instance on an AS6702T running ADM
-5.1.4. Tasks and Terminal were also exercised in a fresh isolated instance
-running as the package's `admin` service account:
-
-| Plugin | Published version | AS6702T result and remaining host requirement |
-|---|---:|---|
-| Tasks | 0.1.3 | A scheduled shell command succeeded and its output/history survived a RunPilot restart; a continuous task started and stopped successfully. |
-| Terminal | 0.1.6 | Two interactive PTY sessions opened; resize and input/output worked, and both sessions closed successfully. |
-| Docker | 0.1.1 | Loaded; Docker control was unavailable because the tested ADM Docker socket was `root:root` mode `0660` and the `admin` service account had no Docker group. The package does not change socket permissions or use `sudo`. |
-| RDP | 1.0.3 | Loaded; session connectivity was not tested because no guacd endpoint was available. Configure a reachable external guacd service. |
-| VNC | 1.0.1 | Loaded; session connectivity was not tested because no VNC target was available. Configure a reachable external VNC server. |
-| Web Apps | 0.4.1 | Loaded; proxying was not exercised because no upstream was configured. Upstreams must be reachable over HTTP/HTTPS, including their WebSocket endpoints where used. |
-
-The package was installed and upgraded through **App Central → Management →
-Manual Install** on the AS6702T. App Central registered the package, showed its
-port requirement, and started it through the lifecycle hook. The installed
-service ran as `admin`, served HTTP on port 9070, and stopped and started
-successfully through the App Central enable switch. A second manual upgrade
-also completed with the service running afterward. The upgrade test confirmed
-that App Central replaces the package mount while the hook keeps mutable data
-in its separate `data/` directory. Repository lifecycle tests additionally
-exercise preservation of configuration, plugin state and execution history
-across binary replacement, and refusal to follow unmarked or symlinked data
-paths.
-
-Feature connectivity against Docker, guacd, VNC, or configured Web Apps still
-requires the corresponding service and permissions. The isolated NAS run
-verified the UI, health endpoint, authenticated API, host metrics and clean
-shutdown with the native binary. These feature checks used an isolated RunPilot
-instance; they did not change existing NAS services or Docker state.
-
-Granting the RunPilot service account access to Docker's root-owned socket is
-optional and is not configured by this package. Docker socket access is
-effectively root-level host authority: a Docker client can request privileged
-containers and host filesystem mounts. Only consider it after an administrator
-verifies a persistent, ADM-supported access-control mechanism and accepts that
-impact. Do not run all of RunPilot as root or loosen socket permissions to
-enable the Docker plugin.
-
-When Docker Engine returns a permission-denied error, the Docker plugin links
-to the [ASUSTOR Docker permission guide](docs/platforms/asustor-docker-permissions.md)
-only on the App Central build. Other endpoint failures keep their own status
-and do not show ASUSTOR-specific instructions.
-
-For troubleshooting, check the App Central app state and read
-`/volume1/.@plugins/AppCentral/runpilot/data/runpilot.log` over SSH. The package
-hook supports `start`, `stop`, `restart` and `status`; App Central itself should
-own normal lifecycle changes. Check that port 9070 is unused before installing
-and that ADM's account permissions allow the selected plugin's operations.
-
-APKG building, package archive validation, the native binary, and App Central
-install, upgrade, start and stop have been tested on an AS6702T running ADM
-5.1.4.
-
 ## Development
 
 ```bash
@@ -293,14 +237,14 @@ RunPilot and create a new administrator within the setup window. Pass
 
 The default application data directory is `%LOCALAPPDATA%\RunPilot` on Windows,
 `$XDG_DATA_HOME/runpilot` or `~/.local/share/runpilot` on Linux, and
-`/volume1/.@plugins/AppCentral/runpilot/data` on ASUSTOR. The setup page accepts
+`/var/lib/runpilot` in the container image. The setup page accepts
 an absolute path accessible to the RunPilot service identity. It refuses symlink
 paths and unrelated destination contents, and does not change ownership or
 permissions. Data-root precedence is explicit `--data-dir`,
 `RUNPILOT_DATA_DIR`, the persisted deployment locator, then the platform default.
-The locator is stored outside the selected data root. App Central keeps it at
-`/volume1/.@plugins/AppCentral/runpilot/data-root`; PID and lifecycle logs stay
-beside it, while mutable RunPilot state can live on another volume.
+The locator is stored outside the selected data root. The container image sets
+`RUNPILOT_DATA_DIR`, so the data directory is chosen by the volume mount rather
+than in Settings.
 
 After setup, change the data root from **Settings → RunPilot data directory**.
 RunPilot shuts down its managed activity, copies and verifies state, then updates
@@ -311,18 +255,16 @@ on their original paths. Data stored outside RunPilot's data root also needs its
 own migration plan. Deployments installed with an explicit `--data-dir` override
 must update that deployment setting directly.
 
-The App Central setup page is available during the five-minute window after the
-package starts. No ADM desktop authentication integration is used. For
-credential recovery, stop the package, run
-`RUNPILOT_DATA_ROOT_FILE=/volume1/.@plugins/AppCentral/runpilot/data-root
-/usr/local/AppCentral/runpilot/bin/runpilot reset-admin` over SSH as `admin`,
-then start the package and complete setup within five minutes. If RunPilot was
-installed with an explicit data directory, pass that path with `--data-dir`.
-The lifecycle hook reads and writes the separate persistent data-root locator.
-ASUSTOR's
-[App Central Developer Guide](https://downloadgb.asustor.com/developer/App_Central_Developer_Guide_5.1.0_20251010.pdf)
-documents package configuration, hooks, and ADM session IDs, but not a supported
-package-admin secret delivery channel.
+In the container image, recover the administrator with the same data mount
+while the RunPilot container is stopped:
+
+```sh
+docker stop runpilot
+docker run --rm -v /var/lib/runpilot:/var/lib/runpilot runpilot reset-admin
+docker start runpilot
+```
+
+Then complete setup within five minutes of the start.
 
 ## Web server and reverse proxy
 
@@ -364,19 +306,60 @@ substitute both handshake keys. Do not call this E2EE.
 Use the same flags with `service install` to persist them in the installed
 service command line. With the example above, publish the application
 through a reverse proxy at `https://mydomain.com/runpilot/`, forwarding that
-prefix unchanged to RunPilot. The UI, REST API, plugin terminal sessions, and
-Docker attach WebSocket all use this one RunPilot listener and configured
-prefix. No terminal-specific port or proxy target is required.
-
-Docker attach uses `/api/v1/docker/attach` (or
-`/runpilot/api/v1/docker/attach` with `basePath: /runpilot`). The browser builds
-its `ws:`/`wss:` URL from the GUI page's base URI, so the public host, port, TLS
-scheme, and prefix are preserved when TLS terminates at a reverse proxy.
+prefix unchanged to RunPilot. The UI, REST API, and the application WebSocket that carries plugin terminal
+and Docker container sessions all use this one RunPilot listener and configured
+prefix. No terminal-specific port or proxy target is required. The browser
+builds its `ws:`/`wss:` URL from the GUI page's base URI, so the public host,
+port, TLS scheme, and prefix are preserved when TLS terminates at a reverse
+proxy.
 
 Configure a WebSocket-aware proxy to forward `/runpilot/*` (including Upgrade
 requests) to the same RunPilot upstream port, preserving both the `/runpilot`
 prefix and original `Host` header. Do not strip that prefix in the proxy when
 RunPilot is configured with `basePath: /runpilot`.
+
+### Single sign-on through an authenticating proxy
+
+RunPilot can trust the user name set by an authenticating reverse proxy or
+forward-auth gateway (for example Authelia, Authentik, oauth2-proxy, Pomerium
+or VoidAuth). Configure it in **Settings → Proxy single sign-on** or with two
+environment variables; both values are required:
+
+| Setting | Environment variable | Example | Meaning |
+|---|---|---|---|
+| Trusted proxies | `RUNPILOT_TRUSTED_PROXIES` | `10.0.0.5, 172.20.0.0/16` | Comma- or space-separated IP addresses and CIDR ranges of the proxies |
+| User name header | `RUNPILOT_PROXY_AUTH_HEADER` | `Remote-User` | Header that carries the signed-in user name |
+
+When either environment variable is set, the environment owns both values and
+the Settings fields are read-only. Settings changes apply immediately and are
+stored in `runpilot.yaml`; RunPilot refuses to save values under which the
+browser saving them would be denied (a trusted proxy reporting another user).
+
+When a request reaches RunPilot directly from a trusted address and the header
+equals the RunPilot administrator's user name (exact, case-sensitive match),
+RunPilot signs the browser in with an ordinary session. Requests from other
+addresses ignore the header and use password sign-in or the API token as
+usual; `X-Forwarded-For` and similar headers are never used to decide whether
+a proxy is trusted. If a trusted proxy names a different user, or sends the
+header more than once, RunPilot refuses the API request, even when it carries a
+session or API token. A partial or invalid environment configuration stops
+RunPilot at startup; invalid values edited into `runpilot.yaml` by hand leave
+proxy sign-in off.
+
+Requirements for a safe setup:
+
+- The proxy must overwrite or remove a client-supplied header with the same
+  name on every route to RunPilot, including routes it does not authenticate.
+- Trust only the proxy's own address. A shared Docker network range also
+  trusts every other container on that network; prefer a dedicated network or
+  a fixed proxy address.
+- Signing out in RunPilot ends only its session; the next request through the
+  proxy signs in again. Sign out at the identity provider instead.
+
+Common header names are `Remote-User` (Authelia), `X-authentik-username`
+(Authentik), `X-Auth-Request-User` or `X-Forwarded-User` (oauth2-proxy) and
+`X-Pomerium-Claim-User` (Pomerium); configure the proxy to pass the user name
+that matches the RunPilot administrator.
 
 ## Interactive Terminal
 
@@ -400,6 +383,16 @@ Guacamole client and the generic network stream capability; VNC packages noVNC
 stream traffic. Existing VNC targets are imported from an installed, enabled
 legacy VNC plugin when the VNC tab is opened. Passwords are requested only when
 needed and remain in memory for the active browser session.
+
+Each target shows whether it is reachable: **Online** (the RDP/VNC port
+accepts connections), **Host up, service off** (the computer answers but the
+port is closed) or **Offline**. The list is checked every 30 seconds while the
+page is open. **Wake** sends a Wake-on-LAN packet to the target's MAC address,
+set under **Advanced settings**. When it is empty, RunPilot uses the address it
+learned from the local network's ARP table while the computer was online, or
+looks it up when Wake is pressed. Detection and Wake-on-LAN only work for
+computers on the same local network as RunPilot; in a container, run RunPilot
+with host networking. The target computer must have Wake-on-LAN enabled.
 
 The old standalone VNC package is no longer published. After its targets have
 been imported and verified, uninstall it from **Settings → Plugins**. Xpra's
@@ -523,13 +516,13 @@ RunPilot does not create `<data-dir>/legacy/` or a global legacy history DB.
 
 RunPilot has a deliberately narrow, Linux-only Docker Compose v2 feature. Managed projects are directories below `<data-dir>/compose/<project-name>/`; each can contain `compose.yaml` and a secret-bearing `.env` file. Project directories are the registry, so a managed project appears before its first `up`.
 
-The hidden legacy Docker page and API manage projects, volumes, and networks. They discover other Compose projects through Docker too, but leave them read-only. RunPilot never adopts or edits them. Managed projects expose only `up -d`, `start`, `stop`, and `down`; commands always include the project name, project directory, and Compose file. `down` does not remove volumes or images. A managed directory can be deleted only after Docker confirms there are no containers with its Compose project label. Containers in managed projects can be started, stopped, and deleted only when stopped; their logs can be viewed and a running container can open a PTY-backed `docker exec -it <id> /bin/sh` terminal. These actions validate the container ID, Compose project label, and managed-project directory before using fixed Docker arguments; they are not a general container-control or command API.
+The legacy Docker backend (hidden page, unmounted API) manages projects, volumes, and networks; the Docker plugin is the user-facing implementation. They discover other Compose projects through Docker too, but leave them read-only. RunPilot never adopts or edits them. Managed projects expose only `up -d`, `start`, `stop`, and `down`; commands always include the project name, project directory, and Compose file. `down` does not remove volumes or images. A managed directory can be deleted only after Docker confirms there are no containers with its Compose project label. Containers in managed projects can be started, stopped, and deleted only when stopped; their logs can be viewed and a running container can open a PTY-backed `docker exec -it <id> /bin/sh` terminal. These actions validate the container ID, Compose project label, and managed-project directory before using fixed Docker arguments; they are not a general container-control or command API.
 
 Volumes are discovered with Docker metadata and show Compose ownership only when Compose labels exist. Every discoverable volume is automatically a Storage location. RunPilot can create named local-driver volumes and may delete an unreferenced volume; deletion never uses force. Non-local drivers remain visible but unavailable for browsing. Running-volume Storage is read-only.
 
 Docker volume mountpoints are resolved only through `docker volume inspect` internally and are never sent through the Storage API. This prepares a future provider-neutral Backup source flow; no Docker volume backup job exists yet. A filesystem backup of a volume used by a running application, especially a database, is not automatically application-consistent. Future backup support must explicitly require downtime or provide a separate quiescing strategy.
 
-Docker networks remain available through the legacy API and hidden page. RunPilot can create named bridge networks and delete an unused network only after Docker confirms that no running or stopped container references it. Compose ownership is shown only from Compose labels. It does not expose network driver options, attach/detach controls, firewall configuration, or generic Docker networking commands.
+The legacy backend also manages Docker networks. RunPilot can create named bridge networks and delete an unused network only after Docker confirms that no running or stopped container references it. Compose ownership is shown only from Compose labels. It does not expose network driver options, attach/detach controls, firewall configuration, or generic Docker networking commands.
 
 Docker authority is exactly the authority of the process running RunPilot. The legacy backend tests the Docker CLI, Compose v2 plugin, and daemon access under that identity, distinguishing missing CLI/plugin, unavailable daemon, and permission denial. It never invokes sudo, changes Docker socket permissions, or modifies group membership.
 

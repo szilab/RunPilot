@@ -66,10 +66,6 @@ jobs:
           printf '%s\n' "$BUILD_VERSION" > dist/runpilot-linux-amd64.version
           printf '%s\n' "$BUILD_VERSION" > dist/runpilot-windows-amd64.version
           cp install.sh dist/install.sh
-          APK_VERSION="${BUILD_VERSION%%-*}.r${GITHUB_RUN_NUMBER}"
-          ./tools/asustor/build.sh "$APK_VERSION" "$BUILD_VERSION"
-          (cd dist && sha256sum --check "runpilot_${APK_VERSION}_x86-64.apk.sha256")
-          echo "RUNPILOT_APK_VERSION=$APK_VERSION" >> "$GITHUB_ENV"
 
       - name: Set release metadata
         id: release
@@ -114,8 +110,6 @@ jobs:
             dist/runpilot-windows-amd64.exe.sha256 \
             dist/runpilot-windows-amd64.version \
             dist/install.sh \
-            "dist/runpilot_${RUNPILOT_APK_VERSION}_x86-64.apk" \
-            "dist/runpilot_${RUNPILOT_APK_VERSION}_x86-64.apk.sha256" \
             --clobber
 
       - name: Create immutable v1.0.5 release
@@ -141,8 +135,3 @@ jobs:
               --title "RunPilot v1.0.5" \
               --generate-notes
           fi
-
-          gh release upload "$VERSION_TAG" \
-            "dist/runpilot_${RUNPILOT_APK_VERSION}_x86-64.apk" \
-            "dist/runpilot_${RUNPILOT_APK_VERSION}_x86-64.apk.sha256" \
-            --clobber

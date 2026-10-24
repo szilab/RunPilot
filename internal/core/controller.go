@@ -6,15 +6,11 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
-	"os/user"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/szilab/RunPilot/internal/backup"
 	"github.com/szilab/RunPilot/internal/config"
 	"github.com/szilab/RunPilot/internal/dockercompose"
 	"github.com/szilab/RunPilot/internal/history"
@@ -27,7 +23,6 @@ import (
 	"github.com/szilab/RunPilot/internal/scheduler"
 	"github.com/szilab/RunPilot/internal/software"
 	"github.com/szilab/RunPilot/internal/storage"
-	"github.com/szilab/RunPilot/internal/version"
 )
 
 type Controller struct {
@@ -319,25 +314,7 @@ func (c *Controller) awaitPluginRuntime(plugin string) *plugins.Runtime {
 	return c.runtimes[plugin]
 }
 
-func (c *Controller) Remote() *remote.Service   { return c.remote }
 func (c *Controller) Plugins() *plugins.Manager { return c.plugins }
-
-// RemoteTargets retains only legacy Xpra configuration for the internal
-// runtime. RDP and VNC definitions are owned by their plugins.
-func (c *Controller) RemoteTargets() []model.RemoteTarget {
-	targets := c.config.Snapshot().RemoteTargets
-	for i := range targets {
-		if targets[i].Provider != "xpra" {
-			continue
-		}
-		options, err := model.NormalizeXpraRemoteOptions(targets[i].Xpra)
-		if err != nil {
-			options = model.DefaultXpraRemoteOptions()
-		}
-		targets[i].Xpra = &options
-	}
-	return targets
-}
 
 func boolValue(value *bool) bool { return value != nil && *value }
 
@@ -431,66 +408,6 @@ func (c *Controller) loadPluginRuntimes() error {
 	return nil
 }
 
-type controllerPluginHost struct{ controller *Controller }
-
-func (h controllerPluginHost) Log(_ context.Context, message string) error {
-	log.Printf("plugin: %s", message)
-	return nil
-}
-func (h controllerPluginHost) ConfigGet(context.Context, string) (json.RawMessage, error) {
-	return nil, fmt.Errorf("plugin configuration is not implemented")
-}
-func (h controllerPluginHost) ConfigSet(context.Context, string, json.RawMessage) error {
-	return fmt.Errorf("plugin configuration is not implemented")
-}
-func (h controllerPluginHost) SystemStatus(context.Context) (json.RawMessage, error) {
-	return json.Marshal(platform.HostStatus())
-}
-func (h controllerPluginHost) SystemIdentity(context.Context) (json.RawMessage, error) {
-	current, err := user.Current()
-	if err != nil {
-		return nil, err
-	}
-	identity := struct {
-		Username   string `json:"username"`
-		UID        string `json:"uid"`
-		Deployment string `json:"deployment,omitempty"`
-	}{Username: current.Username, UID: current.Uid, Deployment: version.Deployment}
-	return json.Marshal(identity)
-}
-func (h controllerPluginHost) StorageGet(_ context.Context, pluginID, key string) (json.RawMessage, error) {
-	return h.controller.pluginStorageGet(pluginID, key)
-}
-func (h controllerPluginHost) StorageSet(_ context.Context, pluginID, key string, value json.RawMessage) error {
-	return h.controller.pluginStorageSet(pluginID, key, value)
-}
-func (h controllerPluginHost) PublishEvent(_ context.Context, pluginID, event string, data json.RawMessage) error {
-	if !h.controller.publishPluginEvent(pluginID, event, data) && strings.HasPrefix(event, "process.session.") {
-		return &plugins.HostFailure{Code: "io_error", Message: "interactive process output delivery queue is full"}
-	}
-	return nil
-}
-func (h controllerPluginHost) PluginStopped(pluginID string) {
-	h.controller.scheduler.RemovePluginOwner(pluginID)
-	h.controller.pluginProcesses.stopOwner(pluginID)
-	h.controller.pluginSessions.stopOwner(pluginID)
-	h.controller.pluginNetworkStreams.stopOwner(pluginID)
-	h.controller.browserPublications.stop(pluginID)
-}
-
-func (h controllerPluginHost) NetworkStreamOpen(ctx context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
-	return h.controller.pluginNetworkStreams.open(ctx, owner, raw)
-}
-func (h controllerPluginHost) NetworkStreamRead(ctx context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
-	return h.controller.pluginNetworkStreams.read(ctx, owner, raw)
-}
-func (h controllerPluginHost) NetworkStreamWrite(ctx context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
-	return h.controller.pluginNetworkStreams.write(ctx, owner, raw)
-}
-func (h controllerPluginHost) NetworkStreamClose(ctx context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
-	return h.controller.pluginNetworkStreams.closeStream(owner, raw)
-}
-
 // AttachPluginNetworkStream claims an owned stream for one browser WebSocket.
 func (c *Controller) AttachPluginNetworkStream(owner, id string) (net.Conn, func(), error) {
 	return c.pluginNetworkStreams.attach(owner, id)
@@ -500,142 +417,6 @@ func (c *Controller) AttachPluginNetworkStream(owner, id string) (net.Conn, func
 // network.stream.open capability, used by trusted host integrations.
 func (c *Controller) OpenPluginNetworkStream(ctx context.Context, owner string, params json.RawMessage) (json.RawMessage, error) {
 	return c.pluginNetworkStreams.open(ctx, owner, params)
-}
-func (h controllerPluginHost) ScheduleRegister(_ context.Context, pluginID string, raw json.RawMessage) (json.RawMessage, error) {
-	var value struct {
-		ID       string             `json:"id"`
-		Schedule model.ScheduleSpec `json:"schedule"`
-		Callback string             `json:"callback"`
-		Data     json.RawMessage    `json:"data"`
-	}
-	if err := json.Unmarshal(raw, &value); err != nil || strings.TrimSpace(value.ID) == "" || strings.TrimSpace(value.Callback) == "" || (len(value.Data) > 0 && !json.Valid(value.Data)) {
-		return nil, fmt.Errorf("invalid schedule registration")
-	}
-	if len(value.Data) == 0 {
-		value.Data = json.RawMessage("{}")
-	}
-	err := h.controller.scheduler.RegisterPlugin(scheduler.PluginSchedule{Owner: pluginID, ID: value.ID, Callback: value.Callback, Schedule: value.Schedule, Data: value.Data}, func(item scheduler.PluginSchedule) {
-		h.controller.deliverPluginEvent(pluginID, "scheduler.fired", map[string]any{"id": item.ID, "callback": item.Callback, "data": json.RawMessage(item.Data)})
-	})
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(map[string]string{"id": value.ID})
-}
-func (h controllerPluginHost) ScheduleRemove(_ context.Context, pluginID, id string) error {
-	if !h.controller.scheduler.RemovePlugin(pluginID, id) {
-		return fmt.Errorf("unknown schedule")
-	}
-	return nil
-}
-func (h controllerPluginHost) ScheduleList(_ context.Context, pluginID string) (json.RawMessage, error) {
-	return json.Marshal(h.controller.scheduler.ListPlugin(pluginID))
-}
-func (h controllerPluginHost) ProcessStart(_ context.Context, pluginID string, raw json.RawMessage) (json.RawMessage, error) {
-	var input pluginProcessStart
-	if err := json.Unmarshal(raw, &input); err != nil {
-		return nil, err
-	}
-	result, err := h.controller.pluginProcesses.start(pluginID, input)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(result)
-}
-func (h controllerPluginHost) ProcessStatus(_ context.Context, pluginID, id string) (json.RawMessage, error) {
-	result, err := h.controller.pluginProcesses.status(pluginID, id)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(result)
-}
-func (h controllerPluginHost) ProcessTerminate(_ context.Context, pluginID, id string) (json.RawMessage, error) {
-	result, err := h.controller.pluginProcesses.terminate(pluginID, id)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(result)
-}
-func (h controllerPluginHost) ProcessSessionCreate(_ context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
-	return h.controller.pluginSessions.create(owner, raw)
-}
-func (h controllerPluginHost) ProcessSessionWrite(_ context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
-	return h.controller.pluginSessions.write(owner, raw)
-}
-func (h controllerPluginHost) ProcessSessionResize(_ context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
-	return h.controller.pluginSessions.resize(owner, raw)
-}
-func (h controllerPluginHost) ProcessSessionStatus(_ context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
-	return h.controller.pluginSessions.status(owner, raw)
-}
-func (h controllerPluginHost) ProcessSessionTerminate(_ context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
-	return h.controller.pluginSessions.terminate(owner, raw)
-}
-
-func (c *Controller) pluginStoragePath(pluginID string) (string, error) {
-	if !safePluginStorageID(pluginID) {
-		return "", fmt.Errorf("invalid plugin ID")
-	}
-	return filepath.Join(c.dataDir, "plugins", pluginID, "data", "storage.json"), nil
-}
-func safePluginStorageID(id string) bool {
-	if id == "" || id != filepath.Base(id) {
-		return false
-	}
-	for _, r := range id {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' || r == '_') {
-			return false
-		}
-	}
-	return true
-}
-func (c *Controller) pluginStorageGet(pluginID, key string) (json.RawMessage, error) {
-	path, err := c.pluginStoragePath(pluginID)
-	if err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return json.RawMessage("null"), nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	values := map[string]json.RawMessage{}
-	if err := json.Unmarshal(data, &values); err != nil {
-		return nil, fmt.Errorf("read plugin storage: %w", err)
-	}
-	if value, ok := values[key]; ok {
-		return append(json.RawMessage(nil), value...), nil
-	}
-	return json.RawMessage("null"), nil
-}
-func (c *Controller) pluginStorageSet(pluginID, key string, value json.RawMessage) error {
-	path, err := c.pluginStoragePath(pluginID)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	values := map[string]json.RawMessage{}
-	if existing, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(existing, &values); err != nil {
-			return fmt.Errorf("read plugin storage: %w", err)
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	values[key] = append(json.RawMessage(nil), value...)
-	data, err := json.Marshal(values)
-	if err != nil {
-		return err
-	}
-	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(temporary, path)
 }
 
 func (c *Controller) DataDir() string        { return c.dataDir }
@@ -650,61 +431,12 @@ func (c *Controller) ChangeAdminPassword(username, currentHash, nextHash string)
 }
 
 func (c *Controller) SetBearerAuth(enabled bool) error { return c.config.SetBearerAuth(enabled) }
+func (c *Controller) SetProxyAuth(trustedProxies, header string) error {
+	return c.config.SetProxyAuth(trustedProxies, header)
+}
 
 func (c *Controller) SetWebSocketPayloadMode(mode string) error {
 	return c.config.SetWebSocketPayloadMode(mode)
-}
-
-func (c *Controller) StorageLocations(ctx context.Context) []storage.Descriptor {
-	return c.storage.List(ctx)
-}
-func (c *Controller) StorageProvider(ctx context.Context, id string) (storage.Provider, error) {
-	return c.storage.Provider(ctx, id)
-}
-func (c *Controller) Docker() *dockercompose.Manager { return c.docker }
-
-func (c *Controller) SoftwareDefinitions() []model.SoftwareProviderDefinition {
-	definitions := c.config.Snapshot().Software.Providers
-	capabilities := platform.CurrentCapabilities()
-	available := make([]model.SoftwareProviderDefinition, 0, len(definitions))
-	for _, definition := range definitions {
-		if definition.Type == model.SoftwareProviderScoop && !capabilities.Scoop {
-			continue
-		}
-		available = append(available, definition)
-	}
-	return available
-}
-
-func (c *Controller) SoftwareProvider(id string) (software.Provider, error) {
-	d, err := software.Find(c.SoftwareDefinitions(), id)
-	if err != nil {
-		return nil, err
-	}
-	return c.software.Provider(d)
-}
-
-// UpsertSoftwareProvider switches the active root when it changes. It never
-// migrates, copies, or removes the prior managed Scoop installation.
-func (c *Controller) UpsertSoftwareProvider(d model.SoftwareProviderDefinition) (model.SoftwareProviderDefinition, error) {
-	d, err := software.ValidateDefinition(c.dataDir, d)
-	if err != nil {
-		return d, err
-	}
-	err = c.config.Update(func(cfg *model.Config) error {
-		for i := range cfg.Software.Providers {
-			if cfg.Software.Providers[i].ID == d.ID {
-				cfg.Software.Providers[i] = d
-				return nil
-			}
-		}
-		return fmt.Errorf("unknown software provider %q", d.ID)
-	})
-	return d, err
-}
-
-func (c *Controller) JobViews() []jobs.View {
-	return c.jobs.Views(c.config.Snapshot().Jobs)
 }
 
 func (c *Controller) Overview() model.Overview {
@@ -740,90 +472,4 @@ func (c *Controller) Overview() model.Overview {
 	overview.TaskCount = overview.JobCount
 	overview.RunningTasks = overview.RunningJobs
 	return overview
-}
-
-func (c *Controller) UpsertJob(j model.JobDefinition) (model.JobDefinition, error) {
-	if strings.TrimSpace(j.Name) == "" {
-		return j, fmt.Errorf("job name is required")
-	}
-	if j.Type != model.JobBackup {
-		return j, fmt.Errorf("only retained Backup jobs are supported")
-	}
-	model.NormalizeJob(&j)
-	if _, err := scheduler.Expression(j.Schedule); err != nil {
-		return j, err
-	}
-	if j.Backup == nil {
-		return j, fmt.Errorf("backup job requires a provider configuration")
-	}
-	if err := backup.Validate(*j.Backup); err != nil {
-		return j, err
-	}
-	if _, err := backup.Build(*j.Backup); err != nil {
-		return j, err
-	}
-	if j.ID == "" {
-		j.ID = config.NewID("job")
-	}
-	if err := c.config.Update(func(cfg *model.Config) error {
-		for i := range cfg.Jobs {
-			if cfg.Jobs[i].ID == j.ID {
-				cfg.Jobs[i] = j
-				return nil
-			}
-		}
-		cfg.Jobs = append(cfg.Jobs, j)
-		return nil
-	}); err != nil {
-		return j, err
-	}
-	if err := c.scheduler.Reload(c.config.Snapshot().Jobs); err != nil {
-		return j, err
-	}
-	return j, nil
-}
-
-func (c *Controller) DeleteJob(id string) error {
-	if err := c.config.Update(func(cfg *model.Config) error {
-		out := cfg.Jobs[:0]
-		found := false
-		for _, j := range cfg.Jobs {
-			if j.ID == id {
-				found = true
-				continue
-			}
-			out = append(out, j)
-		}
-		if !found {
-			return fmt.Errorf("unknown job %q", id)
-		}
-		cfg.Jobs = out
-		return nil
-	}); err != nil {
-		return err
-	}
-	return c.scheduler.Reload(c.config.Snapshot().Jobs)
-}
-
-func (c *Controller) RunJob(id string) (string, error) {
-	for _, j := range c.config.Snapshot().Jobs {
-		if j.ID == id {
-			return c.jobs.Run(j)
-		}
-	}
-	return "", fmt.Errorf("unknown job %q", id)
-}
-
-func safeID(id string) bool {
-	if id == "" || id != filepath.Base(id) {
-		return false
-	}
-	for _, r := range id {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') || r == '-' || r == '_' {
-			continue
-		}
-		return false
-	}
-	return true
 }

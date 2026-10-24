@@ -34,8 +34,6 @@ const (
 // capability. Implementations still validate inputs and preserve invariants.
 type Host interface {
 	Log(context.Context, string) error
-	ConfigGet(context.Context, string) (json.RawMessage, error)
-	ConfigSet(context.Context, string, json.RawMessage) error
 	SystemStatus(context.Context) (json.RawMessage, error)
 }
 
@@ -82,6 +80,13 @@ type NetworkStreamHost interface {
 
 // SchedulerValidator optionally checks a schedule definition without
 // registering it.
+// NetworkToolsHost publishes stateless network helpers: TCP reachability
+// probes, IPv4 neighbor (ARP) lookups and Wake-on-LAN.
+type NetworkToolsHost interface {
+	NetworkProbe(context.Context, string, json.RawMessage) (json.RawMessage, error)
+	NeighborLookup(context.Context, string, json.RawMessage) (json.RawMessage, error)
+	NetworkWake(context.Context, string, json.RawMessage) (json.RawMessage, error)
+}
 type SchedulerValidator interface {
 	ScheduleValidate(context.Context, json.RawMessage) error
 }
@@ -426,280 +431,11 @@ func (r *Runtime) dispatchCapability(ctx context.Context, payload []byte) capabi
 	if r.host == nil {
 		return capabilityFailure("unavailable", "RunPilot capability host is unavailable")
 	}
-	switch request.Capability {
-	case "log.write":
-		var args struct {
-			Message string `json:"message"`
-		}
-		if err := decodeParams(request.Params, &args); err != nil || strings.TrimSpace(args.Message) == "" {
-			return capabilityFailure("invalid_argument", "log.write requires a non-empty message")
-		}
-		if err := r.host.Log(ctx, args.Message); err != nil {
-			return capabilityFailure("failed", "log.write failed")
-		}
-		return capabilitySuccess(nil)
-	case "config.get":
-		var args struct {
-			Key string `json:"key"`
-		}
-		if err := decodeParams(request.Params, &args); err != nil || strings.TrimSpace(args.Key) == "" {
-			return capabilityFailure("invalid_argument", "config.get requires a key")
-		}
-		value, err := r.host.ConfigGet(ctx, args.Key)
-		if err != nil {
-			return capabilityFailure("failed", "config.get failed")
-		}
-		return capabilitySuccess(value)
-	case "config.set":
-		var args struct {
-			Key   string          `json:"key"`
-			Value json.RawMessage `json:"value"`
-		}
-		if err := decodeParams(request.Params, &args); err != nil || strings.TrimSpace(args.Key) == "" || !json.Valid(args.Value) {
-			return capabilityFailure("invalid_argument", "config.set requires a key and JSON value")
-		}
-		if err := r.host.ConfigSet(ctx, args.Key, args.Value); err != nil {
-			return capabilityFailure("failed", "config.set failed")
-		}
-		return capabilitySuccess(nil)
-	case "system.status":
-		if len(request.Params) != 0 && string(request.Params) != "{}" && string(request.Params) != "null" {
-			return capabilityFailure("invalid_argument", "system.status does not accept parameters")
-		}
-		value, err := r.host.SystemStatus(ctx)
-		if err != nil {
-			return capabilityFailure("failed", "system.status failed")
-		}
-		if !json.Valid(value) {
-			return capabilityFailure("failed", "system.status returned invalid JSON")
-		}
-		return capabilitySuccess(value)
-	case "system.identity":
-		if len(request.Params) != 0 && string(request.Params) != "{}" && string(request.Params) != "null" {
-			return capabilityFailure("invalid_argument", "system.identity does not accept parameters")
-		}
-		identity, ok := r.host.(interface {
-			SystemIdentity(context.Context) (json.RawMessage, error)
-		})
-		if !ok {
-			return capabilityFailure("unavailable", "system identity is unavailable")
-		}
-		value, err := identity.SystemIdentity(ctx)
-		if err != nil {
-			return detailedFailure("system.identity", err)
-		}
-		return capabilitySuccess(value)
-	case "storage.get":
-		var args struct {
-			Key string `json:"key"`
-		}
-		if err := decodeParams(request.Params, &args); err != nil || !validStorageKey(args.Key) {
-			return capabilityFailure("invalid_argument", "storage.get requires a valid key")
-		}
-		storage, ok := r.host.(StorageHost)
-		if !ok {
-			return capabilityFailure("unavailable", "plugin storage is unavailable")
-		}
-		value, err := storage.StorageGet(ctx, r.manifest.ID, args.Key)
-		if err != nil {
-			return capabilityFailure("failed", "storage.get failed")
-		}
-		return capabilitySuccess(value)
-	case "storage.set":
-		var args struct {
-			Key   string          `json:"key"`
-			Value json.RawMessage `json:"value"`
-		}
-		if err := decodeParams(request.Params, &args); err != nil || !validStorageKey(args.Key) || !json.Valid(args.Value) {
-			return capabilityFailure("invalid_argument", "storage.set requires a valid key and JSON value")
-		}
-		storage, ok := r.host.(StorageHost)
-		if !ok {
-			return capabilityFailure("unavailable", "plugin storage is unavailable")
-		}
-		if err := storage.StorageSet(ctx, r.manifest.ID, args.Key, args.Value); err != nil {
-			return capabilityFailure("failed", "storage.set failed")
-		}
-		return capabilitySuccess(nil)
-	case "scheduler.register":
-		scheduler, ok := r.host.(SchedulerHost)
-		if !ok {
-			return capabilityFailure("unavailable", "scheduler is unavailable")
-		}
-		value, err := scheduler.ScheduleRegister(ctx, r.manifest.ID, request.Params)
-		if err != nil {
-			return detailedFailure("scheduler.register", err)
-		}
-		return capabilitySuccess(value)
-	case "scheduler.validate":
-		validator, ok := r.host.(SchedulerValidator)
-		if !ok {
-			return capabilityFailure("unavailable", "scheduler is unavailable")
-		}
-		if err := validator.ScheduleValidate(ctx, request.Params); err != nil {
-			return detailedFailure("scheduler.validate", err)
-		}
-		return capabilitySuccess(nil)
-	case "scheduler.remove":
-		var args struct {
-			ID string `json:"id"`
-		}
-		if err := decodeParams(request.Params, &args); err != nil || strings.TrimSpace(args.ID) == "" {
-			return capabilityFailure("invalid_argument", "scheduler.remove requires id")
-		}
-		scheduler, ok := r.host.(SchedulerHost)
-		if !ok {
-			return capabilityFailure("unavailable", "scheduler is unavailable")
-		}
-		if err := scheduler.ScheduleRemove(ctx, r.manifest.ID, args.ID); err != nil {
-			return detailedFailure("scheduler.remove", err)
-		}
-		return capabilitySuccess(nil)
-	case "scheduler.list":
-		scheduler, ok := r.host.(SchedulerHost)
-		if !ok {
-			return capabilityFailure("unavailable", "scheduler is unavailable")
-		}
-		value, err := scheduler.ScheduleList(ctx, r.manifest.ID)
-		if err != nil {
-			return capabilityFailure("failed", "scheduler.list failed")
-		}
-		return capabilitySuccess(value)
-	case "process.start":
-		process, ok := r.host.(ProcessHost)
-		if !ok {
-			return capabilityFailure("unavailable", "process manager is unavailable")
-		}
-		value, err := process.ProcessStart(ctx, r.manifest.ID, request.Params)
-		if err != nil {
-			return detailedFailure("process.start", err)
-		}
-		return capabilitySuccess(value)
-	case "process.run":
-		host, ok := r.host.(ProcessRunHost)
-		if !ok {
-			return capabilityFailure("unavailable", "bounded process execution is unavailable")
-		}
-		value, err := host.ProcessRun(ctx, r.manifest.ID, request.Params)
-		if err != nil {
-			return detailedFailure("process.run", err)
-		}
-		return capabilitySuccess(value)
-	case "workspace.list", "workspace.stat", "workspace.read", "workspace.write", "workspace.mkdir", "workspace.remove":
-		host, ok := r.host.(WorkspaceHost)
-		if !ok {
-			return capabilityFailure("unavailable", "plugin workspace is unavailable")
-		}
-		value, err := host.Workspace(ctx, r.manifest.ID, strings.TrimPrefix(request.Capability, "workspace."), request.Params)
-		if err != nil {
-			return detailedFailure(request.Capability, err)
-		}
-		return capabilitySuccess(value)
-	case "process.session.create", "process.session.write", "process.session.resize", "process.session.status", "process.session.terminate":
-		sessions, ok := r.host.(ProcessSessionHost)
-		if !ok {
-			return capabilityFailure("unavailable", "interactive process sessions are unavailable")
-		}
-		var value json.RawMessage
-		var err error
-		switch request.Capability {
-		case "process.session.create":
-			value, err = sessions.ProcessSessionCreate(ctx, r.manifest.ID, request.Params)
-		case "process.session.write":
-			value, err = sessions.ProcessSessionWrite(ctx, r.manifest.ID, request.Params)
-		case "process.session.resize":
-			value, err = sessions.ProcessSessionResize(ctx, r.manifest.ID, request.Params)
-		case "process.session.status":
-			value, err = sessions.ProcessSessionStatus(ctx, r.manifest.ID, request.Params)
-		case "process.session.terminate":
-			value, err = sessions.ProcessSessionTerminate(ctx, r.manifest.ID, request.Params)
-		}
-		if err != nil {
-			return detailedFailure(request.Capability, err)
-		}
-		return capabilitySuccess(value)
-	case "browser.runtime.register", "browser.runtime.remove", "browser.publication.register", "browser.publication.remove", "browser.stream.ticket", "http.gateway.open", "http.gateway.close":
-		browser, ok := r.host.(BrowserHost)
-		if !ok {
-			return capabilityFailure("unavailable", "browser capabilities unavailable")
-		}
-		value, err := browser.BrowserCapability(ctx, r.manifest.ID, request.Capability, request.Params)
-		if err != nil {
-			return detailedFailure(request.Capability, err)
-		}
-		return capabilitySuccess(value)
-	case "network.stream.open", "network.stream.read", "network.stream.write", "network.stream.close":
-		streams, ok := r.host.(NetworkStreamHost)
-		if !ok {
-			return capabilityFailure("unavailable", "network streams are unavailable")
-		}
-		var value json.RawMessage
-		var err error
-		switch request.Capability {
-		case "network.stream.open":
-			value, err = streams.NetworkStreamOpen(ctx, r.manifest.ID, request.Params)
-		case "network.stream.read":
-			value, err = streams.NetworkStreamRead(ctx, r.manifest.ID, request.Params)
-		case "network.stream.write":
-			value, err = streams.NetworkStreamWrite(ctx, r.manifest.ID, request.Params)
-		case "network.stream.close":
-			value, err = streams.NetworkStreamClose(ctx, r.manifest.ID, request.Params)
-		}
-		if err != nil {
-			return detailedFailure(request.Capability, err)
-		}
-		return capabilitySuccess(value)
-	case "history.begin", "history.append", "history.finish", "history.list", "history.get", "history.output":
-		history, ok := r.host.(HistoryHost)
-		if !ok {
-			return capabilityFailure("unavailable", "execution history is unavailable")
-		}
-		value, err := history.History(ctx, r.manifest.ID, strings.TrimPrefix(request.Capability, "history."), request.Params)
-		if err != nil {
-			return detailedFailure(request.Capability, err)
-		}
-		return capabilitySuccess(value)
-	case "process.status", "process.terminate":
-		var args struct {
-			ID string `json:"id"`
-		}
-		if err := decodeParams(request.Params, &args); err != nil || strings.TrimSpace(args.ID) == "" {
-			return capabilityFailure("invalid_argument", request.Capability+" requires id")
-		}
-		process, ok := r.host.(ProcessHost)
-		if !ok {
-			return capabilityFailure("unavailable", "process manager is unavailable")
-		}
-		var value json.RawMessage
-		var err error
-		if request.Capability == "process.status" {
-			value, err = process.ProcessStatus(ctx, r.manifest.ID, args.ID)
-		} else {
-			value, err = process.ProcessTerminate(ctx, r.manifest.ID, args.ID)
-		}
-		if err != nil {
-			return detailedFailure(request.Capability, err)
-		}
-		return capabilitySuccess(value)
-	case "events.publish":
-		var args struct {
-			Event string          `json:"event"`
-			Data  json.RawMessage `json:"data"`
-		}
-		if err := decodeParams(request.Params, &args); err != nil || strings.TrimSpace(args.Event) == "" || !json.Valid(args.Data) {
-			return capabilityFailure("invalid_argument", "events.publish requires event and JSON data")
-		}
-		events, ok := r.host.(EventHost)
-		if !ok {
-			return capabilityFailure("unavailable", "event publication is unavailable")
-		}
-		if err := events.PublishEvent(ctx, r.manifest.ID, args.Event, args.Data); err != nil {
-			return detailedFailure("events.publish", err)
-		}
-		return capabilitySuccess(nil)
-	default:
+	handler, ok := capabilityHandlers[request.Capability]
+	if !ok {
 		return capabilityFailure("unknown_capability", "capability is not published by this RunPilot version")
 	}
+	return handler(r, ctx, request.Capability, request.Params)
 }
 
 func validStorageKey(key string) bool {

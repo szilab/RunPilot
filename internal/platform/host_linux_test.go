@@ -42,7 +42,7 @@ func TestLinuxHostCPUDetailsAndGPUParser(t *testing.T) {
 }
 
 func TestLinuxDisksContainOnlyBlockDevices(t *testing.T) {
-	disks, err := linuxDisks()
+	disks, err := linuxDisks(false)
 	if err != nil {
 		t.Fatal(err)
 	}

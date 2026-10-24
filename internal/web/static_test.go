@@ -327,10 +327,9 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 	if _, err := staticFS.ReadFile("static/runpilot-logo.png"); err != nil {
 		t.Fatalf("embedded application logo is missing: %v", err)
 	}
-	for _, asset := range []string{"static/vendor/xterm/xterm.js", "static/vendor/xterm/addon-fit.js", "static/vendor/xterm/xterm.css", "static/vendor/xterm/LICENSE-xterm.txt"} {
-		if _, err := staticFS.ReadFile(asset); err != nil {
-			t.Fatalf("embedded terminal asset %s is missing: %v", asset, err)
-		}
+	// Terminal-like plugins package their own xterm.js; core must not ship it.
+	if _, err := staticFS.ReadFile("static/vendor/xterm/xterm.js"); err == nil {
+		t.Fatal("core still embeds plugin-owned xterm.js")
 	}
 
 	app, err := staticFS.ReadFile("static/app.js")

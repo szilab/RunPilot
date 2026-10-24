@@ -102,6 +102,19 @@
                 <p class="meta">For CLI tools and integrations. Browser sessions use your administrator account. Disabling this blocks API token access for external clients.</p>
               </section>
               <section class="general-settings-card">
+                <h3>Proxy single sign-on</h3>
+                <form id="proxyAuthForm" class="settings-form">
+                  <p class="meta">Signs you in automatically when an authenticating reverse proxy, such as VoidAuth or Authelia, sends the signed-in user name in a request header. Leave both fields empty to turn it off.</p>
+                  <label>Trusted proxies<input id="proxyAuthTrustedProxies" type="text" spellcheck="false" autocomplete="off" placeholder="127.0.0.1, 172.18.0.0/16" aria-describedby="proxyAuthProxiesHelp"></label>
+                  <p id="proxyAuthProxiesHelp" class="meta">IP addresses or ranges that connect directly to RunPilot. The header is ignored on requests from any other address.</p>
+                  <label>User name header<input id="proxyAuthHeader" type="text" spellcheck="false" autocomplete="off" placeholder="Remote-User" aria-describedby="proxyAuthHeaderHelp"></label>
+                  <p id="proxyAuthHeaderHelp" class="meta">The header must contain <strong id="proxyAuthAdmin">the administrator user name</strong>. If the proxy sends another user name, RunPilot denies access. Signing out of RunPilot does not sign you out of the proxy, so the next visit signs you in again.</p>
+                  <p id="proxyAuthStatus" class="meta" role="status"></p>
+                  <div id="proxyAuthError" class="form-error hidden" role="alert"></div>
+                  <div class="dialog-actions"><button id="proxyAuthSave" class="button primary" type="submit">Save</button></div>
+                </form>
+              </section>
+              <section class="general-settings-card">
                 <h3>WebSocket payload encryption</h3>
                 <form id="websocketPayloadModeForm" class="settings-form">
                   <label for="websocketPayloadMode">Encryption mode<select id="websocketPayloadMode"><option value="disabled">Disabled</option><option value="optional">Optional</option><option value="required">Required</option></select></label>

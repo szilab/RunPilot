@@ -498,6 +498,7 @@ pre { background: #0b1220; color: #d6e2f0; border-radius: 10px; padding: 16px; o
 .host-dashboard-disk-size { margin:7px 0 12px; color:var(--rp-text-muted); font-size:12px; white-space:nowrap; }
 .host-dashboard-disk .host-dashboard-bar { height:6px; }
 .host-dashboard-empty, .host-dashboard-loading, .host-dashboard-error { margin:0; color:var(--rp-text-muted); font-size:13px; }
+.host-dashboard-context { margin:0 0 14px; padding:10px 14px; border:1px solid var(--rp-accent-border); border-radius:var(--rp-radius-card); background:var(--rp-accent-soft); color:var(--rp-text); font-size:13px; line-height:1.45; }
 .host-dashboard-error { color:var(--rp-text-strong); }
 @media (max-width:700px) { .host-dashboard-top { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:460px) { .host-dashboard-top { grid-template-columns:1fr; } .host-dashboard-card { padding:15px; } .host-dashboard-disk { padding:10px; } .host-dashboard-disk-size { white-space:normal; } }

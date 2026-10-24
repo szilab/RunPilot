@@ -1,6 +1,7 @@
 import RFB from "./vendor/novnc/core/rfb.js";
 import { provideVNCCredentials } from "./vnc-credentials.js";
 import { createVNCChannelAdapter } from "./vnc-channel.js";
+import { macField } from "./target-status.js";
 const escapeHTML = value => String(value ?? "").replace(/[&<>"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[character]));
 
 function field(label, name, value, type = "text", attrs = "") {
@@ -31,19 +32,19 @@ function clearCredentials(state) {
   state.clearCredentials = null;
 }
 
-export function createVNCFeature(runpilot, call, onActivity = () => {}) {
+export function createVNCFeature(runpilot, call, onActivity = () => {}, targetStatus = null) {
   let page = null, targets = [], message = "", active = null, disposed = false;
 
   function addTargetDialog(existing = null) {
     const dialog = document.createElement("dialog");
     dialog.className = "dialog vnc-target-dialog";
-    dialog.innerHTML = `<form method="dialog" class="vnc-form"><div class="dialog-head"><h2>${existing ? "Edit VNC target" : "Add VNC target"}</h2><button class="icon-btn" type="button" data-cancel aria-label="Cancel">×</button></div><input type="hidden" name="id" value="${escapeHTML(existing?.id || "")}">${field("Name", "name", existing?.name || "", "text", 'maxlength="100" required autocomplete="off"')}${field("Host", "host", existing?.host || "", "text", 'maxlength="253" required autocomplete="off"')}<details class="rp-disclosure vnc-target-advanced"><summary>Advanced settings</summary><div class="vnc-advanced-fields">${field("Port", "port", existing?.port || 5900, "number", 'min="1" max="65535" required')}${field("Username (optional)", "username", existing?.username || "", "text", 'maxlength="256" autocomplete="username"')}${field("Connect timeout (seconds)", "connectTimeoutSeconds", existing?.connectTimeoutSeconds || 10, "number", 'min="1" max="30" required')}</div></details><p class="vnc-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button secondary" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save target</button></div></form>`;
+    dialog.innerHTML = `<form method="dialog" class="vnc-form"><div class="dialog-head"><h2>${existing ? "Edit VNC target" : "Add VNC target"}</h2><button class="icon-btn" type="button" data-cancel aria-label="Cancel">×</button></div><input type="hidden" name="id" value="${escapeHTML(existing?.id || "")}">${field("Name", "name", existing?.name || "", "text", 'maxlength="100" required autocomplete="off"')}${field("Host", "host", existing?.host || "", "text", 'maxlength="253" required autocomplete="off"')}<details class="rp-disclosure vnc-target-advanced"><summary>Advanced settings</summary><div class="vnc-advanced-fields">${field("Port", "port", existing?.port || 5900, "number", 'min="1" max="65535" required')}${field("Username (optional)", "username", existing?.username || "", "text", 'maxlength="256" autocomplete="username"')}${field("Connect timeout (seconds)", "connectTimeoutSeconds", existing?.connectTimeoutSeconds || 10, "number", 'min="1" max="30" required')}${macField(existing)}</div></details><p class="vnc-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button secondary" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save target</button></div></form>`;
     const form = dialog.querySelector("form"), error = dialog.querySelector(".vnc-form-error");
     dialog.querySelectorAll("[data-cancel]").forEach(button => button.addEventListener("click", () => dialog.close()));
     form.addEventListener("submit", async event => {
       event.preventDefault(); const submit = form.querySelector('[type="submit"]'); submit.disabled = true; error.hidden = true;
       const data = new FormData(form);
-      const target = { id: data.get("id"), name: data.get("name"), host: data.get("host"), port: Number(data.get("port")), username: data.get("username"), connectTimeoutSeconds: Number(data.get("connectTimeoutSeconds")) };
+      const target = { id: data.get("id"), name: data.get("name"), host: data.get("host"), port: Number(data.get("port")), username: data.get("username"), connectTimeoutSeconds: Number(data.get("connectTimeoutSeconds")), macAddress: String(data.get("macAddress") || "").trim() };
       try { await call("vnc.targets.save", { target }); dialog.close(); await loadTargets(); }
       catch (cause) { error.textContent = cause.message || "Could not save VNC target"; error.hidden = false; submit.disabled = false; }
     });
@@ -68,13 +69,15 @@ export function createVNCFeature(runpilot, call, onActivity = () => {}) {
       const endpoint = `${target.host}${target.port !== 5900 ? `:${target.port}` : ""}`;
       const identity = target.username || "Password requested when required";
       const card = document.createElement("article"); card.className = "rp-card vnc-target-card";
-      card.innerHTML = `<div class="vnc-target-card-head"><span class="vnc-target-glyph" aria-hidden="true"></span><div class="vnc-target-facts"><h2>${escapeHTML(target.name)}</h2></div></div><div class="vnc-target-meta-row"><div class="vnc-target-facts"><span title="${escapeHTML(endpoint)}">${escapeHTML(endpoint)}</span><small class="vnc-target-identity" title="${escapeHTML(identity)}">${escapeHTML(identity)}</small></div></div>`;
+      card.innerHTML = `<div class="vnc-target-card-head"><span class="vnc-target-glyph" aria-hidden="true"></span><div class="vnc-target-facts"><h2>${escapeHTML(target.name)}</h2>${targetStatus ? targetStatus.badge("vnc", target.id) : ""}</div></div><div class="vnc-target-meta-row"><div class="vnc-target-facts"><span title="${escapeHTML(endpoint)}">${escapeHTML(endpoint)}</span><small class="vnc-target-identity" title="${escapeHTML(identity)}">${escapeHTML(identity)}</small></div></div>`;
       const actions = document.createElement("div"); actions.className = "vnc-target-actions";
       const button = (label, style, handler) => { const control = document.createElement("button"); control.type = "button"; control.className = `button ${style}`; control.textContent = label; control.addEventListener("click", handler); actions.append(control); };
-      button("Connect", "primary small", () => openSession(target)); button("Edit", "secondary small", () => addTargetDialog(target)); button("Delete", "danger small", () => void deleteTarget(target));
+      button("Connect", "primary small", () => openSession(target));
+      if (targetStatus) button("Wake", "secondary small", async event => { const control = event.currentTarget; control.disabled = true; try { await targetStatus.wake("vnc", target); } finally { control.disabled = false; } });
+      button("Edit", "secondary small", () => addTargetDialog(target)); button("Delete", "danger small", () => void deleteTarget(target));
       card.querySelector(".vnc-target-meta-row").append(actions); list.append(card);
     }
-    section.append(list); page.append(section);
+    section.append(list); page.append(section); targetStatus?.observe(list);
   }
 
   async function loadTargets() {

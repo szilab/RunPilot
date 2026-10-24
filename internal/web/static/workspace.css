@@ -39,7 +39,7 @@
   --rp-metric-amber: #deb06e;
   --rp-metric-violet: #a491e9;
 }
-body { padding: 20px; background: linear-gradient(var(--rp-wallpaper-wash), var(--rp-wallpaper-wash)), url("workspace-alpine.png") center / cover fixed; }
+body { padding: 20px; background: linear-gradient(var(--rp-wallpaper-wash), var(--rp-wallpaper-wash)), url("workspace-alpine.webp") center / cover fixed; }
 .shell { max-width: 1680px; margin: 0 auto; min-height: calc(100dvh - 40px); grid-template-columns: 208px minmax(0, 1fr); border: 1px solid var(--rp-border); border-radius: 22px; background: var(--rp-surface); box-shadow: 0 24px 70px rgba(8, 24, 52, .18), 0 0 0 5px rgba(255, 255, 255, .14); overflow: clip; }
 .workspace { min-width: 0; background: var(--rp-surface); }
 .sidebar { top: 20px; height: calc(100dvh - 40px); max-height: calc(100dvh - 40px); padding: 25px 14px 16px; background: var(--rp-surface-elevated); }

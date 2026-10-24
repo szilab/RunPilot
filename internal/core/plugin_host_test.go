@@ -70,7 +70,7 @@ func isHostFailure(err error, code string) bool {
 
 func TestPluginSystemIdentityIncludesBuildDeploymentWhenSet(t *testing.T) {
 	previous := version.Deployment
-	version.Deployment = "asustor-appcentral"
+	version.Deployment = "docker"
 	t.Cleanup(func() { version.Deployment = previous })
 
 	raw, err := (controllerPluginHost{}).SystemIdentity(context.Background())
@@ -85,7 +85,7 @@ func TestPluginSystemIdentityIncludesBuildDeploymentWhenSet(t *testing.T) {
 	if err := json.Unmarshal(raw, &identity); err != nil {
 		t.Fatal(err)
 	}
-	if identity.Username == "" || identity.UID == "" || identity.Deployment != "asustor-appcentral" {
+	if identity.Username == "" || identity.UID == "" || identity.Deployment != "docker" {
 		t.Fatalf("identity = %+v", identity)
 	}
 }

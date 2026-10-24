@@ -2,9 +2,9 @@ apiVersion: runpilot.plugin/v1
 id: remote
 name: Remote Desktop
 description: RDP and VNC remote desktop access
-version: 1.0.0
+version: 1.1.0
 requires:
-  backend: ">=1.0.0 <2.0.0"
+  backend: ">=1.1.0 <2.0.0"
   frontend: ">=1.0.0 <2.0.0"
   runpilotApi: 2
 platforms: [linux, windows]

@@ -25,6 +25,7 @@ func TestDownloadTicketAtRootUsesLocalPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.legacyRoutes = true
 	path := "root" + filepath.ToSlash(root) + "/report.bin"
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/local/download-ticket", bytes.NewBufferString(`{"path":"`+path+`"}`))
 	req.Header.Set("Authorization", "Bearer "+ctrl.Snapshot().Server.Token)
@@ -61,6 +62,7 @@ func TestStorageTextEndpointCreatesNewLocalFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.legacyRoutes = true
 	path := "root" + filepath.ToSlash(root) + "/new-note.txt"
 	request := httptest.NewRequest(http.MethodPut, "/api/v1/storage/local/text", bytes.NewBufferString(`{"path":"`+path+`","content":"hello"}`))
 	request.Header.Set("Authorization", "Bearer "+ctrl.Snapshot().Server.Token)
@@ -85,6 +87,7 @@ func TestStorageLocationsAreRuntimeOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.legacyRoutes = true
 	token := ctrl.Snapshot().Server.Token
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/storage", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
@@ -114,6 +117,7 @@ func TestSoftwareProviderConfigurationRequiresAuth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.legacyRoutes = true
 	unauthorized := httptest.NewRequest(http.MethodPut, "/api/v1/software/providers/scoop", bytes.NewBufferString(`{"scoop":{"root":"C:\\RunPilotSoftware"}}`))
 	r := httptest.NewRecorder()
 	s.Handler().ServeHTTP(r, unauthorized)

@@ -74,16 +74,21 @@ host callbacks and is serialized with normal plugin calls.
 Backend plugins use RunPilot host capabilities for OS and framework operations:
 
 ```text
-host.process.*
-host.fs.*
-host.network.*
-host.scheduler.*
-host.storage.*
-host.history.*
-host.system.*
-host.config.*
 host.log.*
+host.system.*
+host.storage.*
+host.scheduler.*
+host.process.*          # including process.session.* (PTY/ConPTY)
+host.workspace.*
+host.history.*
+host.events.*
+host.network.stream.*
+host.browser.* / host.http.gateway.*
 ```
+
+See the capability index in [PLUGIN_API.md](PLUGIN_API.md) for the exact names.
+Calls into one plugin are serialized; keep handlers short and run long work
+through `process.start` or `process.session.*` events.
 
 Every loaded plugin can call every published capability. Capabilities are an ABI boundary, not a per-plugin authorization system. Keep them explicit and stable; avoid generic syscall escape hatches. Capability implementations still validate arguments and RunPilot invariants.
 

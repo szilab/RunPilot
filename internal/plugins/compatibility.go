@@ -9,7 +9,7 @@ import (
 
 // Contract versions describe the supported host surface, not the application
 // release or the raw WASM calling convention (PluginABIVersion/2).
-const BackendContractVersion = "1.0.0"
+const BackendContractVersion = "1.1.0"
 const FrontendContractVersion = "1.0.0"
 const DefaultRegistryURL = "https://github.com/szilab/RunPilot/releases/download/plugin-catalog/catalog.json"
 

@@ -19,6 +19,8 @@ type vncTarget struct {
 	Port                  int    `json:"port"`
 	Username              string `json:"username,omitempty"`
 	ConnectTimeoutSeconds int    `json:"connectTimeoutSeconds"`
+	MACAddress            string `json:"macAddress,omitempty"`
+	DiscoveredMAC         string `json:"discoveredMac,omitempty"`
 }
 
 type vncTargetStore struct {
@@ -60,6 +62,12 @@ func normalizeVNCTarget(target vncTarget) (vncTarget, *rpcError) {
 	if target.ConnectTimeoutSeconds < 1 || target.ConnectTimeoutSeconds > 30 {
 		return vncTarget{}, fail("invalid_argument", "VNC connect timeout must be between 1 and 30 seconds")
 	}
+	mac, macOK := normalizeMAC(target.MACAddress)
+	discovered, discoveredOK := normalizeMAC(target.DiscoveredMAC)
+	if !macOK || !discoveredOK {
+		return vncTarget{}, fail("invalid_argument", "MAC address must look like aa:bb:cc:dd:ee:ff")
+	}
+	target.MACAddress, target.DiscoveredMAC = mac, discovered
 	return target, nil
 }
 
@@ -126,6 +134,7 @@ func (p *plugin) saveVNCTarget(raw json.RawMessage) (any, *rpcError) {
 	if failure := decode(raw, &request); failure != nil {
 		return nil, failure
 	}
+	request.Target.DiscoveredMAC = "" // learned by the plugin, never set by clients
 	target, failure := normalizeVNCTarget(request.Target)
 	if failure != nil {
 		return nil, failure
@@ -144,6 +153,8 @@ func (p *plugin) saveVNCTarget(raw json.RawMessage) (any, *rpcError) {
 		found := false
 		for index := range stored.Targets {
 			if stored.Targets[index].ID == target.ID {
+				previous := stored.Targets[index]
+				target.DiscoveredMAC = discoveredFor(previous.Host, previous.DiscoveredMAC, target.Host)
 				stored.Targets[index] = target
 				found = true
 				break

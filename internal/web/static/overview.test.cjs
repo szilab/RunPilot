@@ -61,6 +61,20 @@ const fixture = {host:{hostname:"desk",os:"linux",architecture:"amd64",cpuAvaila
   assert.equal(descendants(noGPU).filter(node => node.className.includes("host-dashboard-card")).length, 3);
   assert.ok(descendants(noGPU).some(node => node.textContent === "No filesystem metrics available."));
 
+  const containerRoot = new Element("root");
+  renderStatus(containerRoot, {...fixture, host:{...fixture.host,gpuAvailable:false,cpuCount:2,loadAverage:undefined,memoryTotalBytes:1024**3,memoryFreeBytes:768*1024**2,container:{runtime:"docker",cpuLimit:1.5,memoryLimitBytes:1024**3,hostCpuCount:16,hostMemoryBytes:32*1024**3},disks:[{path:"/",device:"overlay",totalBytes:1000,freeBytes:250},{path:"/var/lib/runpilot",totalBytes:2000,freeBytes:1000}]}});
+  const inContainer = descendants(containerRoot);
+  assert.equal(containerRoot.children[0].className,"host-dashboard-context","container context notice missing");
+  assert.ok(containerRoot.children[0].textContent.startsWith("Running in a Docker container."));
+  for (const text of ["Container CPU","Container memory","Limit 1.5 CPUs","Host has 16 CPUs","Container memory limit","256.0 MiB / 1.0 GiB","Container filesystem","/var/lib/runpilot"]) assert.ok(inContainer.some(node => node.textContent === text), `container view is missing ${text}`);
+  assert.ok(!inContainer.some(node => node.textContent.startsWith("Load ")),"host load average shown for a container");
+  const unlimited = new Element("root");
+  renderStatus(unlimited, {...fixture, host:{...fixture.host,gpuAvailable:false,container:{runtime:"podman",hostCpuCount:16,hostMemoryBytes:32*1024**3}}});
+  const unlimitedNodes = descendants(unlimited);
+  assert.ok(unlimited.children[0].textContent.startsWith("Running in a Podman container."));
+  assert.ok(unlimitedNodes.some(node => node.textContent === "No CPU limit · 16 CPUs available"));
+  assert.ok(unlimitedNodes.some(node => node.textContent === "No memory limit · 32.0 GiB host memory"));
+
   let calls=0, interval, stopped=false, pluginMounted=0;
   const dormant = new OverviewWidgets(new Element("detached"));
   dormant.register("tasks",{id:"tasks.summary",title:"Tasks",mount(){pluginMounted++;}});

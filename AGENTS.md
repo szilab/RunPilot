@@ -21,6 +21,10 @@ architecture description elsewhere.
   service to open another window. Browser management uses password
   authentication and revocable server sessions. Bearer API access is a separate
   setting; preserve it for existing token integrations during upgrades.
+  Reverse-proxy SSO (Settings, overridden by `RUNPILOT_TRUSTED_PROXIES` and
+  `RUNPILOT_PROXY_AUTH_HEADER`) trusts only the direct TCP peer, never
+  forwarding headers, and must issue
+  ordinary server sessions rather than bypass CSRF or session checks.
 - Resolve the mutable application data root from explicit CLI override, environment,
   persisted deployment locator, then platform default. Keep the locator independent
   from the selected data root; never infer the root from process workingDirectory.
@@ -73,9 +77,12 @@ architecture description elsewhere.
   complexity or correctness risk.
 - Keep platform-specific behavior behind small adapters/build constraints and
   preserve Windows SCM and Linux systemd user-service behavior.
-- Native ASUSTOR APKG packaging lives in `packaging/asustor` and
-  `cmd/asustor-apkg`; keep ADM lifecycle handling in the package hooks and do
-  not make systemd a requirement on ADM.
+- The container image (root `Dockerfile` with `packaging/docker`) is the
+  preferred Linux deployment, including NAS devices; vendor-specific NAS
+  packages (the former ASUSTOR APKG) are not maintained. The image must run
+  with defaults (same-path data mount, optional Docker socket); keep privilege
+  drop, socket group and init handling in the entrypoint, and keep
+  container-aware metrics generic in `internal/platform`.
 - When touching unmigrated Docker, Backup or Xpra code, preserve its
   existing safety boundaries and regression tests rather than expanding the
   legacy core domain.

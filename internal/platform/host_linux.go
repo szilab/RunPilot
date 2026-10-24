@@ -56,20 +56,25 @@ func HostStatus() model.HostStatus {
 	} else {
 		status.MemoryTotalBytes, status.MemoryFreeBytes = total, free
 	}
-	if times, err := linuxCPUTimesNow(); err != nil {
-		status.Error = appendStatusError(status.Error, err.Error())
+	containerRuntime := linuxContainerRuntime()
+	if containerRuntime == "" {
+		if times, err := linuxCPUTimesNow(); err != nil {
+			status.Error = appendStatusError(status.Error, err.Error())
+		} else {
+			status.CPUPercent, status.CPUAveragePercent = linuxCPUSampler.sample(times)
+			status.CPUAvailable = true
+		}
+		status.LoadAverage = linuxLoadAverage()
 	} else {
-		status.CPUPercent, status.CPUAveragePercent = linuxCPUSampler.sample(times)
-		status.CPUAvailable = true
+		applyContainerStatus(&status, containerRuntime, readCgroupStats(cgroupRoot), time.Now())
 	}
 	status.CPUModel = linuxCPUModel()
-	status.LoadAverage = linuxLoadAverage()
 	if gpu, available := linuxGPUStatus(); available {
 		status.GPUPercent, status.GPUAveragePercent = linuxGPUSampler.sampleValue(gpu.Percent)
 		status.GPUAvailable = true
 		status.GPUName, status.GPUMemoryUsed, status.GPUMemoryTotal = gpu.Name, gpu.MemoryUsed, gpu.MemoryTotal
 	}
-	if disks, err := linuxDisks(); err != nil {
+	if disks, err := linuxDisks(containerRuntime != ""); err != nil {
 		status.Error = appendStatusError(status.Error, err.Error())
 	} else {
 		status.Disks = disks
@@ -302,14 +307,41 @@ func linuxMemory() (uint64, uint64, error) {
 	return total, free, nil
 }
 
-func linuxDisks() ([]model.DiskStatus, error) {
+func linuxDisks(container bool) ([]model.DiskStatus, error) {
 	b, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
 		return nil, fmt.Errorf("read filesystems: %w", err)
 	}
+	return linuxDisksFrom(string(b), container, statFilesystem), nil
+}
+
+type filesystemUsage struct {
+	directory   bool
+	total, free uint64
+}
+
+func statFilesystem(mount string) (filesystemUsage, bool) {
+	info, err := os.Stat(mount)
+	if err != nil {
+		return filesystemUsage{}, false
+	}
+	var fs syscall.Statfs_t
+	if err := syscall.Statfs(mount, &fs); err != nil || fs.Blocks == 0 {
+		return filesystemUsage{}, false
+	}
+	unit := uint64(fs.Bsize)
+	return filesystemUsage{directory: info.IsDir(), total: fs.Blocks * unit, free: fs.Bavail * unit}, true
+}
+
+// linuxDisksFrom lists block-device filesystems from mountinfo. Only
+// directory mount points count: container runtimes bind-mount single files
+// such as /etc/hostname from the host disk, which are not filesystems the
+// user manages. Inside a container the root filesystem (usually overlay) is
+// included because it is where the container's own files live.
+func linuxDisksFrom(mountinfo string, container bool, stat func(string) (filesystemUsage, bool)) []model.DiskStatus {
 	seen := map[string]bool{}
 	disks := []model.DiskStatus{}
-	for _, line := range strings.Split(string(b), "\n") {
+	for _, line := range strings.Split(mountinfo, "\n") {
 		fields := strings.Fields(line)
 		separator := -1
 		for i, field := range fields {
@@ -323,19 +355,23 @@ func linuxDisks() ([]model.DiskStatus, error) {
 		}
 		mount := strings.ReplaceAll(strings.ReplaceAll(fields[4], `\040`, " "), `\011`, "\t")
 		device := fields[separator+2]
-		if seen[device] || !filepath.IsAbs(mount) || !strings.HasPrefix(device, "/dev/") {
+		blockDevice := strings.HasPrefix(device, "/dev/")
+		if seen[device] || !filepath.IsAbs(mount) || !(blockDevice || container && mount == "/") {
+			continue
+		}
+		usage, ok := stat(mount)
+		if !ok || !usage.directory {
 			continue
 		}
 		seen[device] = true
-		var fs syscall.Statfs_t
-		if err := syscall.Statfs(mount, &fs); err != nil || fs.Blocks == 0 {
-			continue
+		label := ""
+		if blockDevice {
+			label = linuxDiskLabel(device)
 		}
-		unit := uint64(fs.Bsize)
-		disks = append(disks, model.DiskStatus{Device: device, Label: linuxDiskLabel(device), Path: mount, TotalBytes: fs.Blocks * unit, FreeBytes: fs.Bavail * unit})
+		disks = append(disks, model.DiskStatus{Device: device, Label: label, Path: mount, TotalBytes: usage.total, FreeBytes: usage.free})
 	}
 	sort.Slice(disks, func(i, j int) bool { return disks[i].Path < disks[j].Path })
-	return disks, nil
+	return disks
 }
 
 // linuxDiskLabel reads udev's stable by-label links instead of invoking an

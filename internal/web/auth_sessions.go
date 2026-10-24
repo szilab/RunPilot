@@ -19,6 +19,7 @@ type persistedAuthSessions struct {
 type persistedAuthSession struct {
 	CSRFHash string    `json:"csrfHash"`
 	Expires  time.Time `json:"expires"`
+	Proxy    bool      `json:"proxy,omitempty"`
 }
 
 func (s *Server) authSessionsPath() string {
@@ -54,7 +55,7 @@ func (s *Server) loadSessions() error {
 			return errors.New("browser session store contains an invalid session")
 		}
 		if now.Before(record.Expires) {
-			s.sessions[id] = authSession{csrfHash: record.CSRFHash, expires: record.Expires}
+			s.sessions[id] = authSession{csrfHash: record.CSRFHash, expires: record.Expires, proxy: record.Proxy}
 		}
 	}
 	return nil
@@ -64,7 +65,7 @@ func (s *Server) loadSessions() error {
 func (s *Server) saveSessionsLocked() error {
 	stored := persistedAuthSessions{Version: 1, Sessions: make(map[string]persistedAuthSession, len(s.sessions))}
 	for id, session := range s.sessions {
-		stored.Sessions[id] = persistedAuthSession{CSRFHash: session.csrfHash, Expires: session.expires}
+		stored.Sessions[id] = persistedAuthSession{CSRFHash: session.csrfHash, Expires: session.expires, Proxy: session.proxy}
 	}
 	data, err := json.Marshal(stored)
 	if err != nil {

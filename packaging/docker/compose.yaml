@@ -1,0 +1,30 @@
+# Example Docker Compose deployment for RunPilot.
+#
+#   docker compose -f packaging/docker/compose.yaml up -d --build
+#
+# Open http://<host>:9070 and finish administrator setup within five minutes
+# of the first start; restart the container to open a new setup window.
+services:
+  runpilot:
+    build:
+      context: ../..
+    image: runpilot:local
+    restart: unless-stopped
+    ports:
+      - "9070:9070"
+    volumes:
+      # Same path inside and outside: Docker Compose projects managed by the
+      # Docker plugin resolve relative bind mounts to real host paths.
+      - /var/lib/runpilot:/var/lib/runpilot
+      # Optional: lets the Docker plugin manage the host's Docker Engine.
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Optional settings:
+    # environment:
+    #   # Match the owner of existing host files (default 1000:1000).
+    #   PUID: "1000"
+    #   PGID: "1000"
+    #   # Alpine packages to install at start, for example for tasks.
+    #   RUNPILOT_EXTRA_PACKAGES: "ffmpeg"
+    #   # Single sign-on through an authenticating reverse proxy.
+    #   RUNPILOT_TRUSTED_PROXIES: "172.20.0.10"
+    #   RUNPILOT_PROXY_AUTH_HEADER: "Remote-User"

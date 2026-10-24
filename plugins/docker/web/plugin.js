@@ -1,5 +1,4 @@
 const PLUGIN = "docker";
-const ASUSTOR_DOCKER_DOC = "https://github.com/szilab/RunPilot/blob/feature/asustor-appcentral/docs/platforms/asustor-docker-permissions.md";
 const enc = value => {
   const bytes = new TextEncoder().encode(String(value));
   let binary = "";
@@ -77,10 +76,6 @@ export async function activate(runpilot) {
     const deleteButton = button("Delete", `${kind}-delete`, item.name, !!reason, true, reason, "docker-plugin-resource-delete");
     return `<div class="docker-plugin-resource"><div><strong>${esc(item.name)}</strong><small>${esc(item.driver || "")} · ${esc(item.scope || "")} · ${esc(usage)}${(item.usedBy || []).length ? ` · ${esc(item.usedBy.join(", "))}` : ""}</small></div><span class="docker-plugin-resource-action"${reason ? ` title="${esc(reason)}"` : ""}>${deleteButton}</span></div>`;
   }
-  function permissionHelp(runtime) {
-    if (runtime?.deployment !== "asustor-appcentral" || runtime?.state !== "permission-denied") return "";
-    return `<p class="meta docker-plugin-permission-help"><a href="${ASUSTOR_DOCKER_DOC}" target="_blank" rel="noopener noreferrer">ASUSTOR Docker permission guidance</a></p>`;
-  }
   function render() {
     if (!root) return;
     const ready = !!snapshot?.runtime?.available;
@@ -88,7 +83,7 @@ export async function activate(runpilot) {
     const tabs = [["projects","Projects"],["volumes","Volumes"],["networks","Networks"]].map(([id,title])=>`<button class="button secondary small ${view===id?"active":""}" role="tab" aria-selected="${view===id}" tabindex="${view===id?0:-1}" data-action="view" data-key="${id}">${title}<span class="docker-plugin-count">${snapshot?(snapshot[id]||[]).length:"—"}</span></button>`).join("");
     const content = view === "projects" ? `<div class="docker-plugin-grid docker-plugin-projects rp-masonry">${list.map(item=>projectCard(item,ready)).join("") || `<div class="empty"><h3>${loading&&!snapshot?"Loading projects…":"No Compose projects"}</h3><p>Create a managed project to define its Compose services.</p></div>`}</div>` : `<div class="rp-card docker-plugin-card docker-plugin-resource-panel">${list.map(item=>resourceRow(item,view,ready)).join("") || `<div class="empty"><h3>No ${view} found</h3><p>Resources appear when they are available from Docker.</p></div>`}</div>`;
     const create = view === "projects" ? button("Create project","project-create","",!ready,false,"","",true) : button(view === "volumes" ? "Create volume" : "Create network",`${view}-create`,"",!ready,false,"","",true);
-    root.innerHTML = `<div class="docker-plugin">${error?`<div class="notice" role="alert">${esc(error)}</div>`:""}${!ready?`<div class="notice" role="status"><strong>${loading&&!snapshot?"Checking Docker":"Docker unavailable"}</strong>${esc(snapshot?.runtime?.message||(loading?"Connecting to Engine and Compose…":"Docker status has not been checked."))}${snapshot?.runtime?.identity?` Running as ${esc(snapshot.runtime.identity)}.`:""}${snapshot?.runtime?.diagnostic?`<p class="meta docker-plugin-diagnostic">${esc(snapshot.runtime.diagnostic)}</p>`:""}${permissionHelp(snapshot?.runtime)}</div>`:""}<div class="docker-plugin-viewbar"><div class="docker-plugin-tabs rp-segmented" role="tablist" aria-label="Docker resources">${tabs}</div>${create}</div><section role="tabpanel" aria-label="${view}">${content}</section></div>`;
+    root.innerHTML = `<div class="docker-plugin">${error?`<div class="notice" role="alert">${esc(error)}</div>`:""}${!ready?`<div class="notice" role="status"><strong>${loading&&!snapshot?"Checking Docker":"Docker unavailable"}</strong>${esc(snapshot?.runtime?.message||(loading?"Connecting to Engine and Compose…":"Docker status has not been checked."))}${snapshot?.runtime?.identity?` Running as ${esc(snapshot.runtime.identity)}.`:""}${snapshot?.runtime?.diagnostic?`<p class="meta docker-plugin-diagnostic">${esc(snapshot.runtime.diagnostic)}</p>`:""}</div>`:""}<div class="docker-plugin-viewbar"><div class="docker-plugin-tabs rp-segmented" role="tablist" aria-label="Docker resources">${tabs}</div>${create}</div><section role="tabpanel" aria-label="${view}">${content}</section></div>`;
   }
   const tabsKey = event => {
     const tab = event.target.closest?.('[data-action="view"]');
