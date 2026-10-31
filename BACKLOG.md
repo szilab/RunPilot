@@ -1,37 +1,16 @@
 # Backlog
 
-- **Migrate Storage next.** Move browsing and file operations to a plugin, then
-  retire the hidden legacy Storage UI and backend after parity.
-- **Remove transitional Docker code after Storage migration.** Delete the legacy
-  Docker manager, HTTP handlers and attach endpoint once Storage and remaining
-  state migration dependencies are gone. Restore Docker-volume browsing from
-  the Docker plugin to the Storage plugin when both sides have stable contracts.
-- **Migrate Software.** Move provider management to a plugin before removing
-  the hidden legacy Software UI and backend.
-- **Migrate Backup separately.** Preserve typed backup jobs and history until
-  a Backup plugin has parity; do not fold them into Tasks.
-- **Add host metrics widgets.** Design CPU, memory, disk and issue presentation
-  as plugin/widget contributions to Overview; do not expand the System fixture.
+RunPilot has a single deployment. Feature changes need no data or
+configuration migration; remove legacy code instead of migrating its state.
 
-- **Migrate Xpra to `remote.xpra`.** Xpra intentionally remains in legacy core,
-  while its UI is intentionally not exposed after the Remote Desktop plugin migration.
-  The migration is deferred because Xpra owns subprocess/display lifecycle and
-  a local HTTP/WebSocket HTML5 endpoint with reverse proxying. Before
-  implementation, decide on reusable host capabilities for process, listener,
-  and browser publication lifecycle; do not add Xpra semantics to core. Once
-  plugin parity exists, remove the remaining legacy Remote/Xpra core code.
-
-- **Web Apps compatibility follow-up.** Keep JavaScript-visible server cookie
-  behavior (`document.cookie`) deferred unless a concrete tested application
-  needs it. Investigate unusual proxy compatibility only when found in real use.
-- **Safely embedded Web Apps.** Investigate an isolated embedded view that can
-  preserve the RunPilot shell without granting the application management
-  authority; do not use a same-origin iframe.
-
-- **Docker data-root relocation remains manual.** RunPilot refuses to migrate while
-  Compose project definitions are stored under the active root, because relative
-  bind mounts may resolve to different host paths after a move. Relocate projects
-  with their original paths preserved before changing the RunPilot root.
-- **External managed data relocation remains feature-owned.** The core copies
-  RunPilot-owned files and plugin state, but data explicitly stored outside the
-  selected root must be moved by its owning application or plugin.
+- **Overview made of widgets.** Overview content comes from widget
+  contributions. Move the built-in host dashboard (CPU, memory, disk, GPU) to
+  widgets and add the launcher (shortcuts) as a widget. Lift the repository
+  rule that first-party plugins do not register Overview widgets when this
+  starts.
+- **Notifications.** A shared capability that plugins use to report events
+  such as a failed backup or task run (for example e-mail or a webhook).
+  Design it once for several plugins; Backup and Tasks only show failures on
+  their pages and as toasts until then.
+- **Backup follow-ups.** Browse files inside a Restic snapshot before
+  restoring, and a Backup status widget once Overview is made of widgets.

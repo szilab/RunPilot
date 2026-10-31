@@ -118,18 +118,18 @@ func TestPluginProcessRun(t *testing.T) {
 }
 func TestPluginProcessRunWorkspace(t *testing.T) {
 	c := &Controller{dataDir: t.TempDir()}
-	_, err := wsCall(t, c, "owner", "mkdir", "projects/jellyfin", nil)
+	_, err := wsCall(t, c, "owner", "mkdir", "projects/example-app", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := pluginRunInput{Command: os.Args[0], Args: []string{"-test.run=^TestProcessRunHelper$"}, Environment: map[string]string{}, WorkspaceDirectory: "projects/jellyfin", TimeoutSeconds: 3}
+	in := pluginRunInput{Command: os.Args[0], Args: []string{"-test.run=^TestProcessRunHelper$"}, Environment: map[string]string{}, WorkspaceDirectory: "projects/example-app", TimeoutSeconds: 3}
 	raw, err := processRunCall(t, c, in)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var out runResult
 	_ = json.Unmarshal(raw, &out)
-	if !strings.Contains(out.Stderr, filepath.Join("projects", "jellyfin")) {
+	if !strings.Contains(out.Stderr, filepath.Join("projects", "example-app")) {
 		t.Fatalf("cwd: %+v", out)
 	}
 	in.WorkspaceDirectory = "../escape"

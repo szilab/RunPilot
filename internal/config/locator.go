@@ -15,12 +15,6 @@ func LocatorPath() string {
 		return path
 	}
 	if runtime.GOOS == "windows" {
-		legacy := legacyWindowsLocatorPath()
-		if legacy != "" {
-			if _, err := os.Lstat(legacy); err == nil {
-				return legacy
-			}
-		}
 		if root := os.Getenv("APPDATA"); root != "" {
 			return filepath.Join(root, "RunPilot", "data-root")
 		}
@@ -31,13 +25,6 @@ func LocatorPath() string {
 	}
 	if root := DefaultConfigDir(); root != "" {
 		return filepath.Join(root, "runpilot", "data-root")
-	}
-	return ""
-}
-
-func legacyWindowsLocatorPath() string {
-	if root := os.Getenv("ProgramData"); root != "" {
-		return filepath.Join(root, "RunPilot", "data-root")
 	}
 	return ""
 }
@@ -78,17 +65,7 @@ func ResolveDataDir(explicit string) (string, error) {
 		}
 	}
 	if candidate == "" {
-		if runtime.GOOS == "windows" {
-			legacy := filepath.Join(os.Getenv("ProgramData"), "RunPilot")
-			if os.Getenv("ProgramData") != "" {
-				if _, err := os.Stat(filepath.Join(legacy, "runpilot.yaml")); err == nil {
-					candidate = legacy
-				}
-			}
-		}
-		if candidate == "" {
-			candidate = DefaultDataDir()
-		}
+		candidate = DefaultDataDir()
 	}
 	if candidate == "" {
 		return "", errors.New("resolve default data directory: home directory is unavailable")

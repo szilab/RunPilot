@@ -22,8 +22,7 @@ type BrowserPublication struct {
 	Owner     string `json:"owner"`
 	MountPath string `json:"mountPath"`
 	Bootstrap string `json:"bootstrap"`
-	Worker    string `json:"worker"`
-	RuntimeID string `json:"runtimeId,omitempty"`
+	RuntimeID string `json:"runtimeId"`
 }
 
 // BrowserRuntime owns the single gateway worker scope for this listener. The
@@ -124,18 +123,13 @@ func (m *browserPublications) call(owner, base, method string, raw json.RawMessa
 		var in struct {
 			MountPath string `json:"mountPath"`
 			Bootstrap string `json:"bootstrap"`
-			Worker    string `json:"worker"`
 			RuntimeID string `json:"runtimeId"`
 		}
 		if decodeNetworkParams(raw, &in) != nil || browserpath.Mount(in.MountPath) != nil || !browserAsset(in.Bootstrap) {
 			return nil, networkInvalid("invalid browser publication")
 		}
-		if in.RuntimeID != "" {
-			if in.Worker != "" || m.runtime == nil || m.runtime.ID != in.RuntimeID || m.runtime.Owner != owner {
-				return nil, networkInvalid("publication requires the owner's active browser runtime")
-			}
-		} else if !browserAsset(in.Worker) {
-			return nil, networkInvalid("publication worker required")
+		if in.RuntimeID == "" || m.runtime == nil || m.runtime.ID != in.RuntimeID || m.runtime.Owner != owner {
+			return nil, networkInvalid("publication requires the owner's active browser runtime")
 		}
 		for _, p := range m.mounts {
 			if browserpath.Overlap(p.MountPath, in.MountPath) {
@@ -149,7 +143,7 @@ func (m *browserPublications) call(owner, base, method string, raw json.RawMessa
 		if id == "" {
 			return nil, networkInvalid("cannot allocate publication")
 		}
-		p := BrowserPublication{ID: id, Owner: owner, MountPath: in.MountPath, Bootstrap: in.Bootstrap, Worker: in.Worker, RuntimeID: in.RuntimeID}
+		p := BrowserPublication{ID: id, Owner: owner, MountPath: in.MountPath, Bootstrap: in.Bootstrap, RuntimeID: in.RuntimeID}
 		m.mounts[id] = p
 		return json.Marshal(p)
 	case "browser.publication.remove":

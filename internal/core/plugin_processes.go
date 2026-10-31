@@ -49,10 +49,13 @@ type pluginProcess struct {
 	exitCode            *int
 }
 type pluginProcessStart struct {
-	Command          string            `json:"command"`
-	Args             []string          `json:"args,omitempty"`
-	WorkingDirectory string            `json:"workingDirectory,omitempty"`
-	Environment      map[string]string `json:"environment,omitempty"`
+	Command          string   `json:"command"`
+	Args             []string `json:"args,omitempty"`
+	WorkingDirectory string   `json:"workingDirectory,omitempty"`
+	// WorkspaceDirectory is an existing directory inside the caller's
+	// workspace, used instead of WorkingDirectory (backend contract 1.2).
+	WorkspaceDirectory string            `json:"workspaceDirectory,omitempty"`
+	Environment        map[string]string `json:"environment,omitempty"`
 	// Interpreter uses the launcher's CommandSpec semantics. Empty means
 	// "direct", which is what plugins received before interpreters existed.
 	Interpreter string `json:"interpreter,omitempty"`

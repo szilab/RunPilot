@@ -137,15 +137,14 @@ func optionConfigDir(options []Options) string {
 	return options[0].ConfigDir
 }
 
+// listenAddr combines the configured address and port with command-line
+// overrides. server.bind provides only the address; a port in it is ignored.
 func listenAddr(bind string, configuredPort, overridePort int, overrideAddress string) (string, error) {
 	port := configuredPort
 	if overridePort != 0 {
 		port = overridePort
 	}
-	if port == 0 && overrideAddress == "" {
-		return bind, nil // Legacy server.bind values include the port.
-	}
-	if port != 0 && (port < 1 || port > 65535) {
+	if port < 1 || port > 65535 {
 		return "", fmt.Errorf("server port must be between 1 and 65535")
 	}
 	host, _, err := net.SplitHostPort(bind)
@@ -160,17 +159,6 @@ func listenAddr(bind string, configuredPort, overridePort int, overrideAddress s
 	}
 	if host == "" {
 		host = "127.0.0.1"
-	}
-	if port == 0 {
-		_, portText, splitErr := net.SplitHostPort(bind)
-		if splitErr != nil {
-			return "", fmt.Errorf("server port is required when overriding the bind address")
-		}
-		portNumber, parseErr := strconv.Atoi(portText)
-		if parseErr != nil || portNumber < 1 || portNumber > 65535 {
-			return "", fmt.Errorf("server port must be between 1 and 65535")
-		}
-		port = portNumber
 	}
 	return net.JoinHostPort(host, strconv.Itoa(port)), nil
 }

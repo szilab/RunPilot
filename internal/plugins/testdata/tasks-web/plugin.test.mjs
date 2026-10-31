@@ -47,8 +47,8 @@ test("scheduled form converts units and keeps the chosen interpreter", () => {
   assert.equal(task.timeoutSeconds, 30);
   assert.equal(task.overlapPolicy, "allow");
   assert.equal("id" in task, false);
-  const daily = taskFromForm({ ...base, type: "scheduled", enabled: false, overlap: "skip", timeout: "", scheduleType: "daily", time: "03:15", timeZone: "Europe/Budapest" });
-  assert.deepEqual(daily.schedule, { type: "daily", timeOfDay: "03:15", timeZone: "Europe/Budapest" });
+  const daily = taskFromForm({ ...base, type: "scheduled", enabled: false, overlap: "skip", timeout: "", scheduleType: "daily", time: "03:15", timeZone: "Europe/Berlin" });
+  assert.deepEqual(daily.schedule, { type: "daily", timeOfDay: "03:15", timeZone: "Europe/Berlin" });
   assert.equal(taskFromForm({ ...base, type: "scheduled", overlap: "skip", scheduleType: "cron", cron: "0 * * * *" }).schedule.cron, "0 * * * *");
 });
 
@@ -91,6 +91,9 @@ test("the page renders escaped task data without an Overview card", async () => 
   assert.ok(page.innerHTML.includes("&lt;b&gt;boom&lt;/b&gt;"));
   assert.match(page.innerHTML, /data-action="start"/);
   assert.match(page.innerHTML, /data-action="run"/);
+  const header = { innerHTML: "" };
+  runtime.registered[0].headerActions(header);
+  assert.equal((header.innerHTML.match(/data-action="add"/g) || []).length, 1, "one add button covers both task types");
 
   runtime.subscriptions.get("tasks:tasks.status")(view("task-1", "Renamed", "continuous", { state: "running", pid: 42 }));
   assert.ok(page.innerHTML.includes("Renamed") && page.innerHTML.includes(">42<") && page.innerHTML.includes('data-action="stop"'));
@@ -108,7 +111,10 @@ test("unreadable stored configuration disables editing and explains itself", asy
   runtime.registered[0].render(page);
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.match(page.innerHTML, /Task configuration is unavailable/);
-  assert.match(page.innerHTML, /data-action="add" data-type="continuous" disabled/);
+  assert.doesNotMatch(page.innerHTML, /data-action="add"/, "the add action lives in the application header");
+  const header = { innerHTML: "" };
+  runtime.registered[0].headerActions(header);
+  assert.match(header.innerHTML, /data-action="add" disabled>Add task</);
   assert.ok(!page.innerHTML.includes("No tasks yet"));
 });
 

@@ -39,3 +39,37 @@
 @media(max-width:600px) { .docker-plugin-tabs { width: 100%; } .docker-plugin-tabs .button { flex: 1; justify-content: center; } }
 
 .docker-plugin-actions:empty { display: none; }
+
+/* Tabs: keep the count visibly separate from the label. */
+.docker-plugin-tabs .button { display: inline-flex; align-items: center; gap: 8px; }
+.docker-plugin-count { min-width: 22px; padding: 1px 7px; border-radius: 999px; background: var(--rp-surface-elevated); color: var(--rp-text-muted); font-size: 11px; font-weight: 600; line-height: 1.5; text-align: center; opacity: 1; }
+.docker-plugin-tabs .button.active .docker-plugin-count { background: var(--rp-accent-soft); color: var(--rp-accent); }
+
+/* Project card: title and status on the left, lifecycle actions and menu on the right. */
+.docker-plugin-card { gap: 6px; }
+.docker-plugin-card-head { align-items: center; flex-wrap: wrap; }
+.docker-plugin-card-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.docker-plugin-card-title h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docker-plugin-card-head .docker-plugin-actions { flex-wrap: nowrap; align-items: center; }
+.docker-plugin-container-list { gap: 0; }
+.docker-plugin-container { grid-template-columns: 8px minmax(0, 1fr) auto; gap: 12px; padding: 10px 0; }
+.docker-plugin-container:last-child { padding-bottom: 0; }
+.docker-plugin-container-text { display: grid; min-width: 0; gap: 1px; }
+.docker-plugin-container-text small { margin: 0; overflow: hidden; font-size: 12px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.docker-plugin-container .docker-plugin-actions { flex-wrap: nowrap; gap: 4px; }
+.docker-plugin-icon { width: 32px; min-width: 32px; min-height: 32px; height: 32px; }
+.docker-plugin-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.docker-plugin-icon svg .fill { fill: currentColor; stroke: none; }
+
+/* Overflow menu for less frequent project actions. */
+.docker-plugin-card:has(.docker-plugin-menu[open]) { position: relative; z-index: 5; }
+.docker-plugin-menu { position: relative; }
+.docker-plugin-menu > summary { list-style: none; font-size: 18px; line-height: 1; cursor: pointer; }
+.docker-plugin-menu > summary::-webkit-details-marker { display: none; }
+.docker-plugin-menu-panel { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; display: grid; min-width: 200px; padding: 6px; border: 1px solid var(--rp-border); border-radius: 10px; background: var(--rp-surface-elevated); box-shadow: 0 10px 28px rgba(0, 0, 0, .22); }
+.docker-plugin-menu-item { padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--rp-text); font-size: 13px; text-align: left; cursor: pointer; }
+.docker-plugin-menu-item:hover:not(:disabled) { background: var(--rp-accent-soft); color: var(--rp-accent); }
+.docker-plugin-menu-item.danger { color: var(--rp-danger); }
+.docker-plugin-menu-item.danger:hover:not(:disabled) { background: var(--rp-danger-soft); color: var(--rp-danger); }
+.docker-plugin-menu-item:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 900px) { .docker-plugin-container { grid-template-columns: 8px minmax(0, 1fr) auto; } .docker-plugin-container .docker-plugin-actions { grid-column: auto; } }

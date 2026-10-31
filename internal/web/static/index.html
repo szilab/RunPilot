@@ -40,11 +40,10 @@
       <header>
         <div class="page-heading"><span class="eyebrow" id="pageEyebrow">YOUR WORKSPACE, AT A GLANCE</span><h1 id="pageTitle" tabindex="-1">Overview</h1><p id="pageDescription" class="page-description" hidden></p></div>
         <div class="header-actions">
-          <div id="overviewClock" class="overview-clock"></div>
           <div class="account-header-actions">
-            <button id="themeToggle" class="button secondary theme-toggle" type="button" aria-pressed="false" title="Switch to dark theme">☾ <span>Dark theme</span></button>
             <div id="pluginHeaderActions" class="plugin-header-actions hidden"></div>
-            <details class="account-menu"><summary aria-label="Account menu"><span id="accountAvatar" class="account-avatar">A</span><span class="account-name" id="accountName">Administrator</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary><div class="account-menu-panel"><span class="eyebrow">LOCAL ADMINISTRATOR</span><strong id="accountMenuName">Administrator</strong><button class="button secondary" id="accountSettingsButton" type="button">Account settings</button><button class="button secondary" id="logoutButton" type="button">Log out</button></div></details>
+            <button id="themeToggle" class="button secondary theme-toggle header-square" type="button" aria-pressed="false" title="Switch to dark theme">☾ <span>Dark theme</span></button>
+            <details class="account-menu"><summary class="header-square" aria-label="Account menu" title="Account"><span id="accountAvatar" class="account-avatar" aria-hidden="true">A</span><span class="account-name" id="accountName">Administrator</span></summary><div class="account-menu-panel"><span class="eyebrow">LOCAL ADMINISTRATOR</span><strong id="accountMenuName">Administrator</strong><button class="button secondary" id="accountSettingsButton" type="button">Account settings</button><button class="button secondary" id="logoutButton" type="button">Log out</button></div></details>
           </div>
         </div>
       </header>
@@ -54,29 +53,6 @@
         <section class="overview-section plugin-overview" aria-label="Plugin summaries"><div id="overviewWidgets" class="overview-widgets"></div></section>
       </section>
 
-      <section id="legacyStoragePage" class="page">
-        <div id="storageBrowser">
-          <div id="storageStateNotice" class="notice hidden"></div>
-          <div class="section-head storage-toolbar"><div><label for="storageProvider" class="storage-provider-label">Location</label><select id="storageProvider" aria-label="Storage location"></select></div><div class="row-actions"><label class="check compact-check"><input id="storageShowHidden" type="checkbox"> Hidden files</label><label class="button secondary small">Upload<input id="storageUpload" type="file" multiple hidden></label><button id="storageNewFile" class="button secondary small">New file</button><button id="storageCreate" class="button secondary small">New folder</button></div></div>
-          <div id="storageBreadcrumbs" class="meta"></div><div id="storageEntries" class="row-list"></div>
-        </div>
-        <div id="storageEmpty" class="empty hidden"><h2>Storage unavailable</h2><p>RunPilot could not initialize the local filesystem location.</p></div>
-      </section>
-
-      <section id="legacySoftwarePage" class="page">
-        <div class="software-controller"><label for="softwareProviderSelect">Provider</label><select id="softwareProviderSelect" aria-label="Software provider"></select></div>
-        <div id="softwareProviderCard" class="row-list software-card"></div>
-        <div id="softwareTabs" class="software-tabs hidden">
-          <button class="button secondary small active" data-software-tab="installed">Installed</button>
-          <button class="button secondary small" data-software-tab="search">Search</button>
-          <button class="button secondary small" data-software-tab="updates">Updates</button>
-          <button class="button secondary small" data-software-tab="buckets">Buckets</button>
-          <button id="softwareUpgradeAll" class="button primary small">Upgrade all</button>
-        </div>
-        <div id="softwareSearchBar" class="software-search hidden"><input id="softwareSearchInput" placeholder="Search the managed Scoop main bucket"><button id="softwareSearchButton" class="button primary small">Search</button></div>
-        <div id="softwareBucketBar" class="software-bucket-bar hidden"><input id="softwareBucketName" placeholder="Bucket name"><input id="softwareBucketSource" placeholder="Optional HTTPS bucket URL"><button id="softwareAddBucket" class="button primary small">Add bucket</button></div>
-        <div id="softwarePackages" class="row-list"></div>
-      </section>
 
       <section id="settingsPage" class="page">
         <div class="settings-tabs" role="tablist" aria-label="Settings sections">
@@ -170,7 +146,6 @@
   </dialog>
 
 
-  <dialog id="textEditorDialog" class="dialog log-dialog"><div class="dialog-head"><div><h2 id="textEditorTitle">Fájl szerkesztése</h2><p id="textEditorPath"></p></div><button class="icon-btn" id="closeTextEditor" type="button" aria-label="Close editor">×</button></div><div class="editor-shell"><pre id="textHighlight" aria-hidden="true"><code></code></pre><textarea id="textEditorContent" class="text-editor" spellcheck="false"></textarea></div><div class="dialog-actions"><button class="button secondary" id="cancelTextEditor" type="button">Mégse</button><button class="button primary" id="saveTextEditor" type="button">Mentés</button></div></dialog>
 
   <div id="toast" class="toast hidden"></div>
   <script src="secure-websocket.js"></script>

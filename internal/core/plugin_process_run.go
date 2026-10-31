@@ -88,48 +88,11 @@ func (c *Controller) pluginProcessRun(ctx context.Context, owner string, raw jso
 	}
 	dir := in.WorkingDirectory
 	if in.WorkspaceDirectory != "" {
-		if !validWorkspacePath(in.WorkspaceDirectory, true) {
-			return nil, workspaceInvalid("invalid workspace directory")
-		}
-		root, err := c.workspaceRoot(owner)
+		resolved, err := c.workspaceDirectoryHostPath(owner, in.WorkspaceDirectory)
 		if err != nil {
 			return nil, err
 		}
-		defer root.Close()
-		name := in.WorkspaceDirectory
-		if name == "" {
-			name = "."
-		}
-		fi, err := root.Stat(name)
-		if err != nil {
-			return nil, err
-		}
-		if !fi.IsDir() {
-			return nil, workspaceInvalid("workspace working directory is not a directory")
-		}
-		// Reject symlink components: exec.Cmd.Dir is a host path, so no component
-		// may change the process working directory beyond the owner workspace.
-		part := ""
-		for _, p := range strings.Split(name, "/") {
-			if p == "." {
-				continue
-			}
-			if part != "" {
-				part += "/"
-			}
-			part += p
-			fi, err := root.Lstat(part)
-			if err != nil {
-				return nil, err
-			}
-			if fi.Mode()&os.ModeSymlink != 0 {
-				return nil, workspaceInvalid("workspace working directory contains a symlink")
-			}
-		}
-		dir, err = c.workspaceHostPath(owner, name)
-		if err != nil {
-			return nil, err
-		}
+		dir = resolved
 	}
 	if in.TimeoutSeconds == 0 {
 		in.TimeoutSeconds = 30
@@ -169,4 +132,54 @@ func (c *Controller) pluginProcessRun(ctx context.Context, owner string, raw jso
 	}
 	timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
 	return json.Marshal(map[string]any{"exitCode": code, "success": err == nil && !timedOut, "timedOut": timedOut, "stdout": string(stdout.b), "stderr": string(stderr.b), "stdoutTruncated": stdout.truncated, "stderrTruncated": stderr.truncated})
+}
+
+// workspaceDirectoryHostPath resolves an existing directory inside the owner's
+// workspace to a host path for exec.Cmd.Dir. Symlink components are rejected
+// so the working directory cannot leave the owner workspace.
+func (c *Controller) workspaceDirectoryHostPath(owner, name string) (string, error) {
+	if !validWorkspacePath(name, true) {
+		return "", workspaceInvalid("invalid workspace directory")
+	}
+	root, err := c.workspaceRoot(owner)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	if name == "" {
+		name = "."
+	}
+	fi, err := root.Stat(name)
+	if err != nil {
+		return "", err
+	}
+	if !fi.IsDir() {
+		return "", workspaceInvalid("workspace working directory is not a directory")
+	}
+	if err := rejectWorkspaceSymlinks(root, name); err != nil {
+		return "", err
+	}
+	return c.workspaceHostPath(owner, name)
+}
+
+// rejectWorkspaceSymlinks fails when any component of name is a symlink.
+func rejectWorkspaceSymlinks(root *os.Root, name string) error {
+	part := ""
+	for _, p := range strings.Split(name, "/") {
+		if p == "." {
+			continue
+		}
+		if part != "" {
+			part += "/"
+		}
+		part += p
+		fi, err := root.Lstat(part)
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return workspaceInvalid("workspace path contains a symlink")
+		}
+	}
+	return nil
 }

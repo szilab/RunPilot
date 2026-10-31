@@ -1,0 +1,15 @@
+apiVersion: runpilot.plugin/v1
+id: files
+name: Files
+description: Browse and manage files on the RunPilot host
+version: 0.1.0
+requires:
+  backend: ">=1.3.0 <2.0.0"
+  frontend: ">=1.0.0 <2.0.0"
+  runpilotApi: 2
+platforms: [linux, windows]
+backend:
+  module: backend/plugin.wasm
+frontend:
+  module: web/plugin.js
+  stylesheet: web/plugin.css

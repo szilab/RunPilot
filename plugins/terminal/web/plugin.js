@@ -258,7 +258,7 @@ export async function activate(runpilot) {
     item.resizeObserver.observe(host);
   }
   runpilot.navigation.register({
-    id: "terminal", title: "Terminal", shortcut:{title:"Open Terminal",description:"Interactive host shell",order:10}, description: "Interactive shell sessions on your RunPilot host.", icon: { src: new URL("./icon.svg", import.meta.url).href },
+    id: "terminal", title: "Terminal", description: "Interactive shell sessions on your RunPilot host.", icon: { src: new URL("./icon.svg", import.meta.url).href },
     render: root => {
       page = root;
       render();

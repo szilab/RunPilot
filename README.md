@@ -7,35 +7,26 @@
 RunPilot is a lightweight Windows/Linux host-management application written in Go. One native service manages configured workloads and operations and exposes an embedded local web UI. On Linux the preferred deployment is the container image (see [Run In Docker](#run-in-docker-recommended-on-linux)); a native systemd user service remains available. Windows uses Windows Service Control Manager.
 
 The normal UI provides plugin management and a host monitoring Overview with
-CPU, memory, GPU when available, and filesystem usage. Tasks, Docker, Terminal,
-Remote desktop access for RDP and VNC is provided by one first-party plugin;
-installing and enabling it is explicit.
-Legacy backup, storage and
-software backends remain in the codebase until their plugins reach parity, but
-their pages are hidden and their REST APIs are no longer mounted. Configured
-Backup jobs keep running from the configuration file.
+CPU, memory, GPU when available, and filesystem usage. Tasks, Backup, Docker,
+Terminal, Remote Desktop (RDP, VNC and Xpra), Files and Web Apps are
+first-party plugins; installing and enabling each one is explicit.
 
 > **RunPilot provides the framework; plugins provide the features.**
 
-Legacy backends remain in place until their plugin replacements reach parity.
 First-party plugin source stays in this repository, while plugin
 packages are versioned and published independently through the GitHub-backed
 plugin catalog.
 
 ## Capabilities
 
-The following capabilities include legacy backend functions whose pages are
-currently hidden:
-
 - Native service through Windows SCM or a Linux systemd user service
-- Long-running process supervision with restart policies and backoff
-- Interval, daily and cron scheduled jobs plus manual execution
-- Typed backup jobs using Robocopy, Restic and rdiff-backup
+- Long-running process supervision with restart policies and backoff (Tasks plugin)
+- Interval, daily and cron scheduled commands plus manual execution (Tasks plugin)
+- Scheduled Restic, rsync and Robocopy backups with snapshot restore (Backup plugin)
 - Captured stdout/stderr and execution history
-- Local and Docker-backed storage access
-- Software Management through the RunPilot-owned Scoop provider
 - Interactive Terminal tabs backed by Linux PTY or Windows ConPTY
-- Remote desktop access through the optional Remote Desktop plugin (RDP and VNC)
+- Remote desktop access through the optional Remote Desktop plugin (RDP, VNC and Xpra)
+- File management for the host filesystem through the optional Files plugin
 - Embedded authenticated web UI
 - Plugin package/runtime support with independent backend/frontend contracts
 - GitHub-backed plugin catalog with explicit install/update/enable lifecycle
@@ -44,13 +35,13 @@ currently hidden:
 
 The target core is a small plugin host: package/runtime management, versioned
 host capabilities, one authenticated application WebSocket, the web shell,
-shared UI/theme primitives and framework settings. Tasks, Docker, Terminal and
-Remote Desktop are plugin-owned in the normal UI. Storage, Software and Backup remain
-transitional core implementations. Xpra remains a temporary internal core exception
-with no user-facing navigation while its plugin capabilities are designed.
+shared UI/theme primitives and framework settings. Every product feature
+(Tasks, Backup, Docker, Terminal, Remote Desktop, Files, Web Apps) is
+plugin-owned.
 
 Host CPU/GPU/memory/disk presentation is built into Overview, without expanding
-the nonpublic System ABI fixture into a permanent feature.
+the nonpublic System ABI fixture into a permanent feature. The plan is an
+Overview made entirely of widgets, including the host metrics and the launcher.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the architectural source of
 truth, [docs/PLUGINS.md](docs/PLUGINS.md) for plugin development, and
@@ -87,7 +78,7 @@ minutes; restart the container to open a new setup window.
   with `--user` skips these adjustments.
 - **Init**: `tini` is the container's init process, so orphaned processes from
   tasks and terminals are reaped without `--init`.
-- **Extra packages**: `RUNPILOT_EXTRA_PACKAGES="ffmpeg git"` installs Alpine
+- **Extra packages**: `RUNPILOT_EXTRA_PACKAGES="restic ffmpeg git"` installs Alpine
   packages (space- or comma-separated, version constraints allowed) with `apk`
   before RunPilot starts. A restarted container keeps them; a recreated one
   installs them again. Invalid names stop the container; a failed download
@@ -140,44 +131,16 @@ the task.
 
 A RunPilot scheduled task can update the installed binary non-interactively and
 ask systemd to restart RunPilot after the task has had time to finish recording
-its result. Because a RunPilot `sh` interpreter runs a script path, use a
-direct `/bin/sh -c` command for an inline pipeline:
+its result. Create a scheduled task in the Tasks plugin (for example daily at
+01:00, skipping overlapping runs) with the **Direct executable** interpreter,
+`/bin/sh` as the command, and these arguments (the arguments field parses
+quotes itself, so the pipeline is one quoted argument):
 
-The YAML example below is a legacy job definition. Create an equivalent
-scheduled command in the Tasks plugin UI when using the plugin.
-
-```yaml
-name: RunPilot update
-enabled: true
-type: command
-schedule:
-  type: daily
-  timeOfDay: "01:00"
-overlapPolicy: skip
-command:
-  path: /bin/sh
-  args:
-    - -c
-    - 'curl -fsSL https://raw.githubusercontent.com/szilab/RunPilot/main/install.sh | env RUNPILOT_ASSUME_YES=1 RUNPILOT_SKIP_SERVICE=1 sh && systemd-run --user --on-active=30s systemctl --user restart runpilot.service'
-  interpreter: direct
+```text
+-c "curl -fsSL https://raw.githubusercontent.com/szilab/RunPilot/main/install.sh | env RUNPILOT_ASSUME_YES=1 RUNPILOT_SKIP_SERVICE=1 sh && systemd-run --user --on-active=30s systemctl --user restart runpilot.service"
 ```
 
-Use the same task with `RUNPILOT_CHANNEL=develop` before the installer command
-to track the develop rolling release:
-
-```yaml
-command:
-  path: /bin/sh
-  args:
-    - -c
-    - 'curl -fsSL https://raw.githubusercontent.com/szilab/RunPilot/main/install.sh | env RUNPILOT_CHANNEL=develop RUNPILOT_ASSUME_YES=1 RUNPILOT_SKIP_SERVICE=1 sh && systemd-run --user --on-active=30s systemctl --user restart runpilot.service'
-  interpreter: direct
-```
-
-In the GUI, choose **Direct executable**, enter `/bin/sh` as the executable or
-script path, and add `-c` followed by the complete pipeline as the arguments.
-The arguments field parses quotes itself, so enter the pipeline as one quoted
-argument, for example: `-c "curl ... | env ... sh && systemd-run ..."`.
+Add `RUNPILOT_CHANNEL=develop` after `env` to track the develop rolling release.
 
 `RUNPILOT_ASSUME_YES=1` allows the unattended installer to proceed and
 `RUNPILOT_SKIP_SERVICE=1` prevents it from restarting the service while the
@@ -272,7 +235,7 @@ The YAML `server` section controls the listener and UI URL prefix:
 
 ```yaml
 server:
-  bind: 127.0.0.1:9070 # Host part is used with port; full legacy address also works.
+  bind: 127.0.0.1 # listen address; the port comes from `port`
   port: 9070
   basePath: /runpilot
   websocketPayloadMode: disabled # disabled, optional, or required
@@ -376,12 +339,11 @@ events use the authenticated application WebSocket.
 
 ## Remote Desktop plugin
 
-The Remote Desktop plugin provides RDP and VNC from one page. Install and enable
+The Remote Desktop plugin provides RDP, VNC and Xpra from one page. Install and enable
 it in **Settings → Plugins**, then restart RunPilot. RDP uses its packaged
 Guacamole client and the generic network stream capability; VNC packages noVNC
 1.7.0 and uses the authenticated RunPilot application WebSocket for binary
-stream traffic. Existing VNC targets are imported from an installed, enabled
-legacy VNC plugin when the VNC tab is opened. Passwords are requested only when
+stream traffic. Passwords are requested only when
 needed and remain in memory for the active browser session.
 
 Each target shows whether it is reachable: **Online** (the RDP/VNC port
@@ -395,11 +357,80 @@ computers on the same local network as RunPilot; in a container, run RunPilot
 with host networking. The target computer must have Wake-on-LAN enabled.
 
 The old standalone VNC package is no longer published. After its targets have
-been imported and verified, uninstall it from **Settings → Plugins**. Xpra's
-legacy core runtime is temporarily retained without user-facing navigation. Its migration to a
-`remote.xpra` plugin is deferred while reusable process, listener, and browser
-publication capabilities are designed; Xpra is not currently available from
-the RunPilot GUI.
+been imported and verified, uninstall it from **Settings → Plugins**.
+
+The **Xpra** tab runs an application or a full desktop on the RunPilot host
+itself (Linux only) and shows it in the same session view as RDP and VNC. A
+target is a name, a mode (**Application windows** or **Full desktop**) and a
+command line, such as `xterm` or `startxfce4`; the command runs through `sh`
+in the configured working directory or the service account's home directory.
+Install Xpra on the host (for example `sudo apt install xpra`); the browser
+client is packaged with the plugin. Each session gets a private Xpra server
+that listens only on a Unix socket in the plugin's data directory, and
+disconnecting stops the server and its applications. The container image does
+not include Xpra.
+
+## Files plugin
+
+The Files plugin browses and manages the whole filesystem of the RunPilot
+host, starting at `/` (on Windows at the list of drives). There is nothing to
+configure: Files can read and change exactly what the RunPilot service account
+can, and the operating system's permissions decide the rest. In the container
+image that means the container's filesystem, including the mounted volumes.
+The last opened folder is remembered in the browser; click the path bar or
+press Ctrl+L to type a path.
+
+The page works like a desktop file manager (in the style of FileBrowser): the
+current folder is shown as a sortable list or as a grid with image thumbnails,
+and an optional details panel shows the selection. Symbolic links open like
+the file or folder they point to. Click selects (Ctrl/Shift for several items), double-click opens,
+and right-click opens a context menu. Selecting items shows their actions in
+the top bar: open, download, rename, copy to…, move to…, delete. Items can be
+dragged onto a folder or a part of the path to move them (hold Ctrl to copy), and files dragged from the computer are uploaded. Keyboard
+shortcuts: Enter open, F2 rename, Del delete, Ctrl+A select all, Ctrl+C / Ctrl+X
+/ Ctrl+V copy, cut and paste, Ctrl+F filter, Backspace parent folder, Esc clear
+the selection. Copies, moves and deletes of large trees run in the background
+with progress and cancel. Images open in a viewer with previous/next, and
+UTF-8 text files up to 1 MiB open in an editor with syntax colors for
+configuration files; a save is refused when the file changed since it was
+opened, unless you choose to overwrite it. Uploads
+and downloads stream over authenticated HTTP, so their size is not limited by
+the browser connection to RunPilot.
+
+## Backup plugin
+
+The Backup plugin runs backup jobs on their own schedules (every N minutes or
+hours, daily at a time, or a cron expression) or only on demand. It is
+independent of Tasks. Each job uses one engine:
+
+- **Restic** (Linux and Windows): versioned, deduplicated and encrypted
+  snapshots of one or more folders in a local or remote repository. After a
+  backup it can forget old snapshots (keep last/daily/weekly/monthly/yearly or
+  within a period, optionally pruning the freed space) and check the
+  repository. Tags keep several jobs apart in one repository.
+- **rsync** (Linux) or **Robocopy** (Windows): a plain copy of one folder,
+  either keeping files deleted from the source or mirroring the source
+  exactly. rsync destinations may be remote (`user@host:/path`).
+
+Restic jobs have a Snapshots view that lists the repository's snapshots and
+restores a snapshot, or only some of its paths, into a **new or empty
+folder**; restores never write into the backed-up folders. The same view
+checks the repository, removes stale locks and initializes a new repository.
+Every backup, restore and check is recorded in the job's run history with its
+full output; a scheduled run that would overlap a running one is recorded as
+skipped.
+
+RunPilot never stores repository passwords or cloud keys. A Restic job uses a
+password file on the host (`--password-file`), an environment file with
+`NAME=value` lines (for example `RESTIC_PASSWORD`, `RESTIC_PASSWORD_FILE`,
+`B2_ACCOUNT_ID`), or both. The environment file is read at each run and its
+values are passed only to the restic process.
+
+The engines are external tools. The page shows when one is missing and how to
+install it; in the container image add them with
+`RUNPILOT_EXTRA_PACKAGES="restic rsync"`. In a container, backups see the
+container's filesystem, so mount the folders to back up and the destination
+into it.
 
 ## Windows build
 
@@ -416,83 +447,15 @@ On Windows, from an elevated terminal:
 
 The default data directory is `%LOCALAPPDATA%\RunPilot`. Its persistent locator
 is stored under `%APPDATA%\RunPilot\data-root`, independently of the selected
-root. Older installations using `%ProgramData%\RunPilot` retain their existing
-data directory and locator.
+root.
 
 ## Configuration model
 
-The Tasks plugin presents continuous and scheduled command tasks. The pre-plugin process manager, command jobs, Tasks REST endpoints, and Tasks UI have been removed. Old `processes` and command-job entries are dropped when an older configuration is next opened; Backup jobs remain typed and scheduled in core until their own plugin migration.
-
-Storage locations are runtime capabilities, not user-managed configuration records. `local` always exposes filesystem roots available to the RunPilot service identity. `docker-volumes` is one Docker-backed location whose root lists current volumes as directories. Volume contents are accessed through short-lived Docker helper containers, never through a Docker host mountpoint; running volumes are read-only.
-
-Backup configuration is stored in the normal RunPilot YAML configuration.
-Plugin-owned command tasks use the Tasks plugin's owner-scoped storage.
-
-Example backup definition:
-
-```yaml
-id: job-example
-name: Nightly data backup
-enabled: true
-type: backup
-schedule:
-  type: daily
-  timeOfDay: "03:00"
-overlapPolicy: skip
-backup:
-  engine: robocopy
-  robocopy:
-    source: D:\Data
-    destination: F:\Backup\Data
-    mode: copy
-    retries: 2
-    retryWaitSeconds: 5
-```
-
-`mirror` mode maps to Robocopy `/MIR` and can delete destination-only files. The hidden legacy editor retains its warning if it is reintroduced during migration.
-
-Restic uses a repository and native snapshots; it can run `forget` retention (optionally with `--prune`) and a post-backup repository check. Passwords are not stored in configuration: use an optional `passwordFile` path or Restic's normal externally supplied environment.
-
-```yaml
-backup:
-  engine: restic
-  restic:
-    repository: F:\Restic
-    sources: [D:\Documents, D:\Photos]
-    excludes: ["*.tmp"]
-    tags: [home]
-    useVss: true
-    retention: { keepDaily: 7, keepMonthly: 12, prune: true }
-    checkAfterBackup: true
-```
-
-rdiff-backup keeps its own directly browsable current mirror and historical increments at the destination. RunPilot can ask it to remove older increments and verify a completed backup.
-
-```yaml
-backup:
-  engine: rdiff-backup
-  rdiffBackup:
-    source: D:\Photos
-    destination: F:\Backup\Photos
-    retention: { olderThan: 3M }
-    verifyAfterBackup: true
-```
-
-Repository/version browsing and restore workflows are intentionally not part of the Backup capability yet.
-
-Software Management is configured with a typed, RunPilot-owned Scoop provider:
-
-```yaml
-software:
-  providers:
-    - id: scoop
-      name: RunPilot Scoop
-      type: scoop
-      scoop:
-        root: D:\RunPilotApps # optional; empty uses <data-dir>\software\scoop
-```
-
-RunPilot downloads and bootstraps this isolated Scoop instance on first use, including Scoop's managed portable Git prerequisite under the same root. It never uses, changes, or imports an existing user Scoop installation; it does not permanently add Scoop shims to PATH or set global Scoop environment variables. Changing `root` selects a new isolated installation and leaves the old root untouched. Packages are standard portable Scoop packages and remain separate from legacy RunPilot Process definitions. The legacy Software API and hidden page support bucket management; the required `main` bucket, Git and 7-Zip cannot be individually removed because Scoop manages them.
+`runpilot.yaml` holds framework settings: server, authentication, plugin
+registry, enabled plugins and Overview shortcuts. Feature definitions, such
+as Tasks and Backup jobs, live in each plugin's owner-scoped storage under
+`<data-dir>/plugins/<id>/data/`. Obsolete `processes` and `jobs` entries of
+older configurations are ignored and dropped at the next save.
 
 ## Architecture
 
@@ -500,40 +463,38 @@ RunPilot downloads and bootstraps this isolated Scoop instance on first use, inc
 runpilot.exe
 ├── Windows Service host
 ├── Core controller
-│   ├── Scheduler and retained Backup runner
-│   └── Typed external integrations
-├── Future storage providers / software providers
+│   ├── Plugin runtime (WASM backends, browser modules)
+│   └── Host capabilities (scheduler, processes, workspace, history, network)
 ├── Runtime PTY/ConPTY terminal sessions (not persisted)
-├── YAML config + plugin-owned SQLite history + Backup logs
+├── YAML config + plugin-owned storage and SQLite history
 └── Embedded HTTP API + web UI
 ```
 
 Plugin execution history and logs live in each plugin's `data` directory under
-`<data-dir>/plugins/<id>/`. Retained Backup logs use `<data-dir>/internal/runs/`;
-RunPilot does not create `<data-dir>/legacy/` or a global legacy history DB.
+`<data-dir>/plugins/<id>/`. RunPilot does not create `<data-dir>/legacy/`,
+`<data-dir>/internal/runs/` or a global history DB.
 
 ## Docker Compose (Linux)
 
-RunPilot has a deliberately narrow, Linux-only Docker Compose v2 feature. Managed projects are directories below `<data-dir>/compose/<project-name>/`; each can contain `compose.yaml` and a secret-bearing `.env` file. Project directories are the registry, so a managed project appears before its first `up`.
+The Linux-only Docker plugin manages Compose v2 projects stored in its plugin
+workspace (`<data-dir>/plugins/docker/data/workspace/projects/<name>/`), each
+with a `compose.yaml` and a secret-bearing `.env` file. Other Compose projects
+discovered through Docker stay read-only; RunPilot never adopts or edits them.
+`down` does not remove volumes or images. The plugin also lists, creates and
+deletes unused volumes and networks, shows container logs and opens
+`docker exec` terminals for running managed containers.
 
-The legacy Docker backend (hidden page, unmounted API) manages projects, volumes, and networks; the Docker plugin is the user-facing implementation. They discover other Compose projects through Docker too, but leave them read-only. RunPilot never adopts or edits them. Managed projects expose only `up -d`, `start`, `stop`, and `down`; commands always include the project name, project directory, and Compose file. `down` does not remove volumes or images. A managed directory can be deleted only after Docker confirms there are no containers with its Compose project label. Containers in managed projects can be started, stopped, and deleted only when stopped; their logs can be viewed and a running container can open a PTY-backed `docker exec -it <id> /bin/sh` terminal. These actions validate the container ID, Compose project label, and managed-project directory before using fixed Docker arguments; they are not a general container-control or command API.
-
-Volumes are discovered with Docker metadata and show Compose ownership only when Compose labels exist. Every discoverable volume is automatically a Storage location. RunPilot can create named local-driver volumes and may delete an unreferenced volume; deletion never uses force. Non-local drivers remain visible but unavailable for browsing. Running-volume Storage is read-only.
-
-Docker volume mountpoints are resolved only through `docker volume inspect` internally and are never sent through the Storage API. This prepares a future provider-neutral Backup source flow; no Docker volume backup job exists yet. A filesystem backup of a volume used by a running application, especially a database, is not automatically application-consistent. Future backup support must explicitly require downtime or provide a separate quiescing strategy.
-
-The legacy backend also manages Docker networks. RunPilot can create named bridge networks and delete an unused network only after Docker confirms that no running or stopped container references it. Compose ownership is shown only from Compose labels. It does not expose network driver options, attach/detach controls, firewall configuration, or generic Docker networking commands.
-
-Docker authority is exactly the authority of the process running RunPilot. The legacy backend tests the Docker CLI, Compose v2 plugin, and daemon access under that identity, distinguishing missing CLI/plugin, unavailable daemon, and permission denial. It never invokes sudo, changes Docker socket permissions, or modifies group membership.
+Docker authority is exactly the authority of the process running RunPilot. It
+never invokes sudo, changes Docker socket permissions, or modifies group
+membership.
 
 ## Near-term roadmap
 
 1. Replace the initial `taskkill /T` process-tree termination with native Windows Job Objects.
 2. Add graceful stop policies and configurable stop timeouts.
 3. Add live log streaming (SSE/WebSocket), rotation and retention.
-4. Add job cancellation and richer running-job state.
-5. Add Restic snapshot/version browsing, download and restore. Its read/version capabilities will intentionally differ from the writable Local Filesystem provider.
+4. Add notifications for failed runs as a capability shared by plugins.
+5. Add browsing inside Restic snapshots.
 7. Add encrypted secret/environment/integration credential storage using Windows DPAPI or an equivalent protected mechanism.
 8. Add a double-click/tray management shell for install/start/stop/open-UI actions.
-9. Add further typed Software providers such as WinGet for conventional Windows software where appropriate.
 10. Add signed Windows releases and GitHub Actions CI/release builds.

@@ -1,5 +1,8 @@
 import { createVNCFeature } from "./vnc.js";
+import { createXpraFeature } from "./xpra.js";
 import { createTargetStatus, macField } from "./target-status.js";
+import { setupSessionToolbar, toolbarButton } from "./session-toolbar.js";
+import { openLogDialog } from "./diagnostics-dialog.js";
 
 const PLUGIN = "remote";
 let guacamoleLoadPromise;
@@ -167,8 +170,14 @@ export async function activate(runpilot) {
   const ui = runpilot.ui, call = async (method, params = {}) => { const result = await runpilot.ws.call(PLUGIN, method, params); if (result?.error) throw new Error(result.error.message || "Plugin request failed"); return result; };
   let page = null, targets = [], notice = "", activeSession = null, headerAction = null, settingsForm = null, disposed = false, protocolTab = "rdp";
   // Status checks run only while the target lists are visible.
-  const targetStatus = createTargetStatus(call, { toast: message => ui.toast?.(message), isVisible: () => !document.hidden && !!page?.isConnected && !activeSession && !vncFeature?.active });
-  const vncFeature = createVNCFeature(runpilot, call, active => { if (headerAction?.isConnected) headerAction.hidden = active; }, targetStatus);
+  const targetStatus = createTargetStatus(call, { toast: message => ui.toast?.(message), isVisible: () => !document.hidden && !!page?.isConnected && !activeSession && !featureSessionActive() });
+  const hideHeaderAction = active => { if (headerAction?.isConnected) headerAction.hidden = active; };
+  const vncFeature = createVNCFeature(runpilot, call, hideHeaderAction, targetStatus);
+  const xpraFeature = createXpraFeature(runpilot, call, hideHeaderAction);
+  // VNC and Xpra own their lists and sessions; RDP is rendered here.
+  const protocolFeatures = { vnc: vncFeature, xpra: xpraFeature };
+  const PROTOCOLS = [["rdp", "RDP"], ["vnc", "VNC"], ["xpra", "Xpra"]];
+  function featureSessionActive() { return Object.values(protocolFeatures).some(feature => feature?.active); }
   const settingsState = { loaded: false, loading: false, busy: false, error: "", status: "", value: defaultGuacdSettings() };
 
   function addDiagnostic(state, stage) {
@@ -189,24 +198,19 @@ export async function activate(runpilot) {
   }
 
   function showDiagnostics(state) {
-    const dialog = document.createElement("dialog"); dialog.className = "dialog rdp-diagnostics-dialog";
-    dialog.innerHTML = `<div class="dialog-head"><div><h2>${escapeHTML(state.target.name)} diagnostics</h2><p class="rdp-diagnostics-state"></p></div><button type="button" class="icon-btn" data-close aria-label="Close">×</button></div><pre class="rdp-diagnostics-log"></pre><div class="dialog-actions"><button type="button" class="button secondary" data-close>Close</button></div>`;
-    const output = dialog.querySelector(".rdp-diagnostics-log");
+    const { output } = openLogDialog({
+      title: `${state.target.name} diagnostics`,
+      stateText: state.session ? `Session ${state.session.id} · ${state.connected ? "connected" : "opening"}` : "Session open is still being negotiated",
+      text: state.diagnostics.join("\n") || "Waiting for diagnostic stages…",
+      onClose: () => { state.diagnosticsOutput = null; },
+    });
     state.diagnosticsOutput = output;
-    dialog.querySelector(".rdp-diagnostics-state").textContent = state.session ? `Session ${state.session.id} · ${state.connected ? "connected" : "opening"}` : "Session open is still being negotiated";
-    output.textContent = state.diagnostics.join("\n") || "Waiting for diagnostic stages…";
-    dialog.querySelectorAll("[data-close]").forEach(node => node.addEventListener("click", () => dialog.close()));
-    dialog.addEventListener("close", () => { state.diagnosticsOutput = null; dialog.remove(); }, { once: true });
-    document.body.append(dialog); dialog.showModal();
     if (state.session) void refreshSessionDiagnostics(state);
   }
 
   const stopDiagnosticEvents = runpilot.ws.on(PLUGIN, "rdp.session.diagnostic", event => {
     if (activeSession && event?.diagnosticId === activeSession.diagnosticId) addDiagnostic(activeSession, event.stage);
   });
-  const button = (parent, label, action, style = "secondary") => {
-    const element = document.createElement("button"); element.type = "button"; element.className = `button ${style} small`; element.textContent = label; element.addEventListener("click", action); parent.append(element); return element;
-  };
 
   async function loadTargets() {
     try { const result = await call("rdp.targets.list"); targets = result.targets || []; notice = ""; }
@@ -232,15 +236,16 @@ export async function activate(runpilot) {
 
   function render() {
     if (!page?.isConnected || activeSession) return;
-    const sessionActive = vncFeature.active;
-    page.innerHTML = `<section class="remote-plugin"><div class="rp-segmented remote-protocol-tabs" role="tablist" aria-label="Remote desktop protocol"${sessionActive ? " hidden" : ""}><button class="button secondary${protocolTab === "rdp" ? " active" : ""}" type="button" role="tab" aria-selected="${protocolTab === "rdp"}" data-protocol="rdp">RDP</button><button class="button secondary${protocolTab === "vnc" ? " active" : ""}" type="button" role="tab" aria-selected="${protocolTab === "vnc"}" data-protocol="vnc">VNC</button></div><div class="remote-protocol-content"></div></section>`;
+    const sessionActive = featureSessionActive();
+    const tabs = PROTOCOLS.map(([id, label]) => `<button class="button secondary${protocolTab === id ? " active" : ""}" type="button" role="tab" aria-selected="${protocolTab === id}" data-protocol="${id}">${label}</button>`).join("");
+    page.innerHTML = `<section class="remote-plugin"><div class="rp-segmented remote-protocol-tabs" role="tablist" aria-label="Remote desktop protocol"${sessionActive ? " hidden" : ""}>${tabs}</div><div class="remote-protocol-content"></div></section>`;
     const content = page.querySelector(".remote-protocol-content");
     page.querySelectorAll("[data-protocol]").forEach(tab => tab.addEventListener("click", () => {
       if (sessionActive || protocolTab === tab.dataset.protocol) return;
       protocolTab = tab.dataset.protocol; render();
     }));
     if (protocolTab === "rdp") renderRDPList(content);
-    else vncFeature.render(content);
+    else protocolFeatures[protocolTab].render(content);
   }
 
   function dialog(title, description, content, onSubmit, submitLabel = "Save") {
@@ -350,60 +355,17 @@ export async function activate(runpilot) {
       onBack: () => closeSession(true),
       onDisconnect: () => closeSession(true),
     });
-    view.element.classList.add("rdp-interactive-view");
     view.setStatus("connecting"); view.setLoading(true, "Opening RDP session…");
     const diagnosticId = globalThis.crypto?.randomUUID?.().replaceAll("-", "") || `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
     const state = { target, view, client: null, stream: null, session: null, diagnosticId, diagnostics: [], diagnosticsOutput: null, resizeOff: null, closing: false, connected: false, lastResize: null, pageView: false };
     activeSession = state;
     if (headerAction?.isConnected) headerAction.hidden = true;
-    const toolbarIcons = {
-      back: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
-      fullscreen: '<path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/>',
-      "page-view": '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
-      disconnect: '<path d="m18 6-12 12M6 6l12 12"/>',
-      diagnose: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
-      copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h2"/>',
-      paste: '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5h6v3H9zM8 12h8M8 16h8"/>',
-    };
-    const labelIcon = (element, name, label) => {
-      element.classList.add("icon", "rdp-toolbar-icon", `rdp-toolbar-${name}`);
-      element.setAttribute("aria-label", label); element.title = label;
-      const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      icon.setAttribute("viewBox", "0 0 24 24"); icon.setAttribute("fill", "none");
-      icon.setAttribute("stroke", "currentColor"); icon.setAttribute("stroke-width", "1.8");
-      icon.setAttribute("stroke-linecap", "round"); icon.setAttribute("stroke-linejoin", "round");
-      icon.setAttribute("aria-hidden", "true"); icon.setAttribute("focusable", "false");
-      icon.innerHTML = toolbarIcons[name] || "";
-      element.replaceChildren(icon);
-    };
-    const backButton = view.element.querySelector(".rp-interactive-heading > button");
-    const [fullscreenButton, disconnectButton] = view.actions.querySelectorAll("button");
-    view.actions.prepend(backButton);
-    labelIcon(backButton, "back", "Back to RDP targets");
-    labelIcon(fullscreenButton, "fullscreen", "Toggle fullscreen");
-    labelIcon(disconnectButton, "disconnect", "Disconnect");
-    view.surface.onFullscreenChange(active => labelIcon(fullscreenButton, "fullscreen", active ? "Exit fullscreen" : "Enter fullscreen"));
-    const pageViewButton = document.createElement("button");
-    pageViewButton.type = "button"; pageViewButton.className = "button secondary small"; pageViewButton.textContent = "▣"; pageViewButton.setAttribute("aria-pressed", "false");
-    labelIcon(pageViewButton, "page-view", "Toggle RunPilot canvas view");
-    pageViewButton.addEventListener("click", () => {
-      state.pageView = !state.pageView;
-      pageViewButton.setAttribute("aria-pressed", String(state.pageView));
-      pageViewButton.title = state.pageView ? "Exit RunPilot canvas view" : "Use RunPilot canvas view";
-      pageViewButton.setAttribute("aria-label", pageViewButton.title);
-      view.setPageView(state.pageView);
-    });
-    view.actions.insertBefore(pageViewButton, disconnectButton);
-    const diagnose = document.createElement("button"); diagnose.type = "button"; diagnose.className = "button secondary small"; diagnose.textContent = "Diagnose"; diagnose.title = "View credential-safe session diagnostics"; diagnose.addEventListener("click", () => showDiagnostics(state));
-    labelIcon(diagnose, "diagnose", "Session diagnostics");
-    view.actions.insertBefore(diagnose, view.actions.lastElementChild);
-    const copyButton = button(view.actions, "Copy remote clipboard", () => copyRemoteClipboard(state));
-    const pasteButton = button(view.actions, "Paste local clipboard", () => pasteLocalClipboard(state));
-    labelIcon(copyButton, "copy", "Copy remote clipboard locally");
-    labelIcon(pasteButton, "paste", "Paste local clipboard to remote");
+    const copyButton = toolbarButton("copy", "Copy remote clipboard locally", () => copyRemoteClipboard(state));
+    const pasteButton = toolbarButton("paste", "Paste local clipboard to remote", () => pasteLocalClipboard(state));
+    const diagnose = toolbarButton("diagnose", "Session diagnostics", () => showDiagnostics(state));
     copyButton.hidden = !target.options.clipboard || target.options.copy === false;
     pasteButton.hidden = !target.options.clipboard || target.options.paste === false;
-    view.actions.replaceChildren(backButton, pageViewButton, fullscreenButton, copyButton, pasteButton, diagnose, disconnectButton);
+    setupSessionToolbar(view, { backLabel: "Back to RDP targets", extras: [copyButton, pasteButton, diagnose], onPageViewChange: value => { state.pageView = value; } });
     view.surface.element.addEventListener("keydown", event => {
       if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
       const key = event.key.toLowerCase();
@@ -556,13 +518,13 @@ export async function activate(runpilot) {
     },
   });
   runpilot.navigation.register({
-    id: "remote", title: "Remote", description: "Connect to RDP and VNC remote desktops.", icon: { src: new URL("./icon.svg", import.meta.url).href },
+    id: "remote", title: "Remote", description: "Connect to RDP and VNC remote desktops and run Xpra sessions on this host.", icon: { src: new URL("./icon.svg", import.meta.url).href },
     headerActions(root) {
-      if (activeSession || vncFeature.active) return;
-      const addButton = document.createElement("button"); addButton.type = "button"; addButton.className = "button primary small"; addButton.textContent = "Add target"; addButton.addEventListener("click", () => protocolTab === "vnc" ? vncFeature.addTarget() : editTarget());
+      if (activeSession || featureSessionActive()) return;
+      const addButton = document.createElement("button"); addButton.type = "button"; addButton.className = "button primary small"; addButton.textContent = "Add target"; addButton.addEventListener("click", () => protocolFeatures[protocolTab] ? protocolFeatures[protocolTab].addTarget() : editTarget());
       headerAction = addButton; root.append(addButton);
     },
-    render(root) { page = root; targetStatus.start(); if (activeSession) { if (!activeSession.pageView) root.append(activeSession.view.element); } else if (vncFeature.active || protocolTab === "vnc") render(); else { root.replaceChildren(ui.EmptyState({title:"Loading remote targets…",message:"Retrieving your saved desktops."})); void loadTargets(); } },
+    render(root) { page = root; targetStatus.start(); if (activeSession) { if (!activeSession.pageView) root.append(activeSession.view.element); } else if (featureSessionActive() || protocolTab !== "rdp") render(); else { root.replaceChildren(ui.EmptyState({title:"Loading remote targets…",message:"Retrieving your saved desktops."})); void loadTargets(); } },
   });
-  return () => { disposed = true; targetStatus.stop(); stopDiagnosticEvents(); vncFeature.dispose(); void closeSession(false); };
+  return () => { disposed = true; targetStatus.stop(); stopDiagnosticEvents(); vncFeature.dispose(); xpraFeature.dispose(); void closeSession(false); };
 }

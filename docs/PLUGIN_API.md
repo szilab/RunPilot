@@ -11,7 +11,7 @@ The following versions are deliberately independent:
 
 - manifest schema: `apiVersion: runpilot.plugin/v1`;
 - raw WASM ABI: `requires.runpilotApi` (currently ABI 1 or 2);
-- backend contract: SemVer range, host currently `1.1.0` (`network.probe`, `network.neighbor.lookup` and `network.wake` need `>=1.1.0`);
+- backend contract: SemVer range, host currently `1.4.0` (`network.probe`, `network.neighbor.lookup` and `network.wake` need `>=1.1.0`; `process.start` `workspaceDirectory` and `network.stream.open` `workspaceSocket` need `>=1.2.0`; file details, `workspace.rename`, `workspace.operation.*` and `workspace.transfer.*` need `>=1.3.0`; `nextRunAt` from `scheduler.register`/`scheduler.list` needs `>=1.4.0`);
 - frontend contract: SemVer range, host currently `1.0.0`;
 - plugin package: independent strict SemVer.
 
@@ -181,7 +181,7 @@ An unlisted name returns `unknown_capability`.
 | Scheduler | `scheduler.register`, `scheduler.validate`, `scheduler.remove`, `scheduler.list` |
 | Processes | `process.start`, `process.run`, `process.status` `{id}`, `process.terminate` `{id}` |
 | Process sessions | `process.session.create`, `process.session.write`, `process.session.resize`, `process.session.status`, `process.session.terminate` |
-| Workspace | `workspace.list`, `workspace.stat`, `workspace.read`, `workspace.write`, `workspace.mkdir`, `workspace.remove` |
+| Workspace | `workspace.list`, `workspace.stat`, `workspace.read`, `workspace.write`, `workspace.mkdir`, `workspace.remove`, `workspace.rename`, `workspace.operation.start`, `workspace.operation.status`, `workspace.operation.cancel`, `workspace.transfer.download`, `workspace.transfer.upload` (contract 1.3 for the last six) |
 | History | `history.begin`, `history.append`, `history.finish`, `history.list`, `history.get`, `history.output` |
 | Events | `events.publish` `{event, data}` |
 | Network streams | `network.stream.open`, `network.stream.read`, `network.stream.write`, `network.stream.close` |
@@ -214,17 +214,28 @@ Registrations are runtime state; a plugin should reconstruct them from its own
 durable state during initialization. A plugin has no timers of its own, so a
 one-shot delay is an `interval` registration removed on its first fire.
 `scheduler.validate` takes `{"schedule":{...}}` and applies the same rules as
-registration without creating a timer. Reloading legacy job definitions never
-removes plugin registrations.
+registration without creating a timer.
+
+Since backend contract 1.4, `scheduler.register` returns `{id, nextRunAt}` and
+`scheduler.list` returns `{schedules:[{id, callback, schedule, data,
+nextRunAt}]}` sorted by ID. `nextRunAt` is the next fire time (RFC 3339, UTC);
+it moves forward each time the registration fires. Earlier contracts returned
+only `{id}` from register and an undocumented list shape.
 
 ### Processes
 
 `process.start` accepts command, arguments, working directory and environment
 and returns an opaque plugin-owned process ID and its `pid`. Optional fields:
 
+- `workspaceDirectory` (backend contract 1.2 or later): an existing directory
+  inside the calling plugin's workspace, used as the working directory instead
+  of `workingDirectory`. The two fields are mutually exclusive and symlink
+  components are rejected, as for `process.run`. Relative paths in the
+  command's arguments then resolve inside the plugin's workspace.
+
 - `interpreter`: the launcher's `CommandSpec` semantics (`auto`, `direct`,
   `powershell`, `cmd`, `sh`, `bash`, `sh-inline`, `python`), with the same
-  Windows/Linux behavior as legacy commands. Empty means `direct`.
+  Windows/Linux behavior as Tasks commands. Empty means `direct`.
 - `timeoutSeconds` (0 to 7 days): the process tree is killed when it elapses;
   the exit event and status report `timedOut`.
 - `historyId`: an unfinished execution owned by the caller. Combined
@@ -289,24 +300,82 @@ Sessions stop when their owner plugin stops.
 `workspace.*` exposes real files under
 `<dataDir>/plugins/<owner>/data/workspace/` by default. The host supplies
 `owner`. All operation paths use relative `/` separated components; absolute
-paths, `..`, empty components and backslashes are rejected. Operations cannot
-follow symlinks outside the selected root. Reads and writes are capped at 1 MiB
-and file writes replace atomically. Directories list at most 4096 entries per
-call. An optional absolute `root` selects a user-configured directory for that
-operation; the host creates it if needed and confines the operation to that
-directory. Plugins should expose such a path only as an explicit user setting.
+paths, `..`, empty components and backslashes are rejected; on Windows a colon
+is rejected too. Operations cannot follow symlinks outside the selected root.
+Reads and writes are capped at 1 MiB and file writes replace atomically.
+Directories list at most 16384 entries per call. An optional absolute `root`
+selects a user-configured directory for that operation and confines the
+operation to it. `mkdir` and `write` create a missing root; every other
+operation returns `not_found` for it. Plugins
+should expose such a path only as an explicit user setting.
 
 ```text
-workspace.list   {path?,root?}            -> {entries:[{name,directory,symlink}]}
-workspace.stat   {path?,root?}            -> {path,directory,size,symlink}
+workspace.list   {path?,root?}            -> {entries:[entry]}
+workspace.stat   {path?,root?}            -> entry + {path}
 workspace.read   {path,root?}             -> {data}  # base64
 workspace.write  {path,data,root?}        -> {}      # base64
 workspace.mkdir  {path,root?}             -> {}      # creates parents
 workspace.remove {path,recursive?,root?}  -> {}
 ```
 
+An entry is `{name, type, directory, symlink, size, modifiedAt, hidden}`, read
+without following symlinks: `type` is `file`, `directory`, `symlink` or
+`other`, `size` is the file size (0 for other types; `stat` reports the raw
+size), `modifiedAt` is RFC 3339 UTC, and `hidden` marks dot files and, on
+Windows, the hidden attribute. A symlink entry also has `linkType`: what it
+points to inside the root (`file`, `directory`, `other`), or `""` when the
+link is broken or leaves the root. Contract 1.0–1.2 plugins receive the same
+object; the added fields are optional for them.
+
 `workspace.remove` never removes the workspace root. Recursive removal treats
-symlinks as links and cannot descend outside the owner root. `system.identity`
+symlinks as links and cannot descend outside the owner root.
+
+File management (backend contract 1.3) adds:
+
+```text
+workspace.rename             {root?, path, target, overwrite?} -> {}
+workspace.operation.start    {kind, source:{root?,path}, target?:{root?,path}} -> status
+workspace.operation.status   {id} -> status
+workspace.operation.cancel   {id} -> status
+workspace.transfer.download  {root?, path, inline?} -> {url, expiresAt, name, size, inline}
+workspace.transfer.upload    {root?, directory, name, overwrite?, maxBytes?} -> {url, expiresAt, name}
+```
+
+`workspace.rename` renames or moves an entry within one root without
+replacing an existing target unless `overwrite` is set. It uses directory
+handles opened inside the root (`renameat`, and `renameat2` without
+replacement on Linux), so a symlinked parent cannot redirect it. Failures use
+`not_found`, `already_exists`, `cross_device` (different filesystems; use a
+move operation), `permission_denied` or `invalid_argument`.
+
+`workspace.operation.start` runs `copy`, `move` or `delete` in the background,
+outside the plugin's serialized calls. Source and target may use different
+roots. The target must not exist and its parent must; a directory cannot be
+copied into itself. Copies keep file modes and modification times and skip
+(and count) symlinks and special files, so they never follow a link. A move is
+a rename when possible and otherwise a copy followed by deleting the source.
+A failed or canceled copy removes the partial target. A status is `{id, kind,
+state, phase?, bytes, totalBytes, files, totalFiles, skipped, code?, error?}`
+with `state` `running`, `succeeded`, `failed` or `canceled`. The owner receives
+`workspace.operation.progress` about twice a second and one
+`workspace.operation.done` event with the final status. Each owner may run 4
+operations (16 in total); finished records stay queryable for five minutes and
+operations are canceled when their owner stops.
+
+`workspace.transfer.*` streams file contents over plain authenticated HTTP
+instead of the application WebSocket, so large files never pass through plugin
+memory: the browser uses the returned relative `url` (`api/v1/transfers/<ticket>`)
+with its RunPilot session. A download ticket serves one regular file with
+Range support until it expires after five minutes. Content is always
+`application/octet-stream` with `Content-Disposition: attachment`,
+`X-Content-Type-Options: nosniff` and a sandboxing Content-Security-Policy;
+`inline: true` is honored only for PNG, JPEG, GIF, WebP and BMP files whose
+content matches the extension. An upload ticket accepts one `PUT` within two
+minutes (with the usual CSRF header for browser sessions), streams the body to
+a temporary file in the target directory and renames it into place; it fails
+with 409 for an existing file unless `overwrite` is set, and with 413 above
+`maxBytes`. Tickets are bounded (256 per owner, 1024 in total) and dropped when their owner
+stops. `system.identity`
 returns `{username,uid}` for diagnostic display and may include a build-provided
 `deployment` identifier for platform-specific runtime guidance; it accepts no
 parameters. Ordinary builds omit `deployment`. This value identifies the
@@ -318,9 +387,9 @@ packaged host deployment, not the user account or operating system.
 IDs and log locations are host-generated and never accept paths. Execution
 metadata and output live in the calling plugin's
 `<dataDir>/plugins/<owner>/data/history.db` and `data/runs/<id>.log`.
-The retained Backup runner writes diagnostic logs under
-`<dataDir>/internal/runs`; it does not create a global run database or expose a
-legacy history API.
+There is no global run database or legacy history API. An unfinished
+execution may be captured by several processes one after another (for
+example the steps of a backup), but by only one at a time.
 
 ```text
 history.begin   {kind, subject, label}            -> execution
@@ -361,6 +430,7 @@ plugin runtime stop closes every stream owned by that plugin.
 
 ```text
 network.stream.open  {host, port, connectTimeoutSeconds, tls?} -> {id}
+network.stream.open  {workspaceSocket, connectTimeoutSeconds} -> {id}   # contract 1.2
 network.stream.read  {id, maxBytes, timeoutMilliseconds, peek?, offset?} -> {data, eof, state}
 network.stream.write {id, data} -> {}
 network.stream.close {id} -> {} (idempotent; foreign-owner IDs still fail)
@@ -376,6 +446,15 @@ requested bytes cannot exceed 65536. This supports bounded protocol
 negotiation while leaving subsequent bytes available to a browser attachment.
 Active stream counts and retained closed records are bounded. WASM receives no
 Go connection or socket handle.
+
+`workspaceSocket` (backend contract 1.2 or later) connects to an existing Unix
+domain socket inside the calling plugin's workspace instead of a TCP host. It
+is a relative workspace path, cannot be combined with `host`, `port` or TLS,
+rejects symlink components and returns `not_found` while the socket does not
+exist yet. This lets a plugin talk to a local server it started (for example
+with `process.start` and `workspaceDirectory`) without exposing a TCP port to
+other local users. Deep data directories are supported on Linux even when the
+socket path exceeds the platform's socket path limit.
 
 ### Network tools
 
@@ -444,8 +523,7 @@ Event:
 ```
 
 The common dispatcher provides correlation, structured errors, bounded calls,
-plugin-failure isolation and event routing. Existing legacy feature REST
-endpoints remain only while those features have not yet migrated.
+plugin-failure isolation and event routing.
 
 ## Frontend extension API
 
@@ -522,9 +600,7 @@ Use the shared `overview-stat-row`, `overview-stat`, `overview-fact` and
 For compact summaries, `overview-summary` holds inline counts; `overview-list`
 holds `overview-list-item` rows with a `feature-icon`, `overview-list-copy` and
 optional status badge. Plugins own the row data, actions and empty states.
-Navigation shortcuts use `runpilot.navigation.open("page-id")`.
-Legacy `register({id, render})` cards and `runpilot.overview.render()` remain
-available in frontend 1.x; new widgets should use lifecycle hooks.
+Links to another page use `runpilot.navigation.open("page-id")`.
 
 Navigation entries may use a plugin-packaged image, for example
 `icon: { src: new URL("./icon.svg", import.meta.url).href }`. The shell displays
@@ -536,17 +612,14 @@ plugin is enabled. Panel expansion is preserved across package status refreshes.
 provide their heading, fields, and actions using the host's shared responsive
 layout without imposing a custom section width.
 
-A navigation entry may provide an optional `description` for the page introduction,
-`shortcut: {title, description, order}` as compatible shortcut metadata (the current
-Overview does not display quick actions),
+A navigation entry may provide an optional `description` for the page introduction
 and `headerActions(root)` to add page-specific
-buttons to the application header beside the theme switcher. The host clears
+buttons to the application header, before the theme switcher. The host clears
 this slot when the user leaves that page:
 
 ```javascript
 runpilot.navigation.register({
     id: "example", title: "Example", render,
-    shortcut: {title: "Open Example", description: "Manage example items", order: 50},
     headerActions(root) {
         const button = document.createElement("button");
         button.className = "button primary small";
@@ -704,11 +777,8 @@ or login dialog. Invalid launches stay in an error state. A scoped lineage in
 `window.name` also bypasses management initialization during recovery.
 
 HTTPS serves only package initialization/metadata, never upstream payloads.
-Legacy contract-1.x publications may still register `{mountPath, bootstrap,
-worker}` without `runtimeId`; their worker remains scoped to
-`publicPrefix/` at `publicPrefix/__runpilot__/sw.js?publication=<id>`. A publication
-using a runtime cannot also request a target worker. The Web Apps bootstrap
-retires its legacy target registration before entering that virtual path.
+Every publication references its owner's active browser runtime; there are no
+per-publication workers.
 
 An HTTP gateway snapshots one HTTP(S) origin without userinfo/path/query/fragment,
 its normalized upstream base path, and the publication's public prefix:
@@ -829,9 +899,9 @@ the tunnel, and uses streaming DecompressionStream for browser rendering because
 synthetic Responses do not perform network content decoding. Decoded responses
 remove invalid compressed Content-Length/Content-Encoding metadata. The normal
 UI and worker load the same worker-safe `RunPilotSecureWebSocket` implementation.
-Normal UI bearer authentication is held in sessionStorage: the current tab
-migrates and removes legacy localStorage tokens. Browser features must launch
-with `noopener` so their tab does not inherit that credential or an opener.
+The normal UI authenticates with server session cookies and keeps no
+credential in browser storage. Browser features must launch with `noopener` so
+their tab does not inherit an opener.
 
 Web Apps binds document navigations through a single-use, one-minute worker-local
 handoff under `scope/__runpilot__/browser/<runtimeId>/navigate/`. Its redirect binds the

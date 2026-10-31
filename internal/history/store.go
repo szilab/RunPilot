@@ -16,12 +16,9 @@ type Store struct {
 	owners  map[string]*sql.DB
 }
 
-// Open initializes only generic plugin-owned history. The retained Backup
-// runner uses bounded internal log files and does not create a global run DB.
+// Open initializes plugin-owned history. There is no global run database;
+// each plugin's executions live under its own data directory.
 func Open(dataDir string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Join(dataDir, "internal", "runs"), 0o700); err != nil {
-		return nil, err
-	}
 	store := &Store{dataDir: dataDir, owners: map[string]*sql.DB{}}
 	if err := store.AbandonExecutions(); err != nil {
 		_ = store.Close()
@@ -49,10 +46,6 @@ CREATE INDEX IF NOT EXISTS runs_target_started ON runs(target_id, started_at DES
 CREATE INDEX IF NOT EXISTS runs_started ON runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS runs_owner_subject ON runs(owner, target_id, started_at DESC);`)
 	return err
-}
-
-func (s *Store) RunLogPath(runID string) string {
-	return filepath.Join(s.dataDir, "internal", "runs", runID+".log")
 }
 
 func (s *Store) ownerDB(owner string) (*sql.DB, error) {

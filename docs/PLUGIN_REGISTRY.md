@@ -20,7 +20,7 @@ manifest schema identifier, not another application compatibility check.
 
 Plugins live in the main repository, normally under `plugins/<id>/`, with their
 own `plugin.yaml`, optional `backend/`, optional `web/`, and optional changelog.
-Existing dotted IDs such as `remote.xpra` remain valid even where source
+Dotted IDs such as `web.apps` are valid even where source
 folder names use hyphens. Releases use the manifest ID.
 
 ```yaml
@@ -62,12 +62,9 @@ compatibility.
 maps an ID to its source directory and an explicit `publish` boolean. It is not
 part of runtime manifests. System is `publish: false`; it remains a technical
 ABI/frontend/WebSocket fixture and is no longer installed on fresh startup.
-Existing manual System installations are not deleted. The Tasks plugin is
-registered with `publish: false` until its legacy cutover is reviewed. The RDP
-Remote Desktop is published as one `remote` package with authenticated stream
+Existing manual System installations are not deleted. Remote Desktop is published as one `remote` package with authenticated stream
 transport, target management, session lifecycle, and both Guacamole and noVNC
 clients. Both protocols are provided by the same package and plugin ID.
-`remote.xpra` remains disabled while its migration is deferred.
 
 Build a deterministic archive locally:
 
@@ -225,6 +222,8 @@ Settings workflow for installing a local archive.
 
 Use `tools/test-plugin-local.sh plugins/tasks ./data` to install a local source
 package under `data/plugins/<id>/releases/<version>`, then restart RunPilot.
+`tools/dev.sh` does this for every plugin and starts a development instance
+on `./data`.
 
 Updates are detected only when the user checks the catalog, and installation is
 explicit. A newly installed version is selected on the next startup; the running

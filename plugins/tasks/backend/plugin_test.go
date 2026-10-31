@@ -848,10 +848,10 @@ func TestScheduleLifecycleFollowsDefinition(t *testing.T) {
 	h := newFakeHost(t)
 	pl := boot(t, h)
 	task := scheduledTask("S")
-	task.Schedule = &Schedule{Type: "cron", Cron: "0 * * * *", TimeZone: "Europe/Budapest"}
+	task.Schedule = &Schedule{Type: "cron", Cron: "0 * * * *", TimeZone: "Europe/Berlin"}
 	id := createTask(t, pl, task)
 	reg := h.schedules[id]
-	if reg["callback"] != "task" || reg["schedule"].(map[string]any)["cron"] != "0 * * * *" || reg["schedule"].(map[string]any)["timeZone"] != "Europe/Budapest" {
+	if reg["callback"] != "task" || reg["schedule"].(map[string]any)["cron"] != "0 * * * *" || reg["schedule"].(map[string]any)["timeZone"] != "Europe/Berlin" {
 		t.Fatalf("registration = %#v", reg)
 	}
 	upd := task

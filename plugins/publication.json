@@ -1,10 +1,11 @@
 {
   "plugins": [
-    {"id": "remote.xpra", "source": "plugins/remote-xpra", "publish": false},
     {"id": "remote", "source": "plugins/remote", "publish": true},
     {"id": "tasks", "source": "plugins/tasks", "publish": true},
     {"id": "docker", "source": "plugins/docker", "publish": true},
     {"id": "terminal", "source": "plugins/terminal", "publish": true},
+    {"id": "files", "source": "plugins/files", "publish": true},
+    {"id": "backup", "source": "plugins/backup", "publish": true},
     {"id": "web.apps", "source": "plugins/web-apps", "publish": true}
   ]
 }

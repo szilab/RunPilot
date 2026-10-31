@@ -35,7 +35,10 @@ type pluginNetworkStreamManager struct {
 	items     map[string]*pluginNetworkStream
 	emit      func(string, string)
 	tlsConfig func(pluginNetworkOpen) *tls.Config
-	closed    bool
+	// workspaceSocket resolves an owner-relative workspace socket to a host
+	// path that can be dialed. It is nil when workspace sockets are unsupported.
+	workspaceSocket func(owner, name string) (string, error)
+	closed          bool
 }
 
 type pluginNetworkStream struct {
@@ -49,8 +52,11 @@ type pluginNetworkStream struct {
 }
 
 type pluginNetworkOpen struct {
-	Host                  string `json:"host"`
-	Port                  int    `json:"port"`
+	Host string `json:"host"`
+	Port int    `json:"port"`
+	// WorkspaceSocket is a Unix domain socket inside the caller's workspace,
+	// used instead of host and port (backend contract 1.2).
+	WorkspaceSocket       string `json:"workspaceSocket"`
 	ConnectTimeoutSeconds int    `json:"connectTimeoutSeconds"`
 	TLS                   struct {
 		Enabled    bool   `json:"enabled"`
@@ -109,7 +115,14 @@ func validNetworkHost(host string) bool {
 
 func (m *pluginNetworkStreamManager) open(parent context.Context, owner string, raw json.RawMessage) (json.RawMessage, error) {
 	var in pluginNetworkOpen
-	if err := decodeNetworkParams(raw, &in); err != nil || !validNetworkHost(in.Host) || in.Port < 1 || in.Port > 65535 || in.ConnectTimeoutSeconds < 1 || time.Duration(in.ConnectTimeoutSeconds)*time.Second > maxPluginNetworkConnectTimeout {
+	if err := decodeNetworkParams(raw, &in); err != nil || in.ConnectTimeoutSeconds < 1 || time.Duration(in.ConnectTimeoutSeconds)*time.Second > maxPluginNetworkConnectTimeout {
+		return nil, networkInvalid("host, port and connect timeout are invalid")
+	}
+	if in.WorkspaceSocket != "" {
+		if in.Host != "" || in.Port != 0 || in.TLS.Enabled || in.TLS.ServerName != "" {
+			return nil, networkInvalid("workspaceSocket cannot be combined with host, port or TLS")
+		}
+	} else if !validNetworkHost(in.Host) || in.Port < 1 || in.Port > 65535 {
 		return nil, networkInvalid("host, port and connect timeout are invalid")
 	}
 	if in.TLS.ServerName != "" && !validNetworkHost(in.TLS.ServerName) {
@@ -121,7 +134,16 @@ func (m *pluginNetworkStreamManager) open(parent context.Context, owner string, 
 	dialer := &net.Dialer{}
 	var conn net.Conn
 	var err error
-	if in.TLS.Enabled {
+	if in.WorkspaceSocket != "" {
+		if m.workspaceSocket == nil {
+			return nil, &plugins.HostFailure{Code: "unavailable", Message: "workspace sockets are unavailable"}
+		}
+		socketPath, resolveErr := m.workspaceSocket(owner, in.WorkspaceSocket)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		conn, err = dialUnixSocket(ctx, dialer, socketPath)
+	} else if in.TLS.Enabled {
 		tlsDialer := &tls.Dialer{NetDialer: dialer, Config: m.tlsConfig(in)}
 		conn, err = tlsDialer.DialContext(ctx, "tcp", address)
 	} else {

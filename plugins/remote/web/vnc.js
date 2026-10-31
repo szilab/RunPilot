@@ -1,7 +1,8 @@
 import RFB from "./vendor/novnc/core/rfb.js";
 import { provideVNCCredentials } from "./vnc-credentials.js";
-import { createVNCChannelAdapter } from "./vnc-channel.js";
+import { createStreamChannel } from "./stream-channel.js";
 import { macField } from "./target-status.js";
+import { setupSessionToolbar } from "./session-toolbar.js";
 const escapeHTML = value => String(value ?? "").replace(/[&<>"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[character]));
 
 function field(label, name, value, type = "text", attrs = "") {
@@ -104,39 +105,8 @@ export function createVNCFeature(runpilot, call, onActivity = () => {}, targetSt
   async function openSession(target) {
     if (active) return;
     const view = runpilot.ui.createInteractiveSessionView({ container: page, title: target.name, onBack: () => void closeSession(true), onDisconnect: () => void closeSession(true) });
-    view.element.classList.add("rdp-interactive-view");
-    const icons = {
-      back: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
-      fullscreen: '<path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/>',
-      "page-view": '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
-      disconnect: '<path d="m18 6-12 12M6 6l12 12"/>',
-    };
-    const labelIcon = (element, name, label) => {
-      element.classList.add("icon", "rdp-toolbar-icon", `rdp-toolbar-${name}`);
-      element.setAttribute("aria-label", label); element.title = label;
-      const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      icon.setAttribute("viewBox", "0 0 24 24"); icon.setAttribute("fill", "none"); icon.setAttribute("stroke", "currentColor");
-      icon.setAttribute("stroke-width", "1.8"); icon.setAttribute("stroke-linecap", "round"); icon.setAttribute("stroke-linejoin", "round");
-      icon.setAttribute("aria-hidden", "true"); icon.setAttribute("focusable", "false"); icon.innerHTML = icons[name] || "";
-      element.replaceChildren(icon);
-    };
-    const backButton = view.element.querySelector(".rp-interactive-heading > button");
-    const [fullscreenButton, disconnectButton] = view.actions.querySelectorAll("button");
-    view.actions.prepend(backButton);
-    labelIcon(backButton, "back", "Back to VNC targets");
-    labelIcon(fullscreenButton, "fullscreen", "Toggle fullscreen");
-    labelIcon(disconnectButton, "disconnect", "Disconnect");
-    view.surface.onFullscreenChange(isFullscreen => labelIcon(fullscreenButton, "fullscreen", isFullscreen ? "Exit fullscreen" : "Enter fullscreen"));
-    const pageViewButton = document.createElement("button"); pageViewButton.type = "button"; pageViewButton.className = "button secondary small";
-    labelIcon(pageViewButton, "page-view", "Use RunPilot canvas view"); pageViewButton.setAttribute("aria-pressed", "false");
     const state = { view, target, session: null, stream: null, channel: null, rfb: null, clearCredentials: null, authFailure: false, closing: false, pageView: false };
-    pageViewButton.addEventListener("click", () => {
-      state.pageView = !state.pageView; view.setPageView(state.pageView);
-      const label = state.pageView ? "Exit RunPilot canvas view" : "Use RunPilot canvas view";
-      pageViewButton.setAttribute("aria-pressed", String(state.pageView)); labelIcon(pageViewButton, "page-view", label);
-    });
-    view.actions.insertBefore(pageViewButton, disconnectButton);
-    view.actions.replaceChildren(backButton, pageViewButton, fullscreenButton, disconnectButton);
+    setupSessionToolbar(view, { backLabel: "Back to VNC targets", onPageViewChange: value => { state.pageView = value; } });
     active = state; view.setStatus("connecting"); view.setLoading(true, `Connecting to ${target.name}…`);
     onActivity(true);
     try {
@@ -145,7 +115,7 @@ export function createVNCFeature(runpilot, call, onActivity = () => {}, targetSt
       state.session = result.session;
       state.stream = await runpilot.ws.openStream("remote", result.streamId);
       if (active !== state) { state.stream.close(); return; }
-      state.channel = createVNCChannelAdapter(state.stream);
+      state.channel = createStreamChannel(state.stream, { label: "VNC" });
       const remoteSurface = document.createElement("div"); remoteSurface.className = "vnc-session-surface"; view.surface.element.append(remoteSurface);
       state.rfb = new RFB(remoteSurface, state.channel, { shared: true });
       state.rfb.scaleViewport = true; state.rfb.resizeSession = true; state.rfb.clipViewport = false; state.rfb.viewOnly = false;

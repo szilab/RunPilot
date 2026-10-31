@@ -28,8 +28,14 @@ test("project and resource controls follow snapshot ownership and usage", async 
   assert.equal(overviewRegistrations,0);
   assert.doesNotMatch(root.innerHTML,/docker-plugin-toolbar|data-action="settings"|data-action="refresh"/);
   assert.match(root.innerHTML,/External project · read only/);
-  assert.match(root.innerHTML,/data-action="project-up" data-key="owned"/);
-  assert.doesNotMatch(root.innerHTML,/data-action="project-up" data-key="outside"/);
+  assert.match(root.innerHTML,/data-action="project-stop" data-key="owned"/);
+  assert.doesNotMatch(root.innerHTML,/data-action="project-up" data-key="owned"/,"a running project offers Stop, not Up");
+  assert.doesNotMatch(root.innerHTML,/data-action="project-(up|stop)" data-key="outside"/);
+  assert.match(root.innerHTML,/data-action="file-compose" data-key="owned"/);
+  assert.match(root.innerHTML,/data-action="project-down" data-key="owned"/);
+  assert.doesNotMatch(root.innerHTML,/data-action="project-delete" data-key="owned"/,"only a down project can be deleted");
+  assert.doesNotMatch(root.innerHTML,/data-action="container-(start|delete)" data-key="abcdef012345"/,"a running container hides start and delete");
+  assert.doesNotMatch(root.innerHTML,/data-action="project-create"/,"the create action lives in the header");
   assert.doesNotMatch(root.innerHTML,/data-action="container-stop" data-key="fedcba987654"/);
   assert.match(root.innerHTML,/External project · read only/);
   assert.match(root.innerHTML,/aria-label="Stop container"/);
@@ -46,9 +52,9 @@ test("project and resource controls follow snapshot ownership and usage", async 
   assert.match(root.innerHTML,/data-action="networks-delete" data-key="bridge"[^>]*disabled/);
   assert.match(root.innerHTML,/data-action="networks-delete" data-key="compose_net"[^>]*disabled/);
   click({target:{closest:()=>({dataset:{action:"view",key:"projects"}})}});
-  click({target:{closest:()=>({dataset:{action:"project-up",key:"owned"}})}});
+  click({target:{closest:()=>({dataset:{action:"project-stop",key:"owned"}})}});
   await new Promise(resolve=>setTimeout(resolve,0));
-  assert.ok(calls.some(([,method,params])=>method==="docker.projects.action"&&params.name==="owned"&&params.action==="up"));
+  assert.ok(calls.some(([,method,params])=>method==="docker.projects.action"&&params.name==="owned"&&params.action==="stop"));
   deactivate();
 });
 

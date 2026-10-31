@@ -106,7 +106,7 @@ func Install(dataDir string, options ...daemon.Options) error {
 	); err != nil {
 		return err
 	}
-	_ = runSC("description", Name, "Supervises background processes, scheduled jobs and local backup jobs.")
+	_ = runSC("description", Name, "Plugin-based host management: tasks, backups, containers, files and remote access.")
 	return nil
 }
 

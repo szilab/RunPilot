@@ -10,14 +10,13 @@ being refactored into a small **plugin host and management framework**.
 The target core owns infrastructure that multiple features need: plugin
 installation/runtime, versioned host capabilities, one authenticated application
 WebSocket, the web shell, shared UI/theme primitives, and framework settings.
-Tasks, Docker, Terminal and Remote Desktop are plugin-owned in the normal UI. Storage,
-Software and Backup remain transitional core implementations without normal
-navigation. Xpra is the temporary Remote exception described below.
+Tasks, Backup, Docker, Terminal, Remote Desktop, Files and Web Apps are
+plugins; no product feature remains in core. Software management is not
+planned.
 
-The migration is incremental. Legacy backends, APIs and configuration remain
-operational until plugin parity and any required state migration decision. New
-architecture work must not use that transitional state as a reason to add more
-feature semantics to core.
+RunPilot has a single deployment, so feature changes need no data or
+configuration migration. Legacy backends were removed once their plugin
+replacement existed, without migrating their state.
 
 ## Core boundary
 
@@ -35,10 +34,8 @@ Target core responsibilities are:
 
 Core must not permanently understand domain concepts such as Task, Docker
 container, backup repository, terminal session type, Xpra target or Scoop
-package. Xpra remains in core temporarily because its subprocess/display
-lifecycle and local HTTP/WebSocket browser publication do not map cleanly to
-current capabilities. Generic engines may remain in core when exposed as
-reusable host capabilities.
+package. Generic engines may remain in core when exposed as reusable host
+capabilities.
 
 ## Plugin model
 
@@ -72,7 +69,7 @@ These versions are independent and must not be collapsed into one number:
 | --- | --- |
 | RunPilot version | Native application release |
 | Raw WASM ABI | Binary calling convention; v1 and v2 are currently supported |
-| Backend contract | Host capability/runtime compatibility; currently `1.1.0` (1.1 added network tools) |
+| Backend contract | Host capability/runtime compatibility; currently `1.4.0` (1.1 added network tools; 1.2 added workspace process directories and workspace sockets; 1.3 added file details, rename, background file operations and HTTP file transfers; 1.4 added next fire times to `scheduler.register` and `scheduler.list`) |
 | Frontend contract | Public browser extension compatibility; currently `1.0.0` |
 | Plugin version | Independent SemVer release of one plugin; the source of truth is `plugins/<id>/plugin.yaml` |
 
@@ -134,10 +131,11 @@ request identifies a plugin and method:
 Responses use the same correlation ID; asynchronous events use the same
 connection. Static HTML/JS/CSS and plugin assets remain ordinary HTTP resources.
 New plugin features must not create feature-specific REST APIs or WebSockets.
-The REST routes of unmigrated legacy features (Docker manager, Storage,
-Software, Backup jobs, Xpra client) are not mounted; their handlers remain in
-`internal/web/legacy_*.go`, registered only by tests through
-`registerLegacyRoutes`, until each plugin migration reaches parity.
+The one generic exception is the host-owned file transfer route
+(`api/v1/transfers/<ticket>`, see `workspace.transfer.*`): bulk file contents
+use plain authenticated HTTP with plugin-issued single-purpose tickets, so
+large files never pass through plugin memory or the application WebSocket.
+No legacy feature REST routes remain.
 
 The public frontend surface is built around:
 
@@ -166,9 +164,10 @@ continues on other pages while the authenticated app is visible; reloads restore
 the retained samples. Hidden or closed browsers do not collect measurements.
 This is recent browser history, not a server metrics archive; it does not use
 execution history or synthesize measurements. Plugin summary widgets appear below the
-host dashboard through the generic frontend widget registration contract. Their
-mount, refresh, and disposal follow Overview visibility. Navigation shortcut
-metadata remains accepted for compatibility; Overview has no quick-action panel.
+host dashboard through the generic frontend widget registration contract.
+The target is an Overview built entirely from widgets: the host dashboard
+and the launcher (shortcuts) are planned to become widgets as well. Their
+mount, refresh, and disposal follow Overview visibility.
 Existing launcher configuration
 remains separate; the visual redesign does not change its semantics. The
 internal System package fixture is used for tests, not as a user-facing feature.
@@ -202,9 +201,8 @@ Core authentication uses one local administrator account, Argon2id password
 hashes, revocable HttpOnly server-managed browser sessions, CSRF checks and the
 common application WebSocket. Browser sessions are stored as secret hashes
 under `<dataDir>/internal`, survive service restarts, and expire 24 hours after
-login; logout and password changes revoke them. Existing bearer API-token
-clients remain a separately
-controlled compatibility path. Fresh installations allow administrator setup
+login; logout and password changes revoke them. Bearer API-token access is a
+separate setting, off by default. Fresh installations allow administrator setup
 for five minutes after startup; when the window expires, setup remains locked
 until the user restarts the service to open another window.
 
@@ -227,15 +225,37 @@ directory changes are restart-bound and only update the locator; no data is
 copied or moved. Users prepare existing data in the selected directory
 manually, or start with an empty directory. Initial administrator setup retains
 its copy-verified relocation into a new directory. Docker Compose layouts with
-relative bind mounts require a separate manual migration.
+relative bind mounts require a separate manual move.
 
-The next work is feature migration, not further expansion of the core plugin
-framework. Migrate one feature at a time and remove its legacy core/API code only
-after plugin parity and automated regression coverage.
+All product features now live in plugins. The next work is the Overview made
+of widgets and shared capabilities such as notifications, not further feature
+semantics in core; see the [backlog](../BACKLOG.md).
 
-Tasks, Docker, Terminal and Remote Desktop have migrated in the normal UI. Storage is the
-next active feature migration. Software, Backup and Xpra follow as separate
-plugin work; see the [backlog](../BACKLOG.md).
+### Backup status
+
+`backup` is a first-party ABI-v2 plugin (backend contract 1.4), independent of
+Tasks. It owns backup jobs, their schedules and the engine rules: Restic
+(backup, retention, check, unlock, init and restore of a snapshot into a new or
+empty folder), rsync on Linux and Robocopy on Windows. It runs on the generic
+`storage.*`, `scheduler.*` (with `nextRunAt`), `process.start`/`process.run`,
+`history.*`, `workspace.*` with an external `root` (folder picker, environment
+files, restore-target checks) and `events.publish` capabilities. A run's steps
+are separate processes captured into one history execution. Repository
+passwords and keys never enter RunPilot storage: jobs reference a password
+file and/or an environment file that is read at run time. The engines are
+external tools; the plugin detects them and explains how to install a missing
+one. Run failures appear on the page and as toasts; notifications are a later
+shared capability.
+
+### Files status
+
+`files` is a first-party ABI-v2 plugin (backend contract 1.3). It always shows
+the whole host filesystem (`/`, or the drives on Windows) with the RunPilot
+service account's permissions, has no settings, owns the file-manager rules,
+and uses only the generic `workspace.*` capabilities with an external `root`: listings with details, text reads/writes up to 1 MiB with
+change detection, rename, background copy/move/delete operations and HTTP
+transfer tickets for uploads and downloads. Core has no file-manager
+semantics. It does not browse Docker volumes or manage backup repositories.
 
 ### Docker status
 
@@ -243,30 +263,31 @@ Docker has a Linux-only first-party plugin (`plugins/docker`,
 ABI v2) for Compose projects, containers, volumes, networks and interactive
 container terminals. It owns the normal `docker` page and uses generic bounded
 `process.run`, owner-scoped `workspace.*`, and `process.session.*` capabilities.
-Existing `<dataDir>/compose` control files are copied into the Docker plugin
-workspace on startup without overwriting plugin-owned projects or deleting the
-source. Container data stays at its original path. The copy records its legacy
-origin so Compose actions retain relative bind mounts and existing containers
-can be verified against their original Compose directory; external name
-collisions remain read only.
+Each managed project lives in the plugin workspace; external Compose projects
+with the same name remain read only.
 External containers allow bounded log viewing but no lifecycle mutations or
 interactive terminal.
-The legacy Docker manager remains transitional because hidden Storage still
-uses Docker-volume integration. Its HTTP handlers are kept but not mounted, and
-the plugin UI does not use them.
+The former core Docker manager, its HTTP handlers and the Docker attach
+endpoint have been removed.
 
 ### Remote status
 
-`remote` is the publishable ABI-v2 Remote Desktop plugin for RDP and VNC.
-It packages Guacamole and noVNC clients and owns targets for both protocols. Target
+`remote` is the publishable ABI-v2 Remote Desktop plugin for RDP, VNC and
+Xpra. It packages Guacamole, noVNC and the Xpra HTML5 client and owns targets
+for all three protocols; the session view, toolbar, diagnostics and stream
+channel are shared between them. Target
 status and Wake-on-LAN are plugin semantics on top of the generic
 `network.probe`, `network.neighbor.lookup` and `network.wake` capabilities
 (backend contract 1.1).
-The legacy RDP and VNC providers, browser transports, and combined Remote page
-have been removed from core. Xpra's legacy provider/runtime remains
-internal with no normal UI or navigation. Its plugin migration is deferred
-until reusable process, listener, and browser-publication lifecycle capabilities
-are designed; see the concise [backlog](../BACKLOG.md).
+Xpra runs an application or desktop on the RunPilot host (Linux only). The
+plugin starts the Xpra server with `process.start` in a private workspace
+directory (`workspaceDirectory`), where the server listens only on a Unix
+socket; the browser stream reaches it through `network.stream.open` with
+`workspaceSocket` (backend contract 1.2). No TCP port is opened, so other local
+users cannot attach. The packaged client runs in a same-origin frame inside the
+shared session view; it is plugin-packaged code and connects only through that
+stream. The former core Remote providers, transports, Xpra runtime and client
+proxy have been removed.
 
 ### Tasks status
 
@@ -279,12 +300,10 @@ capability.
 
 The plugin owns the normal `tasks` page. The pre-plugin process manager, command
 jobs, Tasks REST endpoints, history API, and Tasks/Backup dialogs have been
-removed. Opening an older config drops its
-obsolete process definitions and command jobs without changing its token.
-**Backup is not part of the Tasks plugin**: typed Backup jobs, their scheduler,
-provider implementations, and logs under `<dataDir>/internal/runs` remain in
-core until their own migration. Startup never creates `<dataDir>/legacy` or a
-global run history database.
+removed, as have the core Backup jobs, their runner and scheduler loops.
+Opening an older config ignores its obsolete `processes` and `jobs` entries
+without changing its token. Startup never creates `<dataDir>/legacy`,
+`<dataDir>/internal/runs` or a global run history database.
 
 The capability changes made for Tasks are generic framework infrastructure:
 interpreter-aware `process.start` (launcher semantics), process timeouts and
@@ -294,9 +313,10 @@ ordered/bounded event delivery. See [PLUGIN_API.md](PLUGIN_API.md).
 The async ABI-v2 process/scheduler/event path remains covered by real-WASM
 race/integration tests.
 
-First-party plugins do not contribute Overview widgets; Overview shows only
-the built-in host dashboard. The widget registration contract remains available
-to plugins, and a repository test keeps first-party frontends from using it.
+First-party plugins do not contribute Overview widgets yet; Overview shows
+only the built-in host dashboard. The widget registration contract remains
+available to plugins, and a repository test keeps first-party frontends from
+using it until the widget-based Overview work starts.
 
 ## Security and guardrails
 
@@ -308,8 +328,6 @@ to plugins, and a repository test keeps first-party frontends from using it.
 - Keep browser application traffic on the common WebSocket.
 - Keep plugin frontend code on public extension APIs and design tokens.
 - Preserve Windows/Linux behavior and explicit platform compatibility.
-- Preserve existing legacy feature behavior while it is still the production
-  implementation.
 - Prefer incremental migrations over simultaneous rewrites.
 - Keep themes non-executable; a future theme package should be CSS/metadata, not
   another WASM plugin.

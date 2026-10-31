@@ -265,6 +265,13 @@ func (r *Runtime) Event(ctx context.Context, event string, data any) error {
 }
 
 func (r *Runtime) invoke(parent context.Context, name string, value any) ([]byte, error) {
+	// A caller's deadline can expire while it waits for the runtime lock (for
+	// example a 250 ms output event behind a slower call). The runtime closes
+	// its module when a context ends during execution, so never enter WASM
+	// with an already finished context: the call or event is skipped instead.
+	if err := parent.Err(); err != nil {
+		return nil, fmt.Errorf("plugin %q %s skipped: %w", r.manifest.ID, name, err)
+	}
 	if r.manifest.Requires.RunPilotAPI == PluginABIVersion2 {
 		return r.invokeV2(parent, name, value)
 	}

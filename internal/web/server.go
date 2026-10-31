@@ -24,9 +24,7 @@ import (
 
 	"github.com/szilab/RunPilot/internal/config"
 	"github.com/szilab/RunPilot/internal/core"
-	"github.com/szilab/RunPilot/internal/dockercompose"
 	"github.com/szilab/RunPilot/internal/platform"
-	"github.com/szilab/RunPilot/internal/terminal"
 	"github.com/szilab/RunPilot/internal/version"
 	"github.com/szilab/RunPilot/internal/websocketsecure"
 )
@@ -40,19 +38,10 @@ type Server struct {
 	restartHandler        func()
 	setupWindowMu         sync.Mutex
 	setupWindowDeadline   time.Time
-	tickets               map[string]downloadTicket
-	ticketMu              sync.Mutex
-	dockerTerminal        *terminal.Manager
-	dockerAttachTickets   map[string]dockerAttachTicket
-	dockerAttachMu        sync.Mutex
-	remoteTickets         map[string]remoteClientTicket
-	remoteTicketMu        sync.Mutex
-	legacyRoutes          bool // mounts unmigrated feature APIs; only tests set it
 	proxyAuth             atomic.Pointer[ProxyAuth]
 	proxyAuthEnv          *proxyAuthSettings // set when the environment owns the settings
 	applicationTickets    map[string]applicationTicket
 	applicationTicketMu   sync.Mutex
-	docker                *dockercompose.Manager
 	sessionMu             sync.Mutex
 	sessions              map[string]authSession
 	sessionConnections    map[string]map[uint64]func()
@@ -63,23 +52,6 @@ type Server struct {
 	loginFailures         map[string]loginFailure
 	loginVerify           chan struct{}
 	dataRootSwitchAllowed bool
-}
-type dockerAttachTicket struct {
-	DockerExecID string
-	SessionID    string
-	Cols, Rows   uint16
-	Expires      time.Time
-}
-type downloadTicket struct {
-	StorageID, Path string
-	SessionID       string
-	Expires         time.Time
-}
-type remoteClientTicket struct {
-	SessionID     string
-	AuthSessionID string
-	ClientParams  map[string]string
-	Expires       time.Time
 }
 type applicationTicket struct {
 	expires   time.Time
@@ -102,7 +74,7 @@ func New(ctrl *core.Controller, basePaths ...string) (*Server, error) {
 	if err := ctrl.SetBrowserBasePath(basePath); err != nil {
 		return nil, err
 	}
-	server := &Server{ctrl: ctrl, basePath: basePath, tickets: map[string]downloadTicket{}, dockerTerminal: terminal.NewManager(ctrl.DataDir(), terminal.DefaultMaxSessions), dockerAttachTickets: map[string]dockerAttachTicket{}, remoteTickets: map[string]remoteClientTicket{}, applicationTickets: map[string]applicationTicket{}, docker: ctrl.Docker(), sessions: map[string]authSession{}, sessionConnections: map[string]map[uint64]func(){}, browserTickets: map[string]sessionTicket{}, loginFailures: map[string]loginFailure{}, loginVerify: make(chan struct{}, 2), dataRootSwitchAllowed: true}
+	server := &Server{ctrl: ctrl, basePath: basePath, applicationTickets: map[string]applicationTicket{}, sessions: map[string]authSession{}, sessionConnections: map[string]map[uint64]func(){}, browserTickets: map[string]sessionTicket{}, loginFailures: map[string]loginFailure{}, loginVerify: make(chan struct{}, 2), dataRootSwitchAllowed: true}
 	if err := server.loadSessions(); err != nil {
 		return nil, err
 	}
@@ -190,9 +162,8 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("PUT /api/v1/plugins/{id}", s.handlePluginUpdate)
 	api.HandleFunc("POST /api/v1/plugins/rescan", s.handlePluginRescan)
 	api.HandleFunc("GET /api/v1/overview", s.handleOverview)
-	if s.legacyRoutes {
-		s.registerLegacyRoutes(mux, api)
-	}
+	api.HandleFunc("GET /api/v1/transfers/{ticket}", s.handleTransferDownload)
+	api.HandleFunc("PUT /api/v1/transfers/{ticket}", s.handleTransferUpload)
 
 	mux.Handle("/api/", s.auth(api))
 	mux.HandleFunc("GET /api/v1/ws", s.handleApplicationWS)
@@ -230,8 +201,8 @@ func (s *Server) Handler() http.Handler {
 	})))
 }
 
-// Close releases all interactive shell sessions during RunPilot shutdown.
-func (s *Server) Close() error { return s.dockerTerminal.Close() }
+// Close releases server resources during RunPilot shutdown.
+func (s *Server) Close() error { return nil }
 
 func normalizeBasePath(value string) (string, error) {
 	value = strings.TrimSpace(value)
@@ -248,7 +219,7 @@ func normalizeBasePath(value string) (string, error) {
 	return clean, nil
 }
 
-const initialSetupHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Set up RunPilot</title><script>document.documentElement.dataset.scheme="system";document.documentElement.dataset.theme=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"</script><link rel="stylesheet" href="__BASE__/styles.css"><link rel="stylesheet" href="__BASE__/workspace.css"></head><body><main class="setup-screen"><section class="dialog small setup-card"><div class="dialog-head"><div><h1>Set up RunPilot</h1><p>Create the local administrator account and choose where RunPilot stores its data.</p></div></div><p>Complete setup within 5 minutes of starting RunPilot. When the window expires, setup is locked until you restart the RunPilot service.</p><form id="setup" class="settings-form setup-form"><label>Administrator username<input name="username" value="admin" minlength="3" maxlength="64" autocomplete="username" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label>Confirm password<input name="confirm" type="password" minlength="12" autocomplete="new-password" required></label>__DATA_DIR_CONTROL__<div id="error" class="form-error hidden" role="alert"></div><div class="dialog-actions"><button class="button primary">Create administrator</button></div></form></section></main><script>try{localStorage.removeItem('runpilot.token');sessionStorage.removeItem('runpilot.token')}catch{}const form=document.querySelector('#setup'),error=document.querySelector('#error');form.onsubmit=async e=>{e.preventDefault();error.textContent='';error.classList.add('hidden');if(form.password.value!==form.confirm.value){error.textContent='Passwords do not match.';error.classList.remove('hidden');return}try{const response=await fetch('__BASE__/api/v1/setup',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(Object.fromEntries(new FormData(form)))});if(!response.ok){const result=await response.json();throw Error(result.error||'Setup failed')}location.href='__BASE__/'}catch(x){error.textContent=x.message;error.classList.remove('hidden')}}</script></body></html>`
+const initialSetupHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Set up RunPilot</title><script>document.documentElement.dataset.scheme="system";document.documentElement.dataset.theme=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"</script><link rel="stylesheet" href="__BASE__/styles.css"><link rel="stylesheet" href="__BASE__/workspace.css"></head><body><main class="setup-screen"><section class="dialog small setup-card"><div class="dialog-head"><div><h1>Set up RunPilot</h1><p>Create the local administrator account and choose where RunPilot stores its data.</p></div></div><p>Complete setup within 5 minutes of starting RunPilot. When the window expires, setup is locked until you restart the RunPilot service.</p><form id="setup" class="settings-form setup-form"><label>Administrator username<input name="username" value="admin" minlength="3" maxlength="64" autocomplete="username" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label>Confirm password<input name="confirm" type="password" minlength="12" autocomplete="new-password" required></label>__DATA_DIR_CONTROL__<div id="error" class="form-error hidden" role="alert"></div><div class="dialog-actions"><button class="button primary">Create administrator</button></div></form></section></main><script>const form=document.querySelector('#setup'),error=document.querySelector('#error');form.onsubmit=async e=>{e.preventDefault();error.textContent='';error.classList.add('hidden');if(form.password.value!==form.confirm.value){error.textContent='Passwords do not match.';error.classList.remove('hidden');return}try{const response=await fetch('__BASE__/api/v1/setup',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(Object.fromEntries(new FormData(form)))});if(!response.ok){const result=await response.json();throw Error(result.error||'Setup failed')}location.href='__BASE__/'}catch(x){error.textContent=x.message;error.classList.remove('hidden')}}</script></body></html>`
 
 func (s *Server) writeInitialSetup(w http.ResponseWriter) {
 	staticPrefix := s.basePath
@@ -652,7 +623,7 @@ func (s *Server) handleDataRootChange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) hasComposeProjects(root string) bool {
-	for _, path := range []string{filepath.Join(root, "compose"), filepath.Join(root, "plugins", "docker", "data", "workspace", "projects")} {
+	for _, path := range []string{filepath.Join(root, "plugins", "docker", "data", "workspace", "projects")} {
 		entries, err := os.ReadDir(path)
 		if err == nil && len(entries) > 0 {
 			return true

@@ -121,10 +121,14 @@ type plugin struct {
 	diagnosticIDs  []string
 	sessionDiagIDs map[string]string
 	nextDiagnostic uint64
+	xpraSessions   map[string]*xpraSession
+	// nextXpraSession numbers sessions; their workspace directories are
+	// removed when no session runs, so restarting the counter is safe.
+	nextXpraSession uint64
 }
 
 func newPlugin() *plugin {
-	return &plugin{sessions: map[string]session{}, vncSessions: map[string]vncSession{}, diagnostics: map[string][]string{}, sessionDiagIDs: map[string]string{}, nextDiagnostic: 1}
+	return &plugin{sessions: map[string]session{}, vncSessions: map[string]vncSession{}, diagnostics: map[string][]string{}, sessionDiagIDs: map[string]string{}, nextDiagnostic: 1, xpraSessions: map[string]*xpraSession{}}
 }
 
 func validDiagnosticID(value string) bool {
@@ -231,6 +235,9 @@ func decode(raw json.RawMessage, value any) *rpcError {
 func (p *plugin) handle(method string, raw json.RawMessage) (any, *rpcError) {
 	if strings.HasPrefix(method, "vnc.") {
 		return p.handleVNC(method, raw)
+	}
+	if strings.HasPrefix(method, "xpra.") {
+		return p.handleXpra(method, raw)
 	}
 	switch method {
 	case "remote.targets.status":
@@ -983,6 +990,9 @@ func (p *plugin) close(raw json.RawMessage) (any, *rpcError) {
 }
 
 func (p *plugin) event(name string, raw json.RawMessage) *rpcError {
+	if p.xpraEvent(name, raw) {
+		return nil
+	}
 	if name != "network.stream.closed" {
 		return nil
 	}
@@ -1001,6 +1011,7 @@ func (p *plugin) event(name string, raw json.RawMessage) *rpcError {
 }
 
 func (p *plugin) shutdown() {
+	p.shutdownXpra()
 	for id, current := range p.vncSessions {
 		_ = callHost("network.stream.close", map[string]string{"id": current.StreamID}, nil)
 		delete(p.vncSessions, id)

@@ -61,7 +61,8 @@ func buildCapabilityHandlers() map[string]capabilityHandler {
 	}
 	family(hostCapability("plugin workspace is unavailable", func(h WorkspaceHost, ctx context.Context, owner, name string, params json.RawMessage) (json.RawMessage, error) {
 		return h.Workspace(ctx, owner, strings.TrimPrefix(name, "workspace."), params)
-	}), "workspace.list", "workspace.stat", "workspace.read", "workspace.write", "workspace.mkdir", "workspace.remove")
+	}), "workspace.list", "workspace.stat", "workspace.read", "workspace.write", "workspace.mkdir", "workspace.remove",
+		"workspace.rename", "workspace.operation.start", "workspace.operation.status", "workspace.operation.cancel", "workspace.transfer.download", "workspace.transfer.upload")
 	family(hostCapability("execution history is unavailable", func(h HistoryHost, ctx context.Context, owner, name string, params json.RawMessage) (json.RawMessage, error) {
 		return h.History(ctx, owner, strings.TrimPrefix(name, "history."), params)
 	}), "history.begin", "history.append", "history.finish", "history.list", "history.get", "history.output")

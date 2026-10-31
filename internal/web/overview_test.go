@@ -35,8 +35,8 @@ func TestOverviewEndpointProvidesHostAndServiceStatus(t *testing.T) {
 	if overview.Host.OS == "" {
 		t.Fatal("overview is missing host operating system")
 	}
-	if overview.JobCount != 0 {
-		t.Fatalf("empty controller jobs = %d", overview.JobCount)
+	if overview.Issues == nil {
+		t.Fatal("overview issues must be a list")
 	}
 }
 
@@ -104,18 +104,5 @@ func TestHiddenLegacyFeaturesAreNotRegistered(t *testing.T) {
 	}
 	if response := get(production, "/api/v1/overview", true); response.Code != http.StatusOK {
 		t.Errorf("/api/v1/overview = %d: %s", response.Code, response.Body.String())
-	}
-
-	// The handlers remain in the codebase until plugin parity; keep them
-	// authenticated and working when the routes are mounted.
-	server.legacyRoutes = true
-	legacy := server.Handler()
-	for _, path := range []string{"/api/v1/jobs", "/api/v1/storage", "/api/v1/software/providers"} {
-		if response := get(legacy, path, true); response.Code != http.StatusOK {
-			t.Errorf("legacy %s = %d: %s", path, response.Code, response.Body.String())
-		}
-	}
-	if response := get(legacy, "/api/v1/docker", false); response.Code != http.StatusUnauthorized {
-		t.Errorf("Docker legacy API authentication = %d: %s", response.Code, response.Body.String())
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -192,6 +193,17 @@ func TestSystemSourceWASM(t *testing.T) {
 	}
 	if err := runtime.Event(context.Background(), "scheduler.fired", map[string]string{"id": "test"}); err != nil {
 		t.Fatalf("deliver compiled System event: %v", err)
+	}
+	// An event whose deadline passed while it waited for the runtime lock is
+	// skipped; it must not close the module for later calls.
+	expired, cancelExpired := context.WithTimeout(context.Background(), time.Nanosecond)
+	time.Sleep(time.Millisecond)
+	if err := runtime.Event(expired, "process.stdout", map[string]string{"id": "late", "text": "x"}); err == nil || !strings.Contains(err.Error(), "skipped") {
+		t.Fatalf("expired event error = %v", err)
+	}
+	cancelExpired()
+	if err := runtime.Call(context.Background(), "status.get", map[string]any{}, &result); err != nil {
+		t.Fatalf("call after skipped event: %v", err)
 	}
 	if err := runtime.Call(context.Background(), "missing.method", map[string]any{}, &result); err != nil {
 		t.Fatalf("unknown System method call: %v", err)

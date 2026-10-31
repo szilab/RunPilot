@@ -32,7 +32,7 @@ function terminalAssets() {
 
 export async function activate(runpilot) {
   const esc = runpilot.ui.escape;
-  let root = null, snapshot = null, error = "", loading = false, modal = null, terminal = null;
+  let root = null, headerRoot = null, snapshot = null, error = "", loading = false, modal = null, terminal = null;
   let settingsForm = null;
   const settingsState = {loaded:false,loading:false,saving:false,value:"",usesDefault:false,error:"",status:""};
   let view = "projects";
@@ -51,22 +51,43 @@ export async function activate(runpilot) {
   function button(label, action, key, disabled = false, danger = false, title = "", extraClass = "", primary = false) {
     return `<button type="button" class="button ${primary ? "primary" : danger ? "danger" : "secondary"} small${extraClass ? ` ${esc(extraClass)}` : ""}" data-action="${esc(action)}" data-key="${esc(key)}" ${title ? `title="${esc(title)}"` : ""} ${disabled ? "disabled" : ""}>${esc(label)}</button>`;
   }
-  function iconButton(symbol, label, action, key, disabled = false, danger = false, reason = "") {
-    return `<button type="button" class="button ${danger ? "danger" : "secondary"} icon" title="${esc(reason || label)}" aria-label="${esc(label)}" data-action="${esc(action)}" data-key="${esc(key)}" ${disabled ? "disabled" : ""}>${symbol}</button>`;
+  const ICONS = {
+    start: '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M8 5.5v13l10.5-6.5z"/></svg>',
+    stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect class="fill" x="6.5" y="6.5" width="11" height="11" rx="1.5"/></svg>',
+    delete: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2m-7 0 1 12h8l1-12"/></svg>',
+    terminal: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 5 5-5 5m7 1h7"/></svg>',
+    logs: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>',
+  };
+  function iconButton(icon, label, action, key, disabled = false, danger = false) {
+    return `<button type="button" class="button ${danger ? "danger" : "secondary"} icon docker-plugin-icon" title="${esc(label)}" aria-label="${esc(label)}" data-action="${esc(action)}" data-key="${esc(key)}" ${disabled ? "disabled" : ""}>${ICONS[icon]}</button>`;
   }
+  // A container row shows only the actions that apply to its current state.
   function containerRow(item, managed, ready) {
     const running = item.state === "running";
-    const disabled = !managed || !ready || busy.has(item.id);
-    const reason = !managed ? "External Compose containers are read only" : "";
+    const disabled = !ready || busy.has(item.id);
     const dotState = item.tone === "green" ? "running" : item.tone === "yellow" ? "starting" : item.tone === "red" ? "failure" : "";
-    return `<div class="docker-plugin-container"><span class="dot ${dotState}" aria-hidden="true"></span><div><strong>${esc(item.service || item.name)}</strong><small>${esc(item.image || "")} · ${esc(item.status || item.state || "unknown")}${item.health ? ` · ${esc(item.health)}` : ""}</small></div><div class="docker-plugin-actions">${managed ? `${iconButton("▶", "Start container", "container-start", item.id, disabled || running, false, reason)}${iconButton("■", "Stop container", "container-stop", item.id, disabled || !running, false, reason)}${iconButton("×", "Delete stopped container", "container-delete", item.id, disabled || running, true, reason)}${iconButton("↪", "Open terminal", "terminal", item.id, disabled || !running, false, reason)}` : ""}${iconButton("▤", "View logs", "logs", item.id, !ready || busy.has(item.id))}</div></div>`;
+    const status = item.status || item.state || "unknown";
+    const health = item.health && !status.includes(item.health) ? ` · ${esc(item.health)}` : "";
+    const lifecycle = !managed ? "" : running
+      ? `${iconButton("terminal", "Open terminal", "terminal", item.id, disabled)}${iconButton("stop", "Stop container", "container-stop", item.id, disabled)}`
+      : `${iconButton("start", "Start container", "container-start", item.id, disabled)}${iconButton("delete", "Delete stopped container", "container-delete", item.id, disabled, true)}`;
+    return `<div class="docker-plugin-container"><span class="dot ${dotState}" aria-hidden="true"></span><div class="docker-plugin-container-text"><strong>${esc(item.service || item.name)}</strong><small title="${esc(item.image || "")}">${esc(item.image || "")}</small><small>${esc(status)}${health}</small></div><div class="docker-plugin-actions">${iconButton("logs", "View logs", "logs", item.id, disabled)}${lifecycle}</div></div>`;
   }
+  // Project cards keep the common lifecycle step visible and move file editing,
+  // Down and Delete into a menu.
   function projectCard(item, ready) {
     const managed = !!item.managed, locked = busy.has(item.name);
     const active = ["running", "partial", "degraded"].includes(item.state);
-    const readOnlyReason = managed ? "" : "External Compose projects are read only";
-    const actions = `<div class="docker-plugin-actions">${managed ? `${button("Up", "project-up", item.name, !managed || !ready || !item.composeFileExists || locked, false, readOnlyReason)}${button("Start", "project-start", item.name, !managed || !ready || !item.composeFileExists || item.state !== "stopped" || locked, false, readOnlyReason)}${button("Stop", "project-stop", item.name, !managed || !ready || !active || locked, false, readOnlyReason)}${button("Down", "project-down", item.name, !managed || !ready || !item.composeFileExists || item.state === "down" || locked, false, readOnlyReason)}${button("compose.yaml", "file-compose", item.name, locked)}${button(".env", "file-env", item.name, locked)}${button("Delete", "project-delete", item.name, !ready || item.state !== "down" || locked, true)}` : ""}</div>${managed ? "" : `<p class="meta docker-plugin-readonly"${item.configPath ? ` title="${esc(item.configPath)}"` : ""}>External project · read only. View logs for its containers.</p>`}`;
-    return `<article class="rp-card docker-plugin-card"><div class="docker-plugin-card-head"><h3>${esc(item.name)}</h3><span class="status ${item.state === "running" ? "running" : item.state === "degraded" ? "failure" : "idle"}">${esc(item.state || "unknown")}</span></div>${actions}<div class="docker-plugin-container-list">${(item.containers || []).map(c => containerRow(c, managed, ready)).join("") || '<p class="meta">No containers</p>'}</div></article>`;
+    const blocked = !ready || locked;
+    let actions = "";
+    if (managed) {
+      const lifecycle = `${item.state !== "running" ? button("Up", "project-up", item.name, blocked || !item.composeFileExists, false, "Create and start all services") : ""}${active ? button("Stop", "project-stop", item.name, blocked, false, "Stop all services") : ""}`;
+      const menuItem = (label, action, disabled = false, danger = false) => `<button type="button" role="menuitem" class="docker-plugin-menu-item${danger ? " danger" : ""}" data-action="${action}" data-key="${esc(item.name)}" ${disabled ? "disabled" : ""}>${esc(label)}</button>`;
+      const menu = `<details class="docker-plugin-menu"><summary class="button secondary icon" aria-label="More actions for ${esc(item.name)}" title="More actions">⋯</summary><div class="docker-plugin-menu-panel" role="menu">${menuItem("Edit compose.yaml", "file-compose", locked)}${menuItem("Edit .env", "file-env", locked)}${item.state !== "down" ? menuItem("Down (remove containers)", "project-down", blocked || !item.composeFileExists) : ""}${item.state === "down" ? menuItem("Delete project", "project-delete", blocked, true) : ""}</div></details>`;
+      actions = `<div class="docker-plugin-actions">${lifecycle}${menu}</div>`;
+    }
+    const note = managed ? "" : `<p class="meta docker-plugin-readonly"${item.configPath ? ` title="${esc(item.configPath)}"` : ""}>External project · read only. View logs for its containers.</p>`;
+    return `<article class="rp-card docker-plugin-card"><div class="docker-plugin-card-head"><div class="docker-plugin-card-title"><h3>${esc(item.name)}</h3><span class="status ${item.state === "running" ? "running" : item.state === "degraded" ? "failure" : "idle"}">${esc(item.state || "unknown")}</span></div>${actions}</div>${note}<div class="docker-plugin-container-list">${(item.containers || []).map(c => containerRow(c, managed, ready)).join("") || '<p class="meta">No containers</p>'}</div></article>`;
   }
   function resourceRow(item, kind, ready) {
     const usage = item.inUse ? (item.runningUse ? "In use by running container" : "Used by stopped container") : "Unused";
@@ -76,14 +97,28 @@ export async function activate(runpilot) {
     const deleteButton = button("Delete", `${kind}-delete`, item.name, !!reason, true, reason, "docker-plugin-resource-delete");
     return `<div class="docker-plugin-resource"><div><strong>${esc(item.name)}</strong><small>${esc(item.driver || "")} · ${esc(item.scope || "")} · ${esc(usage)}${(item.usedBy || []).length ? ` · ${esc(item.usedBy.join(", "))}` : ""}</small></div><span class="docker-plugin-resource-action"${reason ? ` title="${esc(reason)}"` : ""}>${deleteButton}</span></div>`;
   }
+  // The create action lives in the application header, like other plugins' add buttons.
+  function renderHeader() {
+    // The host reuses one header slot for every page; only touch it while Docker is shown.
+    if (!headerRoot?.isConnected || !root?.closest?.(".page")?.classList.contains("active")) return;
+    const label = view === "projects" ? "Create project" : view === "volumes" ? "Create volume" : "Create network";
+    let create = headerRoot.querySelector("[data-docker-create]");
+    if (!create) {
+      create = document.createElement("button"); create.type = "button"; create.className = "button primary small"; create.dataset.dockerCreate = "";
+      create.addEventListener("click", () => void action(view === "projects" ? "project-create" : `${view}-create`, "").catch(cause => runpilot.ui.toast(cause.message)));
+      headerRoot.append(create);
+    }
+    create.textContent = label;
+    create.disabled = !snapshot?.runtime?.available;
+  }
   function render() {
+    renderHeader();
     if (!root) return;
     const ready = !!snapshot?.runtime?.available;
     const list = snapshot?.[view] || [];
-    const tabs = [["projects","Projects"],["volumes","Volumes"],["networks","Networks"]].map(([id,title])=>`<button class="button secondary small ${view===id?"active":""}" role="tab" aria-selected="${view===id}" tabindex="${view===id?0:-1}" data-action="view" data-key="${id}">${title}<span class="docker-plugin-count">${snapshot?(snapshot[id]||[]).length:"—"}</span></button>`).join("");
+    const tabs = [["projects","Projects"],["volumes","Volumes"],["networks","Networks"]].map(([id,title])=>`<button class="button secondary small ${view===id?"active":""}" role="tab" aria-selected="${view===id}" tabindex="${view===id?0:-1}" data-action="view" data-key="${id}"><span>${title}</span><span class="docker-plugin-count">${snapshot?(snapshot[id]||[]).length:"—"}</span></button>`).join("");
     const content = view === "projects" ? `<div class="docker-plugin-grid docker-plugin-projects rp-masonry">${list.map(item=>projectCard(item,ready)).join("") || `<div class="empty"><h3>${loading&&!snapshot?"Loading projects…":"No Compose projects"}</h3><p>Create a managed project to define its Compose services.</p></div>`}</div>` : `<div class="rp-card docker-plugin-card docker-plugin-resource-panel">${list.map(item=>resourceRow(item,view,ready)).join("") || `<div class="empty"><h3>No ${view} found</h3><p>Resources appear when they are available from Docker.</p></div>`}</div>`;
-    const create = view === "projects" ? button("Create project","project-create","",!ready,false,"","",true) : button(view === "volumes" ? "Create volume" : "Create network",`${view}-create`,"",!ready,false,"","",true);
-    root.innerHTML = `<div class="docker-plugin">${error?`<div class="notice" role="alert">${esc(error)}</div>`:""}${!ready?`<div class="notice" role="status"><strong>${loading&&!snapshot?"Checking Docker":"Docker unavailable"}</strong>${esc(snapshot?.runtime?.message||(loading?"Connecting to Engine and Compose…":"Docker status has not been checked."))}${snapshot?.runtime?.identity?` Running as ${esc(snapshot.runtime.identity)}.`:""}${snapshot?.runtime?.diagnostic?`<p class="meta docker-plugin-diagnostic">${esc(snapshot.runtime.diagnostic)}</p>`:""}</div>`:""}<div class="docker-plugin-viewbar"><div class="docker-plugin-tabs rp-segmented" role="tablist" aria-label="Docker resources">${tabs}</div>${create}</div><section role="tabpanel" aria-label="${view}">${content}</section></div>`;
+    root.innerHTML = `<div class="docker-plugin">${error?`<div class="notice" role="alert">${esc(error)}</div>`:""}${!ready?`<div class="notice" role="status"><strong>${loading&&!snapshot?"Checking Docker":"Docker unavailable"}</strong>${esc(snapshot?.runtime?.message||(loading?"Connecting to Engine and Compose…":"Docker status has not been checked."))}${snapshot?.runtime?.identity?` Running as ${esc(snapshot.runtime.identity)}.`:""}${snapshot?.runtime?.diagnostic?`<p class="meta docker-plugin-diagnostic">${esc(snapshot.runtime.diagnostic)}</p>`:""}</div>`:""}<div class="docker-plugin-viewbar"><div class="docker-plugin-tabs rp-segmented" role="tablist" aria-label="Docker resources">${tabs}</div></div><section role="tabpanel" aria-label="${view}">${content}</section></div>`;
   }
   const tabsKey = event => {
     const tab = event.target.closest?.('[data-action="view"]');
@@ -118,7 +153,7 @@ export async function activate(runpilot) {
   }
   function create(kind) {
     const label = {project: "Compose project", volumes: "Docker volume", networks: "Docker network"}[kind];
-    dialog(`Create ${label}`, `<label>Name<input name="name" required maxlength="128" autocomplete="off" placeholder="${kind === "project" ? "jellyfin" : "myapp_data"}"></label>`, async form => {
+    dialog(`Create ${label}`, `<label>Name<input name="name" required maxlength="128" autocomplete="off" placeholder="${kind === "project" ? "myapp" : "myapp_data"}"></label>`, async form => {
       const name = form.elements.name.value.trim();
       await rpc(kind === "project" ? "docker.projects.create" : `docker.${kind}.create`, {name});
       runpilot.ui.toast(`${label} created`);
@@ -205,14 +240,15 @@ export async function activate(runpilot) {
     finally { busy.delete(key); await refresh(); }
   }
   const click = event => {
+    for (const menu of root?.querySelectorAll?.("details.docker-plugin-menu[open]") || []) if (!menu.contains(event.target) || event.target.closest?.("[data-action]")) menu.open = false;
     const target = event.target.closest("[data-action]"); if (!target || !root?.contains(target)) return;
     void action(target.dataset.action, target.dataset.key || "").catch(cause => { error = cause.message; runpilot.ui.toast(cause.message); render(); });
   };
-  runpilot.navigation.register({id:"docker",title:"Docker", shortcut:{title:"Open Docker",description:"Containers and Compose",order:20},description:"Manage Compose projects, containers, volumes, and networks.",icon:{src:new URL("./icon.svg",import.meta.url).href},render:page => {root = page;root.removeEventListener("click",click);root.addEventListener("click",click);root.removeEventListener("keydown",tabsKey);root.addEventListener("keydown",tabsKey);render();void refresh();}});
+  runpilot.navigation.register({id:"docker",title:"Docker", description:"Manage Compose projects, containers, volumes, and networks.",icon:{src:new URL("./icon.svg",import.meta.url).href},headerActions:node => {headerRoot = node;renderHeader();},render:page => {root = page;root.removeEventListener("click",click);root.addEventListener("click",click);root.removeEventListener("keydown",tabsKey);root.addEventListener("keydown",tabsKey);render();void refresh();}});
   runpilot.settings.register({id:"docker",render:dockerSettingsForm});
   const refreshTimer = setInterval(() => { if (!document.hidden && root?.isConnected && root.closest(".page")?.classList.contains("active")) void refresh(); }, 30000);
   listeners.push(runpilot.ws.on(PLUGIN,"process.session.output",event => { if (terminal?.id === event?.id) terminal.term.write(dec(event.data)); }));
   listeners.push(runpilot.ws.on(PLUGIN,"process.session.error",event => { if (terminal?.id === event?.id) terminal.term.writeln(`\r\n${event.message || "Terminal I/O error"}`); }));
   listeners.push(runpilot.ws.on(PLUGIN,"process.session.exit",event => { if (terminal?.id === event?.id) {terminal.term.writeln(`\r\n[session ${event.reason || "exited"}]`);terminal.id = "";} }));
-  return () => { clearInterval(refreshTimer);listeners.forEach(off => off());root?.removeEventListener("click",click);root?.removeEventListener("keydown",tabsKey);root = null;settingsForm = null;if (terminal) {const id=terminal.id;terminal.observer?.disconnect();terminal.term.dispose();terminal=null;if(id) void rpc("docker.containers.terminal.close",{id,force:true}).catch(()=>{});}closeModal(); };
+  return () => { clearInterval(refreshTimer);listeners.forEach(off => off());root?.removeEventListener("click",click);root?.removeEventListener("keydown",tabsKey);root = null;headerRoot = null;settingsForm = null;if (terminal) {const id=terminal.id;terminal.observer?.disconnect();terminal.term.dispose();terminal=null;if(id) void rpc("docker.containers.terminal.close",{id,force:true}).catch(()=>{});}closeModal(); };
 }

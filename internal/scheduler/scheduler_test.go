@@ -12,7 +12,7 @@ func TestDailyExpression(t *testing.T) {
 	got, err := Expression(model.ScheduleSpec{
 		Type:      model.ScheduleDaily,
 		TimeOfDay: "03:15",
-		TimeZone:  "Europe/Budapest",
+		TimeZone:  "Europe/Berlin",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +23,7 @@ func TestDailyExpression(t *testing.T) {
 }
 
 func TestPluginRegistrationOwnershipAndRemoval(t *testing.T) {
-	s := New(nil)
+	s := New()
 	defer s.Stop()
 	fired := make(chan PluginSchedule, 1)
 	value := PluginSchedule{Owner: "one", ID: "same", Callback: "tick", Schedule: model.ScheduleSpec{Type: model.ScheduleInterval, IntervalSeconds: 1}}
@@ -65,25 +65,40 @@ func TestIntervalExpression(t *testing.T) {
 	}
 }
 
-// Reloading legacy job definitions (for example after editing a job) must not
-// drop schedules that plugins registered.
-func TestReloadKeepsPluginSchedules(t *testing.T) {
-	s := New(nil)
-	defer s.Stop()
+func TestStopRemovesPluginSchedules(t *testing.T) {
+	s := New()
 	value := PluginSchedule{Owner: "tasks", ID: "one", Callback: "tick", Schedule: model.ScheduleSpec{Type: model.ScheduleInterval, IntervalSeconds: 3600}}
 	if err := s.RegisterPlugin(value, func(PluginSchedule) {}); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 2; i++ {
-		if err := s.Reload(nil); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if len(s.ListPlugin("tasks")) != 1 {
-		t.Fatal("Reload removed a plugin schedule")
-	}
 	s.Stop()
 	if len(s.ListPlugin("tasks")) != 0 {
 		t.Fatal("Stop must remove plugin schedules")
+	}
+}
+
+func TestPluginScheduleReportsNextFireTime(t *testing.T) {
+	s := New()
+	defer s.Stop()
+	fired := make(chan struct{}, 4)
+	before := time.Now()
+	first, err := s.RegisterPluginNext(PluginSchedule{Owner: "one", ID: "tick", Callback: "tick", Schedule: model.ScheduleSpec{Type: model.ScheduleInterval, IntervalSeconds: 1}}, func(PluginSchedule) { fired <- struct{}{} })
+	if err != nil || first.Before(before.Add(time.Second)) || first.After(time.Now().Add(time.Second)) {
+		t.Fatalf("first = %v, %v", first, err)
+	}
+	if list := s.ListPlugin("one"); len(list) != 1 || !list[0].NextRunAt.Equal(first) {
+		t.Fatalf("list = %#v", list)
+	}
+	select {
+	case <-fired:
+	case <-time.After(3 * time.Second):
+		t.Fatal("schedule did not fire")
+	}
+	waitFor := time.Now().Add(time.Second)
+	for time.Now().Before(waitFor) && !s.ListPlugin("one")[0].NextRunAt.After(first) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if next := s.ListPlugin("one")[0].NextRunAt; !next.After(first) {
+		t.Fatalf("next = %v, first = %v", next, first)
 	}
 }

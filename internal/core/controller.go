@@ -12,29 +12,18 @@ import (
 	"time"
 
 	"github.com/szilab/RunPilot/internal/config"
-	"github.com/szilab/RunPilot/internal/dockercompose"
 	"github.com/szilab/RunPilot/internal/history"
-	"github.com/szilab/RunPilot/internal/jobs"
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/platform"
 	"github.com/szilab/RunPilot/internal/plugins"
-	"github.com/szilab/RunPilot/internal/remote"
-	"github.com/szilab/RunPilot/internal/remote/xpra"
 	"github.com/szilab/RunPilot/internal/scheduler"
-	"github.com/szilab/RunPilot/internal/software"
-	"github.com/szilab/RunPilot/internal/storage"
 )
 
 type Controller struct {
 	dataDir              string
 	config               *config.Store
 	history              *history.Store
-	jobs                 *jobs.Runner
 	scheduler            *scheduler.Scheduler
-	software             *software.Manager
-	docker               *dockercompose.Manager
-	storage              *storage.Registry
-	remote               *remote.Service
 	plugins              *plugins.Manager
 	pluginMu             sync.Mutex
 	runtimeMu            sync.RWMutex
@@ -42,6 +31,8 @@ type Controller struct {
 	pluginProcesses      *pluginProcessManager
 	pluginSessions       *pluginSessionManager
 	pluginNetworkStreams *pluginNetworkStreamManager
+	workspaceOperations  *workspaceOperationManager
+	workspaceTransfers   *workspaceTransferManager
 	browserPublications  *browserPublications
 	eventMu              sync.RWMutex
 	eventSubscribers     map[uint64]chan plugins.Event
@@ -83,25 +74,25 @@ func OpenWithConfigDir(dataDir, configDir string) (*Controller, error) {
 	if err != nil {
 		return nil, err
 	}
-	jr := jobs.New(h)
 	c := &Controller{
 		dataDir:          dataDir,
 		config:           cfg,
 		history:          h,
-		jobs:             jr,
-		scheduler:        scheduler.New(jr),
+		scheduler:        scheduler.New(),
 		eventSubscribers: map[uint64]chan plugins.Event{},
 		loading:          map[string]chan struct{}{},
 		eventQueues:      map[string]chan queuedPluginEvent{},
 		stopEvents:       make(chan struct{}),
-		software:         software.NewManager(dataDir),
-		docker:           dockercompose.NewManager(dataDir),
 	}
 	c.pluginProcesses = newPluginProcessManager(func(owner, event string, data any) { c.deliverPluginEvent(owner, event, data) })
 	c.pluginSessions = newPluginSessionManager(c.deliverPluginEvent)
 	c.pluginNetworkStreams = newPluginNetworkStreamManager(func(owner, id string) {
 		c.deliverPluginEvent(owner, "network.stream.closed", map[string]string{"id": id})
 	})
+	c.pluginNetworkStreams.workspaceSocket = c.workspaceSocketHostPath
+	c.workspaceOperations = newWorkspaceOperationManager(c.openWorkspaceRoot, func(owner, event string, data any) { c.deliverPluginEvent(owner, event, data) })
+	c.workspaceTransfers = newWorkspaceTransferManager(c.openWorkspaceRoot)
+
 	c.browserPublications = newBrowserPublications(func(owner, id string) {
 		c.deliverPluginEvent(owner, "http.gateway.closed", map[string]string{"id": id})
 	})
@@ -112,48 +103,17 @@ func OpenWithConfigDir(dataDir, configDir string) (*Controller, error) {
 			c.publishPluginEvent(owner, event, raw)
 		}
 	}
-	if err := migrateLegacyDockerProjects(dataDir); err != nil {
-		log.Printf("legacy Docker project migration: %v", err)
-	}
 	c.plugins = plugins.New(dataDir, func(id string) (bool, bool) {
 		setting, ok := c.config.Snapshot().Plugins[id]
 		return boolValue(setting.Enabled), ok && setting.Enabled != nil
 	})
-	removedSystemFixture, err := plugins.CleanupObsoleteSystemFixture(c.plugins.Root())
-	if err != nil {
-		return nil, err
-	}
-	if removedSystemFixture {
-		if err := c.config.Update(func(cfg *model.Config) error {
-			if setting, ok := cfg.Plugins["system"]; ok && boolValue(setting.Enabled) {
-				disabled := false
-				setting.Enabled = &disabled
-				cfg.Plugins["system"] = setting
-			}
-			return nil
-		}); err != nil {
-			return nil, err
-		}
-		log.Printf("removed obsolete automatically installed System fixture")
-	}
 	for _, pluginErr := range c.plugins.Reload() {
 		log.Printf("plugin discovery: %v", pluginErr)
 	}
-	// Xpra remains the temporary legacy Remote runtime; its user interface has been removed.
-	c.remote = remote.New(dataDir, xpra.New())
 	if err := c.loadPluginRuntimes(); err != nil {
 		return nil, err
 	}
 	c.plugins.FreezeActivation()
-	if platform.CurrentCapabilities().DockerCompose {
-		c.storage = storage.NewRegistry(c.docker)
-	} else {
-		c.storage = storage.NewRegistry(nil)
-	}
-	snap := cfg.Snapshot()
-	if err := c.scheduler.Reload(snap.Jobs); err != nil {
-		return nil, err
-	}
 	return c, nil
 }
 
@@ -171,9 +131,9 @@ func (c *Controller) Close() {
 	c.pluginProcesses.close()
 	c.pluginSessions.close()
 	c.pluginNetworkStreams.close()
+	c.workspaceOperations.close()
 	c.browserPublications.stop("")
 	close(c.stopEvents)
-	c.remote.Close()
 	c.scheduler.Stop()
 	_ = c.history.Close()
 }
@@ -440,12 +400,7 @@ func (c *Controller) SetWebSocketPayloadMode(mode string) error {
 }
 
 func (c *Controller) Overview() model.Overview {
-	jobs := c.JobViews()
-	overview := model.Overview{
-		Host:     platform.HostStatus(),
-		JobCount: len(jobs),
-		Issues:   []model.HealthIssue{},
-	}
+	overview := model.Overview{Host: platform.HostStatus(), Issues: []model.HealthIssue{}}
 	if overview.Host.Error != "" {
 		overview.Issues = append(overview.Issues, model.HealthIssue{
 			Source:  "host",
@@ -453,23 +408,5 @@ func (c *Controller) Overview() model.Overview {
 			Message: overview.Host.Error,
 		})
 	}
-	for _, job := range jobs {
-		if job.Status.Running {
-			overview.RunningJobs++
-		}
-		if job.Status.LastSuccess != nil && !*job.Status.LastSuccess {
-			message := "last run failed"
-			if job.Status.LastExitCode != nil {
-				message = fmt.Sprintf("last exit code: %d", *job.Status.LastExitCode)
-			}
-			overview.Issues = append(overview.Issues, model.HealthIssue{
-				Source:  string(job.Definition.Type),
-				Name:    job.Definition.Name,
-				Message: message,
-			})
-		}
-	}
-	overview.TaskCount = overview.JobCount
-	overview.RunningTasks = overview.RunningJobs
 	return overview
 }

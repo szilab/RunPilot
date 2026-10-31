@@ -141,7 +141,7 @@ func TestRDPHandshakeMapsReturnedArgsAndNegotiatesVersion(t *testing.T) {
 	}
 	installFakeHost(t, host)
 	plugin := newPlugin()
-	targetID := saveRDPTestTarget(t, plugin, json.RawMessage(`{"host":"rdp-target","port":3390,"username":"saved-user","domain":"WORK","securityMode":"nla","serverLayout":"hu-hu-qwertz","resizeMethod":"display-update","certificatePolicy":"ignore","copy":false,"paste":true,"clipboardNormalization":"unix","performanceProfile":"quality","timeoutSeconds":23,"timeZone":"Europe/Budapest"}`))
+	targetID := saveRDPTestTarget(t, plugin, json.RawMessage(`{"host":"rdp-target","port":3390,"username":"saved-user","domain":"WORK","securityMode":"nla","serverLayout":"de-de-qwertz","resizeMethod":"display-update","certificatePolicy":"ignore","copy":false,"paste":true,"clipboardNormalization":"unix","performanceProfile":"quality","timeoutSeconds":23,"timeZone":"Europe/Budapest"}`))
 	request := json.RawMessage(fmt.Sprintf(`{"targetId":%q,"credentials":{"password":"do-not-leak"},"client":{"width":1280,"height":800,"dpi":96,"timeZone":"America/New_York","clientName":"RunPilot","imageMimetypes":["image/png"]}}`, targetID))
 	result, failure := plugin.handle("rdp.session.open", request)
 	if failure != nil {
@@ -162,7 +162,7 @@ func TestRDPHandshakeMapsReturnedArgsAndNegotiatesVersion(t *testing.T) {
 	if !reflect.DeepEqual(gotOpcodes, wantOpcodes) {
 		t.Fatalf("instruction sequence=%v", gotOpcodes)
 	}
-	wantConnect := []string{"VERSION_1_5_0", "do-not-leak", "rdp-target", "hu-hu-qwertz", "nla", "3390", "true", "true", "false", "unix", "display-update", "Europe/Budapest", ""}
+	wantConnect := []string{"VERSION_1_5_0", "do-not-leak", "rdp-target", "de-de-qwertz", "nla", "3390", "true", "true", "false", "unix", "display-update", "Europe/Budapest", ""}
 	if got := host.instructions[len(host.instructions)-1].Args; !reflect.DeepEqual(got, wantConnect) {
 		t.Fatalf("connect args=%q want=%q", got, wantConnect)
 	}

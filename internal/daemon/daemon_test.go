@@ -17,7 +17,7 @@ func TestListenAddrBindAddressOverride(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := listenAddr(tt.bind, 0, tt.port, tt.address)
+			got, err := listenAddr(tt.bind, 9070, tt.port, tt.address)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -25,6 +25,12 @@ func TestListenAddrBindAddressOverride(t *testing.T) {
 				t.Fatalf("listenAddr() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestListenAddrRequiresAPort(t *testing.T) {
+	if _, err := listenAddr("127.0.0.1:9070", 0, 0, ""); err == nil {
+		t.Fatal("a missing port was accepted")
 	}
 }
 

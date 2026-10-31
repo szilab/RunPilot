@@ -2,25 +2,24 @@ package scheduler
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/szilab/RunPilot/internal/jobs"
 	"github.com/szilab/RunPilot/internal/model"
 )
 
+// Scheduler runs plugin timer registrations. Plugins own what a schedule
+// means; the scheduler only compiles the schedule and fires callbacks.
 type Scheduler struct {
 	mu     sync.Mutex
-	cancel chan struct{}
-	wg     sync.WaitGroup
-	runner *jobs.Runner
 	plugin map[string]*pluginSchedule
 }
 
-func New(runner *jobs.Runner) *Scheduler {
-	return &Scheduler{runner: runner, plugin: map[string]*pluginSchedule{}}
+func New() *Scheduler {
+	return &Scheduler{plugin: map[string]*pluginSchedule{}}
 }
 
 // PluginSchedule is a small, data-only registration. IDs are unique within an
@@ -32,33 +31,49 @@ type PluginSchedule struct {
 }
 type pluginSchedule struct {
 	value  PluginSchedule
+	next   time.Time // guarded by Scheduler.mu
 	cancel chan struct{}
 	done   chan struct{}
+}
+
+// PluginScheduleView is a registration with its next fire time.
+type PluginScheduleView struct {
+	PluginSchedule
+	NextRunAt time.Time
 }
 
 // RegisterPlugin reuses the scheduler's existing schedule compiler while
 // keeping callbacks outside its timing loop. The callback must return quickly.
 func (s *Scheduler) RegisterPlugin(value PluginSchedule, fire func(PluginSchedule)) error {
+	_, err := s.RegisterPluginNext(value, fire)
+	return err
+}
+
+// RegisterPluginNext registers like RegisterPlugin and returns the first fire
+// time.
+func (s *Scheduler) RegisterPluginNext(value PluginSchedule, fire func(PluginSchedule)) (time.Time, error) {
 	if strings.TrimSpace(value.Owner) == "" || strings.TrimSpace(value.ID) == "" || strings.TrimSpace(value.Callback) == "" {
-		return fmt.Errorf("plugin schedule owner, id, and callback are required")
+		return time.Time{}, fmt.Errorf("plugin schedule owner, id, and callback are required")
 	}
 	next, err := compile(value.Schedule)
 	if err != nil {
-		return err
+		return time.Time{}, err
 	}
 	key := value.Owner + "\x00" + value.ID
+	first := next(time.Now())
 	s.mu.Lock()
 	if _, exists := s.plugin[key]; exists {
 		s.mu.Unlock()
-		return fmt.Errorf("schedule %q already exists", value.ID)
+		return time.Time{}, fmt.Errorf("schedule %q already exists", value.ID)
 	}
-	item := &pluginSchedule{value: value, cancel: make(chan struct{}), done: make(chan struct{})}
+	item := &pluginSchedule{value: value, next: first, cancel: make(chan struct{}), done: make(chan struct{})}
 	s.plugin[key] = item
 	s.mu.Unlock()
 	go func() {
 		defer close(item.done)
+		at := first
 		for {
-			delay := time.Until(next(time.Now()))
+			delay := time.Until(at)
 			if delay < 0 {
 				delay = time.Second
 			}
@@ -73,11 +88,15 @@ func (s *Scheduler) RegisterPlugin(value PluginSchedule, fire func(PluginSchedul
 				}
 				return
 			case <-timer.C:
+				at = next(time.Now())
+				s.mu.Lock()
+				item.next = at
+				s.mu.Unlock()
 				go fire(value)
 			}
 		}
 	}()
-	return nil
+	return first, nil
 }
 func (s *Scheduler) RemovePlugin(owner, id string) bool {
 	key := owner + "\x00" + id
@@ -107,63 +126,17 @@ func (s *Scheduler) RemovePluginOwner(owner string) {
 		s.RemovePlugin(owner, id)
 	}
 }
-func (s *Scheduler) ListPlugin(owner string) []PluginSchedule {
+func (s *Scheduler) ListPlugin(owner string) []PluginScheduleView {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := []PluginSchedule{}
+	out := []PluginScheduleView{}
 	for _, item := range s.plugin {
 		if item.value.Owner == owner {
-			out = append(out, item.value)
+			out = append(out, PluginScheduleView{PluginSchedule: item.value, NextRunAt: item.next})
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
-}
-
-func (s *Scheduler) Reload(defs []model.JobDefinition) error {
-	compiled := make([]scheduledJob, 0, len(defs))
-	for _, def := range defs {
-		if !def.Enabled {
-			continue
-		}
-		next, err := compile(def.Schedule)
-		if err != nil {
-			return fmt.Errorf("job %q: %w", def.Name, err)
-		}
-		compiled = append(compiled, scheduledJob{def: def, next: next})
-	}
-
-	s.stopJobs()
-
-	cancel := make(chan struct{})
-	s.mu.Lock()
-	s.cancel = cancel
-	for _, item := range compiled {
-		s.wg.Add(1)
-		go s.loop(cancel, item)
-	}
-	s.mu.Unlock()
-	return nil
-}
-
-func (s *Scheduler) loop(cancel <-chan struct{}, item scheduledJob) {
-	defer s.wg.Done()
-	for {
-		next := item.next(time.Now())
-		delay := time.Until(next)
-		if delay < 0 {
-			delay = time.Second
-		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-cancel:
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return
-		case <-timer.C:
-			_, _ = s.runner.Run(item.def)
-		}
-	}
 }
 
 func (s *Scheduler) Stop() {
@@ -176,25 +149,6 @@ func (s *Scheduler) Stop() {
 	for owner := range owners {
 		s.RemovePluginOwner(owner)
 	}
-	s.stopJobs()
-}
-
-// stopJobs stops only the legacy job loops. Reload uses it so reloading job
-// definitions never drops schedules registered by plugins.
-func (s *Scheduler) stopJobs() {
-	s.mu.Lock()
-	cancel := s.cancel
-	s.cancel = nil
-	s.mu.Unlock()
-	if cancel != nil {
-		close(cancel)
-		s.wg.Wait()
-	}
-}
-
-type scheduledJob struct {
-	def  model.JobDefinition
-	next func(time.Time) time.Time
 }
 
 func Expression(spec model.ScheduleSpec) (string, error) {

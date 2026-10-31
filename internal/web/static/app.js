@@ -1,11 +1,6 @@
-try { localStorage.removeItem("runpilot.token"); } catch {}
-try { sessionStorage.removeItem("runpilot.token"); } catch {}
 const $ = (id) => document.getElementById(id);
 let authenticated = false;
 let currentPage = "overview";
-let storage = [], storageLocation = null, storagePath = "";
-let softwareProviders = [], softwareProviderID = "", softwarePackages = [], softwareUpdates = [], softwareSearchResults = [], softwareBuckets = [], softwareTab = "installed", softwareBusy = false, softwareBusyLabel = "", softwareLoading = false, softwareLoadingKey = "", softwareLoadedKey = "", softwareLoadSequence = 0, softwareRootDrafts = {};
-let storageClipboard = null, editingTextPath = null, storageShowHidden = false, storagePathCapabilities = null;
 let overview = null;
 let systemInfo = null;
 let pluginStatuses = [], pluginBusy = new Set();
@@ -167,13 +162,7 @@ function registerPluginNavigation(extension, entry) {
   pluginNavigation.set(entry.id, { ...entry, button, page, extension });
   button.addEventListener("click", () => setPage(entry.id));
 }
-function registerPluginOverview(extension, entry) {
-  if (entry && !entry.mount && typeof entry.render === "function") {
-    const draw = body => { const node = entry.render(); body.replaceChildren(); if (node) body.append(node); };
-    return overviewWidgets.register(extension, {...entry, title:entry.title || entry.id, mount:draw, refresh:draw});
-  }
-  return overviewWidgets.register(extension, entry);
-}
+function registerPluginOverview(extension, entry) { return overviewWidgets.register(extension, entry); }
 function registerPluginSettings(extension, entry) { if(!entry||typeof entry.id!=="string"||!entry.id||typeof entry.render!=="function"||pluginSettings.has(entry.id)) throw new Error("invalid or duplicate settings section"); pluginSettings.set(entry.id,{...entry,extension}); }
 
 function confirmAction({title = "Continue?", message = "", confirmLabel = "Continue", danger = false} = {}) {
@@ -223,8 +212,6 @@ function updatePageHeading() {
   $("pageEyebrow").hidden = currentPage !== "overview";
   $("pageDescription").hidden = currentPage === "overview" || currentPage === "settings";
   $("pageDescription").textContent = currentPage === "overview" || currentPage === "settings" ? "" : entry?.description || "Manage this workspace.";
-  $("overviewClock").hidden = currentPage !== "overview";
-  $("overviewClock").innerHTML = `<span>${escapeHtml(now.toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric",year:"numeric"}))}</span><strong>${escapeHtml(now.toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"}))}</strong>`;
 }
 
 function updateHostSummary(data) {
@@ -344,13 +331,6 @@ function fmtDate(value) {
   return new Date(value).toLocaleString();
 }
 
-function fmtBytes(bytes) {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "—";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes, unit = 0;
-  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
-  return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
-}
 
 function fmtPercent(value) {
   return Number.isFinite(value) ? `${value.toFixed(1)}%` : "—";
@@ -394,7 +374,6 @@ async function refresh() {
     if (frontendSnapshot) await loadPluginExtensions(frontendSnapshot);
     setConnected(true);
   } catch (e) {
-    softwareLoading = false; softwareLoadingKey = "";
     setConnected(!!e.serverReachable);
     if (e.message === "Unauthorized") $("loginDialog").showModal();
     else toast(e.message);
@@ -435,7 +414,7 @@ async function loadPluginExtensions(extensions) {
     const runpilot = Object.freeze({
       ui: pluginUI(),
       navigation: Object.freeze({ register: entry => registerPluginNavigation(extension.id, entry), open: page => setPage(page) }),
-      overview: Object.freeze({ register: entry => registerPluginOverview(extension.id, entry), refresh: () => overviewWidgets.refresh(), render: () => overviewWidgets.refresh() }),
+      overview: Object.freeze({ register: entry => registerPluginOverview(extension.id, entry), refresh: () => overviewWidgets.refresh() }),
       settings: Object.freeze({ register: entry => registerPluginSettings(extension.id, entry), close: () => { const dialog = document.querySelector(".plugin-settings-dialog[open]"); if (dialog?.dataset.pluginId === extension.id) dialog.close(); } }),
       ws: pluginWS,
     });
@@ -555,173 +534,6 @@ function startConnectionMonitor() {
   probeConnection();
 }
 
-async function downloadStorage(id,p){try{const t=await api(`api/v1/storage/${id}/download-ticket`,{method:"POST",body:JSON.stringify({path:p})});window.location.assign(t.url)}catch(e){toast(e.message)}}
-async function deleteStorageObject(id,p,type){if(!confirm(`Delete ${type === "directory" ? "folder and all contents" : "file"}? This cannot be undone through RunPilot.`))return;try{await api(`api/v1/storage/${id}/delete`,{method:"POST",body:JSON.stringify({path:p})});browseStorage(id,storagePath)}catch(e){toast(e.message)}}
-async function renameStorage(id,p){const n=prompt("New name:");if(!n)return;try{await api(`api/v1/storage/${id}/rename`,{method:"POST",body:JSON.stringify({path:p,newName:n})});browseStorage(id,storagePath)}catch(e){toast(e.message)}}
-async function moveStorage(id,p){const d=prompt("Destination folder path (provider-relative):",storagePath);if(d===null)return;try{await api(`api/v1/storage/${id}/move`,{method:"POST",body:JSON.stringify({sourcePath:p,destinationDirectory:d})});browseStorage(id,storagePath)}catch(e){toast(e.message)}}
-async function copyStorage(id,p){const d=prompt("Célmappa útvonala:",storagePath);if(d===null)return;try{await api(`api/v1/storage/${id}/copy`,{method:"POST",body:JSON.stringify({sourcePath:p,destinationDirectory:d})});browseStorage(id,storagePath)}catch(e){toast(e.message)}}
-
-function renderStorage() {
-  const select = $("storageProvider"), previous = storageLocation || select.value;
-  select.replaceChildren();
-  storage.forEach(d => { const option = document.createElement("option"); option.value = d.id; option.textContent = d.name; select.append(option); });
-  const provider = storage[0];
-  $("storageEmpty").classList.toggle("hidden", !!provider);
-  $("storageBrowser").classList.toggle("hidden", !provider);
-  if (provider) { select.value = storage.some(d => d.id === previous) ? previous : provider.id; if (!storageLocation) browseStorage(select.value, ""); }
-}
-function isEditableText(name) { return !/\.[^./\\]+$/.test(name) || /\.(txt|log|yaml|yml|json|ini|cfg|conf|toml|xml|csv|md|bat|cmd|ps1|go|js|html|css|ts|tsx|jsx|py|rb|java|c|h|cpp|cs|rs|sh|sql)$/i.test(name); }
-function button(label, title, action, disabled = false) { const b=document.createElement("button"); b.className="row-icon"+(title==="Letöltés"?" download-icon":""); b.type="button"; b.textContent=label; b.title=title; b.disabled=disabled; b.addEventListener("click", event=>{event.stopPropagation();action()}); return b; }
-function actionSlot(control = null) { if (control) return control; const slot=document.createElement("span");slot.className="row-icon-slot";slot.setAttribute("aria-hidden","true");return slot; }
-function entryIcon(entry) { if (entry.type === "directory" || entry.type === "filesystem-root") return "folder"; const ext=(entry.name.split(".").pop()||"").toLowerCase(); if (["txt","log","yaml","yml","json","ini","cfg","conf","toml","xml","csv","md","go","js","ts","py","sh","sql"].includes(ext)||!/\.[^./\\]+$/.test(entry.name)) return "text"; if(["jpg","jpeg","png","gif","webp","svg"].includes(ext)) return "image"; if(["mp3","wav","flac","ogg"].includes(ext)) return "audio"; if(["mp4","mkv","avi","mov","webm"].includes(ext)) return "video"; return "file"; }
-function renderBreadcrumbs(id, value) { const root=$("storageBreadcrumbs"); root.replaceChildren(); const home=document.createElement("button");home.className="breadcrumb-link";home.textContent="Ez a gép";home.addEventListener("click",()=>browseStorage(id,""));root.append(home); let built=""; for(const segment of value ? value.split("/") : []) { const sep=document.createElement("span");sep.textContent="/";root.append(sep);built=built?`${built}/${segment}`:segment;const link=document.createElement("button");link.className="breadcrumb-link";link.textContent=segment;const target=built;link.addEventListener("click",()=>browseStorage(id,target));root.append(link); } }
-function setStorageEntryLoading(path, loading) { const row=[...document.querySelectorAll(".storage-entry")].find(item=>item.dataset.storagePath===path); if (!row) return; row.setAttribute("aria-busy",String(loading)); row.querySelector(".entry-icon")?.classList.toggle("loading",loading); }
-async function browseStorage(id, p = "", loadingEntry = "") {
-  if (id === "docker-volumes" && loadingEntry) setStorageEntryLoading(loadingEntry, true);
-  try {
-    const provider=storage.find(x=>x.id===id); if (!provider || !["ready","read-only"].includes(provider.state?.status)) { toast(provider?.state?.reason || "Storage provider is unavailable"); return; }
-    const stateNotice=$("storageStateNotice");
-    const listing=await api(`api/v1/storage/${id}/entries?`+new URLSearchParams({path:p,showHidden:storageShowHidden})); storageLocation=id; storagePath=listing.path;
-    const pathState=listing.state||provider.state||{}, readOnly=pathState.status === "read-only";
-    stateNotice.classList.toggle("hidden",!readOnly); stateNotice.innerHTML=readOnly?`<strong>Storage is read-only</strong><span>${escapeHtml(pathState.reason || "This provider is currently read-only.")}</span>`:"";
-    storagePathCapabilities=listing.capabilities||provider.capabilities||{};
-    const toolbarCaps=storagePathCapabilities; $("storageUpload").parentElement.classList.toggle("hidden",!toolbarCaps.upload); $("storageNewFile").classList.toggle("hidden",!toolbarCaps.textEdit); $("storageCreate").classList.toggle("hidden",!toolbarCaps.createDirectory);
-    $("storageProvider").value=id; renderBreadcrumbs(id,listing.path);
-    const root=$("storageEntries");root.replaceChildren(); const header=document.createElement("div");header.className="storage-list-head";header.innerHTML="<span>Name</span><span>Size</span><span>Modified</span><span>Actions</span>";root.append(header);
-    if (listing.parentPath != null) {
-      const parent=document.createElement("article");parent.className="row storage-entry storage-row openable";
-      const head=document.createElement("div");head.className="storage-name";const icon=document.createElement("span");icon.className="entry-icon folder";icon.setAttribute("aria-hidden","true");const title=document.createElement("h3");title.textContent="..";const meta=document.createElement("div");meta.className="meta";meta.textContent="parent folder";head.append(icon,title,meta);
-      const size=document.createElement("div");size.className="storage-cell";size.textContent="—";const modified=document.createElement("div");modified.className="storage-cell";modified.textContent="—";const actions=document.createElement("div");actions.className="row-actions";parent.append(head,size,modified,actions);parent.addEventListener("click",()=>browseStorage(id,listing.parentPath));root.append(parent);
-    }
-    listing.entries.forEach(entry=>{
-      const row=document.createElement("article");row.className="row storage-entry storage-row";row.dataset.storagePath=entry.path;
-      const head=document.createElement("div");head.className="storage-name";const icon=document.createElement("span");icon.className=`entry-icon ${entryIcon(entry)}`;icon.setAttribute("aria-hidden","true");const title=document.createElement("h3");title.textContent=entry.name;head.append(icon);
-      head.append(title);const meta=document.createElement("div");meta.className="meta";meta.textContent=entry.type;head.append(meta);
-      const details=document.createElement("div");details.className="row-details";details.innerHTML=`<div class="kv"><span>Méret</span><span>${fmtBytes(entry.size)}</span></div><div class="kv"><span>Módosítva</span><span>${fmtDate(entry.modifiedAt)}</span></div>`;
-      const actions=document.createElement("div");actions.className="row-actions";
-      const caps=storagePathCapabilities||storage.find(x=>x.id===id)?.capabilities||{}, mutable=entry.type!=="filesystem-root", editable=entry.type==="file" && isEditableText(entry.name) && caps.textEdit;
-      actions.append(actionSlot(entry.type==="file" && caps.download ? button("↓","Letöltés",()=>downloadStorage(id,entry.path)) : null));
-      actions.append(actionSlot(editable ? button("✎","Szerkesztés",()=>openTextEditor(id,entry.path,entry.name)) : null));
-      actions.append(actionSlot(mutable && caps.rename ? button("↺","Átnevezés",()=>renameStorage(id,entry.path)) : null));
-      actions.append(actionSlot(mutable && caps.copy ? button("⧉","Másolás",()=>setStorageClipboard("copy",id,entry)) : null));
-      actions.append(actionSlot(mutable && caps.move ? button("✂","Kivágás",()=>setStorageClipboard("move",id,entry)) : null));
-      actions.append(caps[storageClipboard?.operation] && storageClipboard?.providerId===id ? button("📌","Beillesztés",()=>pasteStorage(id)) : actionSlot());
-      actions.append(actionSlot(mutable && caps.delete ? button("🗑","Törlés",()=>deleteStorageObject(id,entry.path,entry.type)) : null));
-      const size=document.createElement("div");size.className="storage-cell";size.textContent=entry.type==="file"?fmtBytes(entry.size):"—";const modified=document.createElement("div");modified.className="storage-cell";modified.textContent=fmtDate(entry.modifiedAt);row.append(head,size,modified,actions);
-      if(entry.type!=="file") { row.classList.add("openable");row.addEventListener("click",()=>browseStorage(id,entry.path,entry.path)); }
-      else { row.classList.add("openable");row.addEventListener("click",()=>isEditableText(entry.name)?openTextEditor(id,entry.path,entry.name):downloadStorage(id,entry.path)); }
-      root.append(row);
-    });
-  } catch(e) { toast(e.message); }
-  finally { if (id === "docker-volumes" && loadingEntry) setStorageEntryLoading(loadingEntry, false); }
-}
-function setStorageClipboard(operation, providerId, entry) { storageClipboard={providerId,operation,path:entry.path,name:entry.name}; toast(operation==="copy" ? `Másolásra kijelölve: ${entry.name}` : `Áthelyezésre kijelölve: ${entry.name}`); browseStorage(storageLocation,storagePath); }
-async function pasteStorage(id) { if(!storageClipboard||storageClipboard.providerId!==id)return; try { const endpoint=storageClipboard.operation==="copy"?"copy":"move"; await api(`api/v1/storage/${id}/${endpoint}`,{method:"POST",body:JSON.stringify({sourcePath:storageClipboard.path,destinationDirectory:storagePath})}); const message=storageClipboard.operation==="copy"?"Másolva":"Áthelyezve"; if(storageClipboard.operation==="move")storageClipboard=null;toast(message);browseStorage(id,storagePath); }catch(e){toast(e.message)} }
-function syntaxSpan(kind, value) { return `<span class="syntax-${kind}">${escapeHtml(value)}</span>`; }
-function highlightText(content, name) {
-  const ext=(name.split(".").pop()||"").toLowerCase(), yaml=["yaml","yml"].includes(ext), env=ext==="env"; const structured=["json","yaml","yml","toml","ini","xml","html","css"].includes(ext);
-  return content.split("\n").map(line=>{
-    if (/^\s*(#|\/\/)/.test(line)) return syntaxSpan("comment",line);
-    const chunks=line.split(/("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g);
-    return chunks.map((part,index)=>{
-      if (index%2) return syntaxSpan("string",part);
-      let safe=escapeHtml(part);
-      if (structured) safe=safe.replace(/\b(true|false|null|yes|no)\b/gi,'<span class="syntax-keyword">$1</span>').replace(/\b(-?\d+(?:\.\d+)?)\b/g,'<span class="syntax-number">$1</span>');
-      else safe=safe.replace(/\b(func|function|return|if|else|for|while|package|import|const|var|let|class|public|private|def|true|false|null|nil)\b/g,'<span class="syntax-keyword">$1</span>');
-      if (yaml) safe=safe.replace(/^(\s*(?:-\s+)?)([A-Za-z0-9_.-]+)(\s*:)/,'$1<span class="syntax-key">$2</span>$3');
-      if (env) safe=safe.replace(/^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_]*)(=)/,'$1<span class="syntax-key">$2</span>$3');
-      return safe;
-    }).join("");
-  }).join("\n")+"\n";
-}
-function updateTextHighlight() { const code=$("textHighlight").querySelector("code"); code.innerHTML=highlightText($("textEditorContent").value,editingTextPath?.path||""); }
-async function openTextEditor(id,path,name) { try { const data=await api(`api/v1/storage/${id}/text?`+new URLSearchParams({path})); editingTextPath={id,path};const canEdit=!!(storagePathCapabilities||storage.find(x=>x.id===id)?.capabilities||{}).textEdit;$("textEditorTitle").textContent=`${canEdit ? "Edit" : "View"}: ${name}`;$("textEditorPath").textContent=path;$("textEditorContent").value=data.content;$("textEditorContent").readOnly=!canEdit;$("saveTextEditor").disabled=!canEdit;updateTextHighlight();$("textEditorDialog").showModal(); }catch(e){toast(e.message)} }
-function openNewTextFile() { if (!storageLocation || !(storagePathCapabilities||{}).textEdit) return; const name=prompt("File name:"); if (!name) return; if (name === "." || name === ".." || /[\\/]/.test(name)) { toast("File name must be a single name."); return; } const path=storagePath ? `${storagePath}/${name}` : name; editingTextPath={id:storageLocation,path};$("textEditorTitle").textContent=`New file: ${name}`;$("textEditorPath").textContent=path;$("textEditorContent").value="";$("textEditorContent").readOnly=false;$("saveTextEditor").disabled=false;updateTextHighlight();$("textEditorDialog").showModal(); }
-async function saveTextEditor() { if(!editingTextPath)return;try{await api(`api/v1/storage/${editingTextPath.id}/text`,{method:"PUT",body:JSON.stringify({path:editingTextPath.path,content:$("textEditorContent").value})});$("textEditorDialog").close();toast("Fájl mentve");browseStorage(storageLocation,storagePath)}catch(e){toast(e.message)} }
-
-function activeSoftwareProvider() { return softwareProviders.find(provider => provider.id === softwareProviderID) || softwareProviders[0]; }
-function softwarePackageFacts(pkg) {
-  const facts = [{label: pkg.installed ? "Installed" : "Version", value: pkg.version || "—"}];
-  if (pkg.availableVersion) facts.push({label: "Latest", value: pkg.availableVersion});
-  if (pkg.bucket) facts.push({label: "Source", value: pkg.bucket});
-  return facts.map(fact => `<div><span>${escapeHtml(fact.label)}</span><strong>${escapeHtml(fact.value)}</strong></div>`).join("");
-}
-function renderSoftware() {
-  const provider = activeSoftwareProvider();
-  const card = $("softwareProviderCard"), packages = $("softwarePackages"), picker = $("softwareProviderSelect");
-  picker.replaceChildren();
-  softwareProviders.forEach(item => { const option = document.createElement("option"); option.value = item.id; option.textContent = `${item.name} (${item.type})`; picker.append(option); });
-  if (!provider) {
-    picker.parentElement.classList.add("hidden");
-    $("softwareTabs").classList.add("hidden");
-    $("softwareSearchBar").classList.add("hidden");
-    $("softwareBucketBar").classList.add("hidden");
-    card.innerHTML = `<div class="empty compact"><h2>No software providers available</h2><p>No supported software providers are configured for this operating system.</p></div>`;
-    packages.replaceChildren();
-    return;
-  }
-  picker.parentElement.classList.remove("hidden");
-  picker.value = provider.id;
-  const state = provider.state || "unavailable";
-  const message = provider.message || "Preparing the managed Scoop runtime.";
-  const hasRootDraft = Object.prototype.hasOwnProperty.call(softwareRootDrafts, provider.id);
-  const rootValue = hasRootDraft ? softwareRootDrafts[provider.id] : provider.usingDefaultRoot ? "" : provider.root || "";
-  card.innerHTML = `<article class="software-provider-summary">
-    <div class="software-provider-identity"><div class="software-provider-title"><h2>${escapeHtml(provider.name)}</h2>${statusBadge(state)}</div></div>
-    <label class="software-root-editor"><span>Root</span><input id="softwareRoot" value="${escapeHtml(rootValue)}" placeholder="${escapeHtml(provider.root || "Managed Scoop root")}" ${softwareBusy ? "disabled" : ""}><small>Leave empty to use the RunPilot data-directory default. Changing roots does not move or delete applications.</small></label>
-    <div class="row-actions software-provider-actions"><button class="button secondary small" onclick="saveSoftwareRoot()" ${softwareBusy ? "disabled" : ""}>Save root</button><button class="button secondary small" onclick="softwareRefresh()" ${softwareBusy ? "disabled" : ""}>${state === "ready" ? "Refresh" : "Retry"}</button></div>
-  </article>`;
-  $("softwareTabs").classList.toggle("hidden", state !== "ready");
-  $("softwareUpgradeAll").classList.toggle("hidden", softwareTab !== "updates" || !softwareUpdates.length);
-  $("softwareUpgradeAll").disabled = softwareBusy;
-  $("softwareSearchBar").classList.toggle("hidden", state !== "ready" || softwareTab !== "search");
-  $("softwareBucketBar").classList.toggle("hidden", state !== "ready" || softwareTab !== "buckets");
-  $("softwareAddBucket").disabled = softwareBusy || state !== "ready";
-  $("softwareAddBucket").textContent = softwareBusy && softwareTab === "buckets" ? "Working…" : "Add bucket";
-  document.querySelectorAll("[data-software-tab]").forEach(b => b.classList.toggle("active", b.dataset.softwareTab === softwareTab));
-  if (state !== "ready") { packages.innerHTML = `<div class="empty compact"><h2>${state === "initializing" ? "Preparing RunPilot Software Management…" : "Software unavailable"}</h2><p>${escapeHtml(message)}</p></div>`; return; }
-  if (softwareLoading) { packages.innerHTML = `<div class="software-loading" role="status"><span class="spinner" aria-hidden="true"></span><strong>Loading ${softwareTab === "buckets" ? "buckets" : "applications"}…</strong><span>Querying the selected provider.</span></div>`; return; }
-  if (softwareTab === "buckets" && softwareBusy) { packages.innerHTML = `<div class="software-loading" role="status"><span class="spinner" aria-hidden="true"></span><strong>${escapeHtml(softwareBusyLabel || "Updating buckets")}…</strong><span>Waiting for Scoop to finish the bucket operation.</span></div>`; return; }
-  if (softwareTab === "buckets") {
-    packages.innerHTML = softwareBuckets.length ? softwareBuckets.map(bucket => `<article class="software-bucket-row"><div><h3>${escapeHtml(bucket.name)}</h3><div class="meta">${escapeHtml(bucket.source || "Scoop default source")}</div></div><div class="row-actions">${bucket.protected ? `<span class="software-protected" title="This bucket is required by Scoop">Required by Scoop</span>` : `<button class="button danger small" onclick="softwareRemoveBucket('${escapeHtml(bucket.name)}')" ${softwareBusy ? "disabled" : ""}>Remove</button>`}</div></article>`).join("") : `<div class="empty compact"><h2>No additional buckets</h2><p>Add a trusted Scoop bucket to make its applications available for search.</p></div>`;
-    return;
-  }
-  const items = softwareTab === "updates" ? softwareUpdates : softwareTab === "search" ? softwareSearchResults : softwarePackages;
-  packages.innerHTML = items.length ? items.map(p => `<article class="software-package-row"><div class="software-package-name"><h3>${escapeHtml(p.name)}</h3><div class="meta">${escapeHtml(p.description || p.bucket || "Scoop main bucket")}</div></div>${p.updateAvailable ? statusBadge("update") : p.installed ? statusBadge("installed") : ""}<div class="software-package-meta">${softwarePackageFacts(p)}</div><div class="row-actions">${p.protected ? `${p.installed && p.updateAvailable ? `<button class="button software-protected-action small" disabled>Upgrade</button>` : ""}<button class="button software-protected-action small" disabled>${p.installed ? "Uninstall" : "Install"}</button>` : p.installed ? `${p.updateAvailable ? `<button class="button primary small" onclick="softwareUpgrade('${escapeHtml(p.id)}')" ${softwareBusy ? "disabled" : ""}>Upgrade</button>` : ""}<button class="button danger small" onclick="softwareUninstall('${escapeHtml(p.id)}')" ${softwareBusy ? "disabled" : ""}>Uninstall</button>` : `<button class="button primary small" onclick="softwareInstall('${escapeHtml(p.id)}')" ${softwareBusy ? "disabled" : ""}>Install</button>`}</div></article>`).join("") : `<div class="empty compact"><h2>${softwareTab === "search" ? "Search the managed buckets" : softwareTab === "updates" ? "No updates found" : "No RunPilot-managed applications"}</h2><p>${softwareTab === "installed" ? "Applications installed in another Scoop root are deliberately not shown here." : ""}</p></div>`;
-}
-function changeSoftwareProvider(id) { if (id === softwareProviderID) return; softwareProviderID = id; softwarePackages = []; softwareUpdates = []; softwareSearchResults = []; softwareBuckets = []; softwareLoadedKey = ""; softwareLoadSequence++; softwareLoading = true; renderSoftware(); refresh(); }
-async function softwareAction(path, options = {}, busyLabel = "") { softwareBusy = true; softwareBusyLabel = busyLabel; renderSoftware(); let completed = false; try { await api(path, options); completed = true; softwareLoadedKey = ""; toast("Software operation completed"); await refresh(); } catch (e) { toast(e.message); await refresh(); } finally { softwareBusy = false; softwareBusyLabel = ""; renderSoftware(); } return completed; }
-function softwareInstall(id) { const p=activeSoftwareProvider(); if(p) softwareAction(`api/v1/software/providers/${p.id}/install`, {method:"POST", body:JSON.stringify({package:id})}); }
-function softwareUpgrade(id) { const p=activeSoftwareProvider(); if(p) softwareAction(`api/v1/software/providers/${p.id}/packages/${encodeURIComponent(id)}/upgrade`, {method:"POST"}); }
-function softwareUninstall(id) { const p=activeSoftwareProvider(); if(p && confirm(`Uninstall ${id} from the RunPilot-managed Scoop root?`)) softwareAction(`api/v1/software/providers/${p.id}/packages/${encodeURIComponent(id)}/uninstall`, {method:"POST"}); }
-function softwareRefresh() { const p=activeSoftwareProvider(); if(p) softwareAction(`api/v1/software/providers/${p.id}/refresh`, {method:"POST"}); }
-function softwareUpgradeAll() { const p=activeSoftwareProvider(); if(p && confirm("Upgrade all RunPilot-managed Scoop applications?")) softwareAction(`api/v1/software/providers/${p.id}/upgrade-all`, {method:"POST"}); }
-function saveSoftwareRoot() { const p=activeSoftwareProvider(); if(!p)return; const root = $("softwareRoot").value.trim(); softwareRootDrafts[p.id] = root; softwareAction(`api/v1/software/providers/${p.id}`, {method:"PUT",body:JSON.stringify({scoop:{root}})}); }
-function softwareAddBucket() { const p = activeSoftwareProvider(), name = $("softwareBucketName").value.trim(), source = $("softwareBucketSource").value.trim(); if (!p || !name) { toast("A bucket name is required."); return; } softwareAction(`api/v1/software/providers/${p.id}/buckets`, {method:"POST", body:JSON.stringify({name, source})}, "Adding bucket").then(completed => { if (completed) { $("softwareBucketName").value = ""; $("softwareBucketSource").value = ""; } }); }
-function softwareRemoveBucket(name) { const p = activeSoftwareProvider(); if (p && confirm(`Remove Scoop bucket ${name}?`)) softwareAction(`api/v1/software/providers/${p.id}/buckets/${encodeURIComponent(name)}`, {method:"DELETE"}, "Removing bucket"); }
-function softwareViewKey() { const p = activeSoftwareProvider(); if (!p || p.state !== "ready") return ""; const query = softwareTab === "search" ? $("softwareSearchInput").value.trim() : ""; return `${p.id}|${softwareTab}|${query}`; }
-async function loadSoftwareView(force = false) {
-  const p = activeSoftwareProvider(), query = $("softwareSearchInput").value.trim();
-  if (!p || p.state !== "ready") return;
-  if (softwareTab === "search" && !query) { softwareSearchResults = []; softwareLoading = false; renderSoftware(); return; }
-  const key = softwareViewKey();
-  if (!force && key === softwareLoadedKey) return;
-  if (!force && softwareLoading && key === softwareLoadingKey) return;
-  const sequence = ++softwareLoadSequence;
-  softwareLoading = true; softwareLoadingKey = key; renderSoftware();
-  try {
-    const result = softwareTab === "installed" ? await api(`api/v1/software/providers/${p.id}/installed`) : softwareTab === "updates" ? await api(`api/v1/software/providers/${p.id}/updates`) : softwareTab === "buckets" ? await api(`api/v1/software/providers/${p.id}/buckets`) : await api(`api/v1/software/providers/${p.id}/search?` + new URLSearchParams({q:query}));
-    if (sequence !== softwareLoadSequence) return;
-    const items = Array.isArray(result) ? result : [];
-    if (softwareTab === "installed") softwarePackages = items;
-    else if (softwareTab === "updates") softwareUpdates = items;
-    else if (softwareTab === "buckets") softwareBuckets = items;
-    else softwareSearchResults = items;
-    softwareLoadedKey = key;
-  } catch (e) { if (sequence === softwareLoadSequence) toast(e.message); }
-  finally { if (sequence === softwareLoadSequence) { softwareLoading = false; softwareLoadingKey = ""; renderSoftware(); } }
-}
-function softwareSearch() { loadSoftwareView(true); }
 
 function renderProxyAuth(state) {
   state = state || {};
@@ -794,22 +606,7 @@ $("accountSettingsDialog").addEventListener("close", () => {
   document.querySelector(".account-menu > summary").focus();
 });
 
-document.querySelectorAll("[data-software-tab]").forEach(button => button.addEventListener("click", () => { softwareTab = button.dataset.softwareTab; renderSoftware(); loadSoftwareView(); }));
-$("softwareSearchButton").addEventListener("click", softwareSearch);
-$("softwareUpgradeAll").addEventListener("click", softwareUpgradeAll);
-$("softwareAddBucket").addEventListener("click", softwareAddBucket);
-$("softwareProviderSelect").addEventListener("change", event => changeSoftwareProvider(event.target.value));
-$("softwareSearchInput").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareSearch(); } });
-$("softwareBucketSource").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); softwareAddBucket(); } });
 document.querySelectorAll("[data-dismiss]").forEach(button => button.addEventListener("click", () => $(button.dataset.dismiss)?.close()));
-$("storageCreate").addEventListener("click",async()=>{if(!storageLocation)return;const name=prompt("Folder name:");if(!name)return;try{await api(`api/v1/storage/${storageLocation}/directories`,{method:"POST",body:JSON.stringify({parentPath:storagePath,name})});browseStorage(storageLocation,storagePath)}catch(e){toast(e.message)}});
-$("storageNewFile").addEventListener("click",openNewTextFile);
-$("storageUpload").addEventListener("change",async e=>{if(!storageLocation||!e.target.files.length)return;const form=new FormData();form.append("path",storagePath);for(const f of e.target.files)form.append("files",f);try{await api(`api/v1/storage/${storageLocation}/upload`,{method:"POST",body:form});browseStorage(storageLocation,storagePath)}catch(err){toast(err.message)}finally{e.target.value=""}});
-$("storageProvider").addEventListener("change",e=>browseStorage(e.target.value,""));
-$("storageShowHidden").addEventListener("change",e=>{storageShowHidden=e.target.checked;browseStorage(storageLocation,storagePath)});
-$("saveTextEditor").addEventListener("click",saveTextEditor);$("closeTextEditor").addEventListener("click",()=>$("textEditorDialog").close());$("cancelTextEditor").addEventListener("click",()=>$("textEditorDialog").close());
-$("textEditorContent").addEventListener("input",updateTextHighlight);
-$("textEditorContent").addEventListener("scroll",e=>{ $("textHighlight").scrollTop=e.target.scrollTop; $("textHighlight").scrollLeft=e.target.scrollLeft; });
 
 $("loginDialog").addEventListener("cancel", event => event.preventDefault());
 $("loginForm").addEventListener("submit", async e => {

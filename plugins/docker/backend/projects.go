@@ -334,23 +334,6 @@ func (p *plugin) projectAction(name, action string) (any, *rpcError) {
 	p.busy[name] = true
 	defer delete(p.busy, name)
 	args := []string{"compose", "--project-name", name}
-	if dirs, e := p.projectDirectories(name); e != nil {
-		return nil, e
-	} else if len(dirs) > 1 {
-		// Keep relative bind mounts and other project-relative paths at their
-		// original location, while the editable Compose file stays in workspace.
-		args = append(args, "--project-directory", dirs[1])
-		if entries, e := p.listDir(p.projectWorkspacePath(name)); e != nil {
-			return nil, e
-		} else {
-			for _, entry := range entries {
-				if entry.Name == ".env" && !entry.Directory && !entry.Symlink {
-					args = append(args, "--env-file", filepath.Join(dirs[0], ".env"))
-					break
-				}
-			}
-		}
-	}
 	args = append(args, "-f", file, action)
 	if action == "up" {
 		args = append(args, "-d")
@@ -411,16 +394,7 @@ func (p *plugin) projectDirectories(name string) ([]string, *rpcError) {
 	if !filepath.IsAbs(dir) {
 		return nil, fail("invalid_data", "invalid managed project directory")
 	}
-	dirs := []string{filepath.Clean(dir)}
-	if origin, e := p.readFile(p.projectWorkspacePath(name, ".runpilot-legacy-origin")); e == nil {
-		origin = strings.TrimSpace(origin)
-		if filepath.IsAbs(origin) {
-			dirs = append(dirs, filepath.Clean(origin))
-		}
-	} else if e.Code != "not_found" {
-		return nil, e
-	}
-	return dirs, nil
+	return []string{filepath.Clean(dir)}, nil
 }
 func (p *plugin) checkProjectOwnership(name string) *rpcError {
 	paths, e := p.activeProjectPaths(name)

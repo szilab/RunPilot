@@ -8,6 +8,8 @@ const INTERPRETERS = [
 ];
 const OUTPUT_BYTES = 128 * 1024;
 const UNIT_SECONDS = { seconds: 1, minutes: 60, hours: 3600 };
+const HISTORY_LIMIT = 100; // history.list maximum
+const HISTORY_PAGE_SIZE = 10;
 
 // ---- pure helpers (exported for tests) ---------------------------------
 
@@ -103,7 +105,7 @@ export function activate(runpilot) {
   const { ui } = runpilot;
   const esc = ui.escape;
   const state = { tasks: [], loadError: "", error: "", filter: "all", loaded: false, busy: new Set() };
-  let page = null;
+  let page = null, headerRoot = null;
   const wired = new WeakSet();
 
   // Plugin-level failures arrive as {error:{code,message}} results.
@@ -179,15 +181,21 @@ export function activate(runpilot) {
     </article>`;
   }
 
+  // The add action sits in the application header, like the other plugins.
+  function renderHeader() {
+    if (!headerRoot || (page?.closest && !page.closest(".page")?.classList.contains("active"))) return;
+    headerRoot.innerHTML = `<button class="button primary small" type="button" data-action="add" ${state.loadError ? "disabled" : ""}>Add task</button>`;
+    headerRoot.querySelector?.("[data-action='add']")?.addEventListener("click", () => openEditor(null, "scheduled"));
+  }
+
   function render() {
     if (!page || !page.isConnected) return;
     const visible = state.tasks.filter(view => state.filter === "all" || view.task.type === state.filter);
     const filters = [["all", "All"], ["continuous", "Continuous"], ["scheduled", "Scheduled"]]
       .map(([key, label]) => `<button class="button secondary small ${state.filter === key ? "active" : ""}" aria-pressed="${state.filter === key}" data-action="filter" data-filter="${key}">${label}</button>`).join("");
-    const readOnly = !!state.loadError;
+    renderHeader();
     page.innerHTML = `<div class="tasks-plugin">
-      <div class="section-head tasks-plugin-toolbar"><div class="task-filters rp-segmented" role="group" aria-label="Task type">${filters}</div>
-        <div class="row-actions"><button class="button primary small" data-action="add" data-type="continuous" ${readOnly ? "disabled" : ""}>Add continuous</button><button class="button primary small" data-action="add" data-type="scheduled" ${readOnly ? "disabled" : ""}>Add scheduled</button></div></div>
+      <div class="section-head tasks-plugin-toolbar"><div class="task-filters rp-segmented" role="group" aria-label="Task type">${filters}</div></div>
       ${state.loadError ? `<div class="notice" role="alert"><strong>Task configuration is unavailable</strong><span>${esc(state.loadError)}</span><span>The stored configuration was left untouched. Repair or remove plugins/${PLUGIN}/data/storage.json and restart RunPilot.</span></div>` : ""}
       ${state.error ? `<div class="notice" role="alert"><span>${esc(state.error)}</span></div>` : ""}
       ${visible.length ? `<div class="task-grid">${visible.map(row).join("")}</div>` : ""}
@@ -235,9 +243,8 @@ export function activate(runpilot) {
   async function onPageClick(event) {
     const button = event.target.closest("[data-action]");
     if (!button || button.disabled) return;
-    const { action, id, filter, type } = button.dataset;
+    const { action, id, filter } = button.dataset;
     if (action === "filter") { state.filter = filter; render(); }
-    else if (action === "add") openEditor(null, type);
     else if (action === "edit") openEditor(findTask(id));
     else if (action === "history") openHistory(findTask(id));
     else if (action === "delete") {
@@ -264,7 +271,10 @@ export function activate(runpilot) {
       else if (target.dataset.editor === "add-env") addEnvRow();
       else if (target.dataset.editor === "remove-env") target.closest(".environment-row").remove();
     });
-    editor.addEventListener("change", event => { if (event.target.name === "scheduleType") syncSchedule(); });
+    editor.addEventListener("change", event => {
+      if (event.target.name === "scheduleType") syncSchedule();
+      if (event.target.name === "type") syncType();
+    });
     editor.addEventListener("submit", async event => {
       event.preventDefault();
       const error = editor.querySelector("[data-editor-error]");
@@ -292,18 +302,34 @@ export function activate(runpilot) {
     editor.querySelector("[data-env-rows]").append(envRow);
   }
 
+  const selectedType = () => editor.querySelector('input[name="type"]:checked')?.value || field("type")?.value;
+
   function syncSchedule() {
     const type = field("scheduleType")?.value;
     for (const key of ["interval", "daily", "cron"]) {
-      editor.querySelector(`[data-schedule="${key}"]`)?.classList.toggle("hidden", type !== key);
+      const node = editor.querySelector(`[data-schedule="${key}"]`);
+      if (!node) continue;
+      node.classList.toggle("hidden", type !== key);
+      node.querySelectorAll("input,select").forEach(input => { input.disabled = type !== key; });
     }
+  }
+
+  // Only the chosen task type's fields are shown and validated.
+  function syncType() {
+    const type = selectedType();
+    for (const section of editor.querySelectorAll("[data-type-section]")) {
+      const hidden = section.dataset.typeSection !== type;
+      section.classList.toggle("hidden", hidden);
+      section.disabled = hidden;
+    }
+    syncSchedule();
   }
 
   function readForm() {
     const value = name => field(name)?.value ?? "";
     const checked = name => !!field(name)?.checked;
     return {
-      id: value("id"), type: value("type"), name: value("name"), description: value("description"),
+      id: value("id"), type: selectedType(), name: value("name"), description: value("description"),
       interpreter: value("interpreter"), path: value("path"), args: value("args"), cwd: value("cwd"),
       env: [...editor.querySelectorAll(".environment-row")].map(r => [r.querySelector(".environment-name").value, r.querySelector(".environment-value").value]),
       autostart: checked("autostart"), restartMode: value("restartMode"), restartInitial: value("restartInitial"),
@@ -314,6 +340,8 @@ export function activate(runpilot) {
     };
   }
 
+  // The dialog asks for a name, a command and when it runs; everything else
+  // keeps a sensible default under Advanced settings.
   function openEditor(view, addType) {
     const dialog = ensureEditor();
     const task = view?.task;
@@ -322,39 +350,46 @@ export function activate(runpilot) {
     const [amount, unit] = splitInterval(task?.schedule?.intervalSeconds || 1200);
     const schedule = task?.schedule || { type: "interval" };
     const restart = task?.restart || { mode: "on-failure", initialDelaySeconds: 2, maxDelaySeconds: 60, maxRetries: 0 };
-    const continuousFields = `
-      <label class="check span-2"><input name="autostart" type="checkbox" ${task?.autostart ? "checked" : ""}> Start automatically with RunPilot</label>`;
-    const continuousAdvancedFields = `
-      <label>Restart policy<select name="restartMode">${optionList([["on-failure", "On failure"], ["always", "Always"], ["never", "Never"]], restart.mode)}</select></label>
-      <label>Initial restart delay (s)<input name="restartInitial" type="number" min="1" value="${esc(restart.initialDelaySeconds)}"></label>
-      <label>Maximum restart delay (s)<input name="restartMax" type="number" min="1" value="${esc(restart.maxDelaySeconds)}"></label>
-      <label>Maximum retries (0 = unlimited)<input name="restartRetries" type="number" min="0" value="${esc(restart.maxRetries)}"></label>`;
-    const scheduledFields = `
-      <label>Schedule<select name="scheduleType">${optionList([["interval", "Interval"], ["daily", "Daily"], ["cron", "Cron"]], schedule.type)}</select></label>
-      <label data-schedule="interval">Every<span class="tasks-plugin-inline"><input name="intervalValue" type="number" min="1" value="${esc(amount)}"><select name="intervalUnit" aria-label="Interval unit">${optionList([["seconds", "seconds"], ["minutes", "minutes"], ["hours", "hours"]], unit)}</select></span></label>
-      <label data-schedule="daily" class="hidden">Time<input name="time" type="time" value="${esc(schedule.timeOfDay || "03:00")}"></label>
-      <label data-schedule="cron" class="hidden">Cron (5 or 6 fields)<input name="cron" placeholder="0 */20 * * * *" value="${esc(schedule.cron || "")}"></label>
-      <label class="check span-2"><input name="enabled" type="checkbox" ${!task || task.enabled ? "checked" : ""}> Schedule enabled</label>`;
-    const scheduledAdvancedFields = `
-      <label>Time zone (optional)<input name="timeZone" placeholder="Europe/Budapest" value="${esc(schedule.timeZone || "")}"></label>
-      <label>If still running<select name="overlap">${optionList([["skip", "Skip the new run"], ["allow", "Run in parallel"]], task?.overlapPolicy || "skip")}</select></label>
-      <label>Timeout (s, 0 = none)<input name="timeout" type="number" min="0" value="${esc(task?.timeoutSeconds || 0)}"></label>`;
+    const advancedInUse = !!(command.args?.length || command.workingDirectory || Object.keys(command.environment || {}).length || task?.description);
+    const typeChoice = task
+      ? `<input type="hidden" name="type" value="${esc(type)}">`
+      : `<div class="span-2 tasks-plugin-type"><span>Runs</span><div class="rp-segmented" role="radiogroup" aria-label="When the task runs">${[["scheduled", "On a schedule"], ["continuous", "Continuously"]].map(([value, label]) => `<label class="button secondary small"><input type="radio" name="type" value="${value}" ${value === type ? "checked" : ""}>${label}</label>`).join("")}</div></div>`;
     dialog.innerHTML = `<form method="dialog">
-      <div class="dialog-head"><div><h2>${task ? "Edit" : "Add"} ${type === "continuous" ? "continuous" : "scheduled"} task</h2><p>${type === "continuous" ? "Run continuously and supervise its lifecycle." : "Run a command according to a schedule."}</p></div><button class="icon-btn" type="button" data-editor="close" aria-label="Close">×</button></div>
-      <input type="hidden" name="id" value="${esc(task?.id || "")}"><input type="hidden" name="type" value="${esc(type)}">
+      <div class="dialog-head"><div><h2>${task ? `Edit ${type === "continuous" ? "continuous" : "scheduled"} task` : "Add task"}</h2></div><button class="icon-btn" type="button" data-editor="close" aria-label="Close">×</button></div>
+      <input type="hidden" name="id" value="${esc(task?.id || "")}">
       <div class="form-grid">
         <label class="span-2">Name<input name="name" required maxlength="200" value="${esc(task?.name || "")}"></label>
-        <label class="span-2">Executable, script, or inline command<input name="path" required placeholder="/opt/runpilot/myapp, C:\\Tools\\task.ps1, or ls -la /" value="${esc(command.path || "")}"></label>
-        <label class="span-2">Arguments<input name="args" placeholder="--port 8080 --mode service" value="${esc(formatArgs(command.args))}"></label>
-        ${type === "continuous" ? continuousFields : scheduledFields}
-        <details class="rp-disclosure tasks-plugin-advanced span-2">
-          <summary>Advanced parameters</summary>
+        <label class="span-2">Command<input name="path" required placeholder="/opt/tools/backup.sh or ls -la /" value="${esc(command.path || "")}"></label>
+        ${typeChoice}
+        <fieldset class="form-grid span-2 tasks-plugin-section" data-type-section="scheduled">
+          <label>Repeat<select name="scheduleType">${optionList([["interval", "Every…"], ["daily", "Daily at…"], ["cron", "Cron expression"]], schedule.type)}</select></label>
+          <span data-schedule="interval" class="tasks-plugin-inline tasks-plugin-schedule-value"><input name="intervalValue" type="number" min="1" aria-label="Interval" value="${esc(amount)}"><select name="intervalUnit" aria-label="Interval unit">${optionList([["seconds", "seconds"], ["minutes", "minutes"], ["hours", "hours"]], unit)}</select></span>
+          <span data-schedule="daily" class="hidden tasks-plugin-schedule-value"><input name="time" type="time" aria-label="Time of day" value="${esc(schedule.timeOfDay || "03:00")}"></span>
+          <span data-schedule="cron" class="hidden tasks-plugin-schedule-value"><input name="cron" aria-label="Cron expression (5 or 6 fields)" placeholder="0 */20 * * * *" value="${esc(schedule.cron || "")}"></span>
+        </fieldset>
+        <fieldset class="form-grid span-2 tasks-plugin-section" data-type-section="continuous">
+          <label class="check span-2"><input name="autostart" type="checkbox" ${task?.autostart ? "checked" : ""}> Start automatically with RunPilot</label>
+        </fieldset>
+        <details class="rp-disclosure tasks-plugin-advanced span-2" ${advancedInUse ? "open" : ""}>
+          <summary>Advanced settings</summary>
           <div class="form-grid tasks-plugin-advanced-fields">
-            <label class="span-2">Description<input name="description" maxlength="2000" placeholder="Optional" value="${esc(task?.description || "")}"></label>
-            <label>Interpreter<select name="interpreter">${optionList(INTERPRETERS, command.interpreter || "auto")}</select></label>
+            <label class="span-2">Arguments<input name="args" placeholder="--port 8080 --mode service" value="${esc(formatArgs(command.args))}"></label>
             <label>Working directory<input name="cwd" placeholder="Optional" value="${esc(command.workingDirectory || "")}"></label>
+            <label>Interpreter<select name="interpreter">${optionList(INTERPRETERS, command.interpreter || "auto")}</select></label>
+            <label class="span-2">Description<input name="description" maxlength="2000" placeholder="Optional" value="${esc(task?.description || "")}"></label>
+            <fieldset class="form-grid span-2 tasks-plugin-section" data-type-section="scheduled">
+              <label>Time zone<input name="timeZone" placeholder="Server time" value="${esc(schedule.timeZone || "")}"></label>
+              <label>Timeout (s, 0 = none)<input name="timeout" type="number" min="0" value="${esc(task?.timeoutSeconds || 0)}"></label>
+              <label>If still running<select name="overlap">${optionList([["skip", "Skip the new run"], ["allow", "Run in parallel"]], task?.overlapPolicy || "skip")}</select></label>
+              <label class="check tasks-plugin-check"><input name="enabled" type="checkbox" ${!task || task.enabled ? "checked" : ""}> Schedule enabled</label>
+            </fieldset>
+            <fieldset class="form-grid span-2 tasks-plugin-section" data-type-section="continuous">
+              <label>Restart policy<select name="restartMode">${optionList([["on-failure", "On failure"], ["always", "Always"], ["never", "Never"]], restart.mode)}</select></label>
+              <label>Maximum retries (0 = unlimited)<input name="restartRetries" type="number" min="0" value="${esc(restart.maxRetries)}"></label>
+              <label>Initial restart delay (s)<input name="restartInitial" type="number" min="1" value="${esc(restart.initialDelaySeconds)}"></label>
+              <label>Maximum restart delay (s)<input name="restartMax" type="number" min="1" value="${esc(restart.maxDelaySeconds)}"></label>
+            </fieldset>
             <div class="environment-editor span-2"><div class="environment-head"><div><strong>Environment variables</strong><span>Optional values passed only to this task.</span></div><button class="button secondary small" type="button" data-editor="add-env">+ Add variable</button></div><div class="environment-rows" data-env-rows></div></div>
-            ${type === "continuous" ? continuousAdvancedFields : scheduledAdvancedFields}
           </div>
         </details>
       </div>
@@ -362,29 +397,27 @@ export function activate(runpilot) {
       <div class="dialog-actions"><button class="button secondary" type="button" data-editor="close">Cancel</button><button class="button primary" value="default">Save task</button></div>
     </form>`;
     for (const [name, value] of Object.entries(command.environment || {})) addEnvRow(name, value);
-    if (type === "scheduled") syncSchedule();
+    syncType();
     dialog.showModal();
   }
 
   // ---- history + output dialog
 
-  const history = { dialog: null, task: null, runs: [], selected: "", loading: false };
+  const history = { dialog: null, task: null, runs: [], selected: "", loading: false, page: 0 };
 
   function ensureHistory() {
     if (history.dialog) return history.dialog;
     const dialog = document.createElement("dialog");
     dialog.className = "dialog run-history-dialog";
     dialog.innerHTML = `<div class="dialog-head"><div><h2 data-history-title>Run history</h2><p>Captured output from previous runs.</p></div><button class="icon-btn" type="button" data-history="close" aria-label="Close">×</button></div>
-      <div class="run-history-layout"><div class="row-list" data-history-list></div><section class="run-history-log"><pre class="tasks-plugin-output" data-history-output>No run selected.</pre></section></div>`;
+      <div class="run-history-layout"><div class="run-history-runs"><div class="run-history-list" data-history-list></div><div class="run-history-pager" data-history-pager></div></div><section class="run-history-log"><pre class="tasks-plugin-output run-history-output" data-history-output>No run selected.</pre></section></div>`;
     document.body.append(dialog);
     dialog.addEventListener("click", event => {
       if (event.target.closest("[data-history='close']")) { dialog.close(); return; }
+      const pager = event.target.closest("[data-history-page]");
+      if (pager && !pager.disabled) { history.page += Number(pager.dataset.historyPage); renderRuns(); return; }
       const item = event.target.closest("[data-run]");
       if (item) selectRun(item.dataset.run);
-    });
-    dialog.addEventListener("keydown", event => {
-      const item = event.target.closest?.("[data-run]");
-      if (item && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); selectRun(item.dataset.run); }
     });
     dialog.addEventListener("close", () => { history.selected = ""; });
     history.dialog = dialog;
@@ -397,18 +430,28 @@ export function activate(runpilot) {
     return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
   };
 
+  // Runs are shown one page at a time instead of one long scrolling list.
   function renderRuns() {
     const list = history.dialog.querySelector("[data-history-list]");
-    list.innerHTML = history.runs.length ? history.runs.map(run => {
+    const pager = history.dialog.querySelector("[data-history-pager]");
+    const pages = Math.max(1, Math.ceil(history.runs.length / HISTORY_PAGE_SIZE));
+    history.page = Math.min(Math.max(0, history.page), pages - 1);
+    const first = history.page * HISTORY_PAGE_SIZE;
+    const runs = history.runs.slice(first, first + HISTORY_PAGE_SIZE);
+    list.innerHTML = runs.length ? runs.map(run => {
       const label = run.finishedAt ? (run.success ? "success" : "failure") : "running";
       const code = run.exitCode == null ? "" : ` · exit ${run.exitCode}`;
-      return `<article class="row run-history-row ${run.id === history.selected ? "active" : ""}" role="button" tabindex="0" data-run="${esc(run.id)}" aria-label="Open output from ${esc(fmtDate(run.startedAt))}"><div class="row-head"><div><strong>${esc(fmtDate(run.startedAt))}</strong><div class="meta">${esc(duration(run))}${esc(code)}</div></div><span class="status ${label}">${label}</span></div>${run.message ? `<div class="meta">${esc(run.message)}</div>` : ""}</article>`;
+      const message = run.message && !/^exit code -?\d+$/.test(run.message) && run.message !== label ? `<span class="run-history-message">${esc(run.message)}</span>` : "";
+      return `<button type="button" class="run-history-row ${run.id === history.selected ? "active" : ""}" data-run="${esc(run.id)}" aria-pressed="${run.id === history.selected}" aria-label="Open output from ${esc(fmtDate(run.startedAt))}"><span class="run-history-when"><strong>${esc(fmtDate(run.startedAt))}</strong><span class="meta">${esc(duration(run))}${esc(code)}</span>${message}</span><span class="status ${label}">${label}</span></button>`;
     }).join("") : `<div class="empty compact"><p>No runs recorded yet.</p></div>`;
+    pager.innerHTML = history.runs.length > HISTORY_PAGE_SIZE
+      ? `<button class="button secondary small" type="button" data-history-page="-1" aria-label="Newer runs" ${history.page === 0 ? "disabled" : ""}>‹</button><span>${first + 1}–${first + runs.length} of ${history.runs.length}</span><button class="button secondary small" type="button" data-history-page="1" aria-label="Older runs" ${history.page >= pages - 1 ? "disabled" : ""}>›</button>`
+      : "";
   }
 
   async function loadRuns(selectLatest) {
     try {
-      history.runs = (await call("tasks.history", { id: history.task.task.id, limit: 50 })).runs || [];
+      history.runs = (await call("tasks.history", { id: history.task.task.id, limit: HISTORY_LIMIT })).runs || [];
     } catch (error) { history.runs = []; fail(error); }
     renderRuns();
     if (selectLatest && history.runs.length) await selectRun(history.runs[0].id);
@@ -443,6 +486,7 @@ export function activate(runpilot) {
     const dialog = ensureHistory();
     history.task = view;
     history.selected = "";
+    history.page = 0;
     dialog.querySelector("[data-history-title]").textContent = `${view.task.name} — run history`;
     dialog.querySelector("[data-history-output]").textContent = "No run selected.";
     dialog.showModal();
@@ -465,7 +509,8 @@ export function activate(runpilot) {
   ];
 
   runpilot.navigation.register({
-    id: "tasks", title: "Tasks", shortcut:{title:"Manage Tasks",description:"Commands and schedules",order:30}, description: "Run continuous commands and schedule repeatable work.", icon: { src: new URL("./icon.svg", import.meta.url).href },
+    id: "tasks", title: "Tasks", description: "Run continuous commands and schedule repeatable work.", icon: { src: new URL("./icon.svg", import.meta.url).href },
+    headerActions: root => { headerRoot = root; renderHeader(); },
     render: root => { page = root; render(); load(); },
   });
   load();
@@ -474,5 +519,6 @@ export function activate(runpilot) {
     unsubscribers.forEach(off => off());
     editor?.remove();
     history.dialog?.remove();
+    headerRoot = null;
   };
 }

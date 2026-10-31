@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/szilab/RunPilot/internal/model"
 	"github.com/szilab/RunPilot/internal/platform"
@@ -79,6 +80,8 @@ func (h controllerPluginHost) PluginStopped(pluginID string) {
 	h.controller.pluginProcesses.stopOwner(pluginID)
 	h.controller.pluginSessions.stopOwner(pluginID)
 	h.controller.pluginNetworkStreams.stopOwner(pluginID)
+	h.controller.workspaceOperations.stopOwner(pluginID)
+	h.controller.workspaceTransfers.stopOwner(pluginID)
 	h.controller.browserPublications.stop(pluginID)
 }
 
@@ -111,13 +114,13 @@ func (h controllerPluginHost) ScheduleRegister(_ context.Context, pluginID strin
 	if len(value.Data) == 0 {
 		value.Data = json.RawMessage("{}")
 	}
-	err := h.controller.scheduler.RegisterPlugin(scheduler.PluginSchedule{Owner: pluginID, ID: value.ID, Callback: value.Callback, Schedule: value.Schedule, Data: value.Data}, func(item scheduler.PluginSchedule) {
+	next, err := h.controller.scheduler.RegisterPluginNext(scheduler.PluginSchedule{Owner: pluginID, ID: value.ID, Callback: value.Callback, Schedule: value.Schedule, Data: value.Data}, func(item scheduler.PluginSchedule) {
 		h.controller.deliverPluginEvent(pluginID, "scheduler.fired", map[string]any{"id": item.ID, "callback": item.Callback, "data": json.RawMessage(item.Data)})
 	})
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(map[string]string{"id": value.ID})
+	return json.Marshal(map[string]any{"id": value.ID, "nextRunAt": next.UTC().Format(time.RFC3339Nano)})
 }
 
 func (h controllerPluginHost) ScheduleRemove(_ context.Context, pluginID, id string) error {
@@ -128,13 +131,35 @@ func (h controllerPluginHost) ScheduleRemove(_ context.Context, pluginID, id str
 }
 
 func (h controllerPluginHost) ScheduleList(_ context.Context, pluginID string) (json.RawMessage, error) {
-	return json.Marshal(h.controller.scheduler.ListPlugin(pluginID))
+	type scheduleView struct {
+		ID        string             `json:"id"`
+		Callback  string             `json:"callback"`
+		Schedule  model.ScheduleSpec `json:"schedule"`
+		Data      json.RawMessage    `json:"data"`
+		NextRunAt string             `json:"nextRunAt"`
+	}
+	items := h.controller.scheduler.ListPlugin(pluginID)
+	out := make([]scheduleView, 0, len(items))
+	for _, item := range items {
+		out = append(out, scheduleView{ID: item.ID, Callback: item.Callback, Schedule: item.Schedule, Data: json.RawMessage(item.Data), NextRunAt: item.NextRunAt.UTC().Format(time.RFC3339Nano)})
+	}
+	return json.Marshal(map[string]any{"schedules": out})
 }
 
 func (h controllerPluginHost) ProcessStart(_ context.Context, pluginID string, raw json.RawMessage) (json.RawMessage, error) {
 	var input pluginProcessStart
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return nil, err
+	}
+	if input.WorkspaceDirectory != "" {
+		if input.WorkingDirectory != "" {
+			return nil, invalidProcess("choose one working directory")
+		}
+		dir, err := h.controller.workspaceDirectoryHostPath(pluginID, input.WorkspaceDirectory)
+		if err != nil {
+			return nil, err
+		}
+		input.WorkingDirectory, input.WorkspaceDirectory = dir, ""
 	}
 	result, err := h.controller.pluginProcesses.start(pluginID, input)
 	if err != nil {

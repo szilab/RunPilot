@@ -295,36 +295,36 @@ func TestDockerCLIAndComposeFailuresRemainDistinct(t *testing.T) {
 
 func TestDockerProjectsAndFiles(t *testing.T) {
 	p, f := fakePlugin(t)
-	mustSuccess(t, func() (any, *rpcError) { return p.createProject("jellyfin") })
-	if f.files["projects/jellyfin/compose.yaml"] != "services: {}\n" {
+	mustSuccess(t, func() (any, *rpcError) { return p.createProject("example-app") })
+	if f.files["projects/example-app/compose.yaml"] != "services: {}\n" {
 		t.Fatal("missing compose file")
 	}
-	if _, e := p.createProject("jellyfin"); e == nil {
+	if _, e := p.createProject("example-app"); e == nil {
 		t.Fatal("duplicate accepted")
 	}
 	if _, e := p.createProject("../escape"); e == nil {
 		t.Fatal("invalid name accepted")
 	}
-	mustSuccess(t, func() (any, *rpcError) { return p.setFile("jellyfin", "env", "TOKEN=abc") })
-	delete(f.files, "projects/jellyfin/compose.yaml")
-	f.files["projects/jellyfin/compose.yml"] = "services: {legacy: {}}"
-	compose := mustSuccess(t, func() (any, *rpcError) { return p.getFile("jellyfin", "compose") }).(map[string]any)
+	mustSuccess(t, func() (any, *rpcError) { return p.setFile("example-app", "env", "TOKEN=abc") })
+	delete(f.files, "projects/example-app/compose.yaml")
+	f.files["projects/example-app/compose.yml"] = "services: {legacy: {}}"
+	compose := mustSuccess(t, func() (any, *rpcError) { return p.getFile("example-app", "compose") }).(map[string]any)
 	if compose["file"] != "compose.yml" || compose["content"] != "services: {legacy: {}}" {
 		t.Fatalf("legacy Compose file: %v", compose)
 	}
-	mustSuccess(t, func() (any, *rpcError) { return p.setFile("jellyfin", "compose", "services: {new: {}}") })
-	if f.files["projects/jellyfin/compose.yml"] != "services: {new: {}}" {
+	mustSuccess(t, func() (any, *rpcError) { return p.setFile("example-app", "compose", "services: {new: {}}") })
+	if f.files["projects/example-app/compose.yml"] != "services: {new: {}}" {
 		t.Fatal("legacy Compose file not updated")
 	}
-	v := mustSuccess(t, func() (any, *rpcError) { return p.getFile("jellyfin", "env") }).(map[string]any)
+	v := mustSuccess(t, func() (any, *rpcError) { return p.getFile("example-app", "env") }).(map[string]any)
 	if v["content"] != "TOKEN=abc" {
 		t.Fatal(v)
 	}
-	if _, e := p.setFile("jellyfin", "env", strings.Repeat("x", 1<<20+1)); e == nil {
+	if _, e := p.setFile("example-app", "env", strings.Repeat("x", 1<<20+1)); e == nil {
 		t.Fatal("oversized file accepted")
 	}
 	f.set([]string{"ps", "-a", "--format", "{{json .}}"}, "")
-	f.set([]string{"compose", "ls", "--all", "--format", "json"}, `[{"Name":"external","ConfigFiles":"/srv/ext/compose.yaml"},{"Name":"jellyfin","ConfigFiles":"/runpilot/projects/jellyfin/compose.yml"}]`)
+	f.set([]string{"compose", "ls", "--all", "--format", "json"}, `[{"Name":"external","ConfigFiles":"/srv/ext/compose.yaml"},{"Name":"example-app","ConfigFiles":"/runpilot/projects/example-app/compose.yml"}]`)
 	f.set([]string{"volume", "ls", "--format", "json"}, "")
 	f.set([]string{"network", "ls", "--format", "json"}, "")
 	f.set([]string{"ps", "-aq"}, "")
@@ -333,22 +333,22 @@ func TestDockerProjectsAndFiles(t *testing.T) {
 	if len(projects) != 2 || !projects[0].Managed || !projects[1].ReadOnly {
 		t.Fatalf("projects: %+v", projects)
 	}
-	f.set([]string{"compose", "--project-name", "jellyfin", "-f", "compose.yml", "up", "-d"}, "")
-	mustSuccess(t, func() (any, *rpcError) { return p.projectAction("jellyfin", "up") })
+	f.set([]string{"compose", "--project-name", "example-app", "-f", "compose.yml", "up", "-d"}, "")
+	mustSuccess(t, func() (any, *rpcError) { return p.projectAction("example-app", "up") })
 	if _, e := p.projectAction("external", "up"); e == nil {
 		t.Fatal("external project mutated")
 	}
-	mustSuccess(t, func() (any, *rpcError) { return p.deleteProject("jellyfin") })
-	if e := p.requireProject("jellyfin"); e == nil {
+	mustSuccess(t, func() (any, *rpcError) { return p.deleteProject("example-app") })
+	if e := p.requireProject("example-app"); e == nil {
 		t.Fatal("project still exists")
 	}
 }
 func TestDockerContainerOwnershipAndTerminal(t *testing.T) {
 	p, f := fakePlugin(t)
-	mustSuccess(t, func() (any, *rpcError) { return p.createProject("jellyfin") })
+	mustSuccess(t, func() (any, *rpcError) { return p.createProject("example-app") })
 	id := "abcdef012345"
 	full := id + strings.Repeat("0", 52)
-	inspect := `[{"Id":"` + full + `","Name":"/jellyfin","State":{"Running":true},"Config":{"Labels":{"com.docker.compose.project":"jellyfin","com.docker.compose.project.working_dir":"/runpilot/projects/jellyfin","com.docker.compose.service":"web"}},"Mounts":[{"Type":"volume","Name":"data"}],"NetworkSettings":{"Networks":{"jellyfin_default":{}}}}]`
+	inspect := `[{"Id":"` + full + `","Name":"/example-app","State":{"Running":true},"Config":{"Labels":{"com.docker.compose.project":"example-app","com.docker.compose.project.working_dir":"/runpilot/projects/example-app","com.docker.compose.service":"web"}},"Mounts":[{"Type":"volume","Name":"data"}],"NetworkSettings":{"Networks":{"example-app_default":{}}}}]`
 	f.set([]string{"inspect", id}, inspect)
 	f.set([]string{"container", "stop", id}, "")
 	mustSuccess(t, func() (any, *rpcError) { return p.containerAction(id, "stop") })
@@ -363,7 +363,7 @@ func TestDockerContainerOwnershipAndTerminal(t *testing.T) {
 	if _, e := p.terminalOpen("bad", 24, 80); e == nil {
 		t.Fatal("bad ID accepted")
 	}
-	f.set([]string{"inspect", id}, strings.Replace(inspect, `"com.docker.compose.project":"jellyfin"`, `"com.docker.compose.project":"external"`, 1))
+	f.set([]string{"inspect", id}, strings.Replace(inspect, `"com.docker.compose.project":"example-app"`, `"com.docker.compose.project":"external"`, 1))
 	if _, e := p.containerAction(id, "stop"); e == nil {
 		t.Fatal("external container mutated")
 	}
@@ -372,7 +372,7 @@ func TestDockerContainerOwnershipAndTerminal(t *testing.T) {
 	if logs["content"] != "external log" {
 		t.Fatalf("external logs: %v", logs)
 	}
-	f.set([]string{"inspect", id}, strings.Replace(inspect, `"com.docker.compose.project.working_dir":"/runpilot/projects/jellyfin"`, `"com.docker.compose.project.working_dir":"/srv/external"`, 1))
+	f.set([]string{"inspect", id}, strings.Replace(inspect, `"com.docker.compose.project.working_dir":"/runpilot/projects/example-app"`, `"com.docker.compose.project.working_dir":"/srv/external"`, 1))
 	if _, e := p.containerAction(id, "stop"); e == nil || e.Code != "forbidden" {
 		t.Fatal("container from colliding external directory mutated")
 	}
@@ -388,10 +388,6 @@ func TestDockerProjectNameCollision(t *testing.T) {
 	if _, e := p.projectAction("owned", "up"); e == nil || e.Code != "forbidden" {
 		t.Fatalf("external project name collision was actionable: %v", e)
 	}
-	f.files["projects/owned/.runpilot-legacy-origin"] = "/srv/external"
-	f.files["projects/owned/.env"] = "IMAGE=example\n"
-	f.set([]string{"compose", "--project-name", "owned", "--project-directory", "/srv/external", "--env-file", "/runpilot/projects/owned/.env", "-f", "compose.yaml", "up", "-d"}, "")
-	mustSuccess(t, func() (any, *rpcError) { return p.projectAction("owned", "up") })
 }
 func TestDockerResourceGuardsAndMalformedJSON(t *testing.T) {
 	p, f := fakePlugin(t)

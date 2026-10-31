@@ -11,9 +11,7 @@ type Capabilities struct {
 	ServiceManager      string   `json:"serviceManager,omitempty"`
 	CommandInterpreters []string `json:"commandInterpreters"`
 	Robocopy            bool     `json:"robocopy"`
-	Scoop               bool     `json:"scoop"`
 	Terminal            bool     `json:"terminal"`
-	DockerCompose       bool     `json:"dockerCompose"`
 }
 
 func CurrentCapabilities() Capabilities {
@@ -22,12 +20,11 @@ func CurrentCapabilities() Capabilities {
 	if c.Windows {
 		c.ServiceManager = "windows-scm"
 		c.CommandInterpreters = append(c.CommandInterpreters, "cmd")
-		c.Robocopy, c.Scoop = true, true
+		c.Robocopy = true
 	} else if c.Linux {
 		c.ServiceManager = "systemd"
 		c.CommandInterpreters = append(c.CommandInterpreters, "sh", "bash", "sh-inline")
 	}
 	c.Terminal = c.Windows || c.Linux
-	c.DockerCompose = c.Linux
 	return c
 }

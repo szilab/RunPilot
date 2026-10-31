@@ -1,0 +1,1 @@
+# RunPilot: no server-wide client defaults. Session settings are passed as URL parameters.

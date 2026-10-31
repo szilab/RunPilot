@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 )
 
 func TestLegacyTerminalEndpointsAreRemoved(t *testing.T) {
@@ -31,21 +30,5 @@ func TestLegacyTerminalEndpointsAreRemoved(t *testing.T) {
 		if response.Code != http.StatusNotFound {
 			t.Errorf("%s %s status = %d, want 404", test.method, test.path, response.Code)
 		}
-	}
-}
-
-func TestDockerAttachTicketIsSingleUseAndExpires(t *testing.T) {
-	server := &Server{dockerAttachTickets: map[string]dockerAttachTicket{
-		"fresh":   {DockerExecID: "container", Expires: time.Now().Add(time.Minute)},
-		"expired": {DockerExecID: "container", Expires: time.Now().Add(-time.Second)},
-	}}
-	if _, ok := server.consumeDockerAttachTicket("fresh", ""); !ok {
-		t.Fatal("fresh Docker attach ticket was rejected")
-	}
-	if _, ok := server.consumeDockerAttachTicket("fresh", ""); ok {
-		t.Fatal("Docker attach ticket was accepted twice")
-	}
-	if _, ok := server.consumeDockerAttachTicket("expired", ""); ok {
-		t.Fatal("expired Docker attach ticket was accepted")
 	}
 }

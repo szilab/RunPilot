@@ -10,13 +10,18 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/szilab/RunPilot/internal/plugins"
 )
 
 const maxWorkspaceFile = 1 << 20
-const maxWorkspaceEntries = 4096
+
+// maxWorkspaceEntries bounds one directory listing (and each directory level
+// of a recursive removal); the listing stays well below the ABI payload limit.
+const maxWorkspaceEntries = 16384
 
 func workspaceInvalid(message string) error {
 	return &plugins.HostFailure{Code: "invalid_argument", Message: message}
@@ -32,7 +37,12 @@ func validWorkspacePath(name string, rootOK bool) bool {
 		return false
 	}
 	for _, part := range strings.Split(name, "/") {
-		if part == "" || part == "." || part == ".." || strings.ContainsRune(part, 0) || strings.Contains(part, ":") {
+		if part == "" || part == "." || part == ".." || strings.ContainsRune(part, 0) {
+			return false
+		}
+		// A colon selects a drive or an alternate data stream on Windows; it is
+		// an ordinary file name character elsewhere.
+		if runtime.GOOS == "windows" && strings.Contains(part, ":") {
 			return false
 		}
 	}
@@ -53,16 +63,71 @@ func (c *Controller) workspaceRoot(owner string) (*os.Root, error) {
 	}
 	return base.OpenRoot(name)
 }
-func workspaceExternalRoot(rootPath string) (*os.Root, string, error) {
+
+// openExternalRoot opens a user-configured absolute directory. Only mkdir and
+// write create a missing root; every other operation requires it to exist.
+func openExternalRoot(rootPath string, create bool) (*os.Root, string, error) {
 	if len(rootPath) > 4096 || !filepath.IsAbs(rootPath) || strings.ContainsRune(rootPath, 0) {
 		return nil, "", workspaceInvalid("workspace root must be an absolute path")
 	}
 	absolute := filepath.Clean(rootPath)
-	if err := os.MkdirAll(absolute, 0700); err != nil {
-		return nil, "", err
+	if create {
+		if err := os.MkdirAll(absolute, 0700); err != nil {
+			return nil, "", err
+		}
 	}
 	root, err := os.OpenRoot(absolute)
 	return root, absolute, err
+}
+
+// openWorkspaceRoot opens the owner's workspace, or an existing external root.
+func (c *Controller) openWorkspaceRoot(owner, rootPath string) (*os.Root, string, error) {
+	if rootPath == "" {
+		root, err := c.workspaceRoot(owner)
+		if err != nil {
+			return nil, "", err
+		}
+		absolute, err := c.workspaceHostPath(owner, "")
+		return root, absolute, err
+	}
+	return openExternalRoot(rootPath, false)
+}
+
+// workspaceLinkType reports what a symlink points to inside the root:
+// "file", "directory", "other", or "" when it is broken or leaves the root.
+func workspaceLinkType(root *os.Root, name string) string {
+	info, err := root.Stat(name)
+	switch {
+	case err != nil:
+		return ""
+	case info.IsDir():
+		return "directory"
+	case info.Mode().IsRegular():
+		return "file"
+	}
+	return "other"
+}
+
+// workspaceEntry describes one directory entry without following symlinks.
+func workspaceEntry(name string, info os.FileInfo) map[string]any {
+	kind := "other"
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		kind = "symlink"
+	case info.IsDir():
+		kind = "directory"
+	case info.Mode().IsRegular():
+		kind = "file"
+	}
+	size := int64(0)
+	if kind == "file" {
+		size = info.Size()
+	}
+	return map[string]any{
+		"name": name, "type": kind, "directory": kind == "directory", "symlink": kind == "symlink",
+		"size": size, "modifiedAt": info.ModTime().UTC().Format(time.RFC3339Nano),
+		"hidden": strings.HasPrefix(name, ".") || platformHidden(info),
+	}
 }
 
 func (c *Controller) workspaceHostPath(owner, relative string, roots ...string) (string, error) {
@@ -94,6 +159,14 @@ func (c *Controller) pluginWorkspace(owner, op string, raw json.RawMessage) (jso
 		Data      string `json:"data"`
 		Recursive bool   `json:"recursive"`
 	}
+	switch op {
+	case "rename":
+		return c.workspaceRename(owner, raw)
+	case "operation.start", "operation.status", "operation.cancel":
+		return c.workspaceOperations.handle(owner, strings.TrimPrefix(op, "operation."), raw)
+	case "transfer.download", "transfer.upload":
+		return c.workspaceTransfers.issue(owner, strings.TrimPrefix(op, "transfer."), raw)
+	}
 	if len(raw) > 2*maxWorkspaceFile || json.Unmarshal(raw, &in) != nil || !validWorkspacePath(in.Path, op == "list" || op == "stat" || op == "mkdir") {
 		return nil, workspaceInvalid("invalid workspace request or path")
 	}
@@ -103,7 +176,7 @@ func (c *Controller) pluginWorkspace(owner, op string, raw json.RawMessage) (jso
 	if in.Root == "" {
 		root, err = c.workspaceRoot(owner)
 	} else {
-		root, externalRoot, err = workspaceExternalRoot(in.Root)
+		root, externalRoot, err = openExternalRoot(in.Root, op == "mkdir" || op == "write")
 	}
 	if err != nil {
 		return nil, err
@@ -122,7 +195,13 @@ func (c *Controller) pluginWorkspace(owner, op string, raw json.RawMessage) (jso
 		if err != nil {
 			return nil, err
 		}
-		return json.Marshal(map[string]any{"path": in.Path, "directory": fi.IsDir(), "size": fi.Size(), "symlink": fi.Mode()&os.ModeSymlink != 0})
+		entry := workspaceEntry(path.Base(name), fi)
+		if entry["type"] == "symlink" {
+			entry["linkType"] = workspaceLinkType(root, name)
+		}
+		entry["path"] = in.Path
+		entry["size"] = fi.Size()
+		return json.Marshal(entry)
 	case "list":
 		f, err := root.Open(name)
 		if err != nil {
@@ -138,7 +217,17 @@ func (c *Controller) pluginWorkspace(owner, op string, raw json.RawMessage) (jso
 		}
 		out := make([]map[string]any, 0, len(entries))
 		for _, e := range entries {
-			out = append(out, map[string]any{"name": e.Name(), "directory": e.IsDir(), "symlink": e.Type()&os.ModeSymlink != 0})
+			// DirEntry.Info resolves names outside os.Root for nested
+			// directories; Lstat through the root stays confined.
+			info, err := root.Lstat(path.Join(name, e.Name()))
+			if err != nil {
+				continue // removed while listing
+			}
+			item := workspaceEntry(e.Name(), info)
+			if item["type"] == "symlink" {
+				item["linkType"] = workspaceLinkType(root, path.Join(name, e.Name()))
+			}
+			out = append(out, item)
 		}
 		return json.Marshal(map[string]any{"entries": out})
 	case "read":

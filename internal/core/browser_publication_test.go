@@ -22,9 +22,13 @@ func browserCall(t *testing.T, m *browserPublications, owner, base, method strin
 func TestBrowserPublicationTicketOwnershipAndLifecycle(t *testing.T) {
 	m := newBrowserPublications(nil)
 	defer m.stop("")
-	p := browserCall(t, m, "one", "/multi/path", "browser.publication.register", map[string]string{"mountPath": "/app", "bootstrap": "web/bootstrap.html", "worker": "web/sw.js"})
-	raw := json.RawMessage(`{"mountPath":"/app/sub","bootstrap":"web/bootstrap.html","worker":"web/sw.js"}`)
-	if _, err := m.call("other", "/", "browser.publication.register", raw); err == nil {
+	runtime := browserCall(t, m, "one", "/multi/path", "browser.runtime.register", map[string]string{"bootstrap": "web/bootstrap.js", "worker": "web/sw.js"})
+	if _, err := m.call("one", "/", "browser.publication.register", json.RawMessage(`{"mountPath":"/app","bootstrap":"web/bootstrap.html"}`)); err == nil {
+		t.Fatal("publication without a runtime accepted")
+	}
+	p := browserCall(t, m, "one", "/multi/path", "browser.publication.register", map[string]string{"mountPath": "/app", "bootstrap": "web/bootstrap.html", "runtimeId": runtime["id"]})
+	raw := json.RawMessage(`{"mountPath":"/app/sub","bootstrap":"web/bootstrap.html","runtimeId":"` + runtime["id"] + `"}`)
+	if _, err := m.call("one", "/", "browser.publication.register", raw); err == nil {
 		t.Fatal("mount collision accepted")
 	}
 	g := browserCall(t, m, "one", "/multi/path", "http.gateway.open", map[string]string{"publicationId": p["id"], "upstreamURL": "http://localhost:1234", "upstreamBasePath": "/app"})

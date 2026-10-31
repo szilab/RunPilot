@@ -164,17 +164,17 @@ esac
 		}
 		return out.Result
 	}
-	created := call("1", "docker.projects.create", map[string]string{"name": "jellyfin"})
+	created := call("1", "docker.projects.create", map[string]string{"name": "example-app"})
 	if !bytes.Contains(created, []byte(`"managed":true`)) {
 		t.Fatalf("create: %s", created)
 	}
-	call("2", "docker.projects.file.set", map[string]string{"name": "jellyfin", "kind": "env", "content": "TOKEN=abc"})
-	call("3", "docker.projects.action", map[string]string{"name": "jellyfin", "action": "up"})
+	call("2", "docker.projects.file.set", map[string]string{"name": "example-app", "kind": "env", "content": "TOKEN=abc"})
+	call("3", "docker.projects.action", map[string]string{"name": "example-app", "action": "up"})
 	snapshot := call("4", "docker.snapshot", map[string]any{})
-	if !bytes.Contains(snapshot, []byte(`"state":"ready"`)) || !bytes.Contains(snapshot, []byte(`"name":"jellyfin"`)) {
+	if !bytes.Contains(snapshot, []byte(`"state":"ready"`)) || !bytes.Contains(snapshot, []byte(`"name":"example-app"`)) {
 		t.Fatalf("snapshot: %s", snapshot)
 	}
-	content, err := os.ReadFile(filepath.Join(dataDir, "plugins", "docker", "data", "workspace", "projects", "jellyfin", ".env"))
+	content, err := os.ReadFile(filepath.Join(dataDir, "plugins", "docker", "data", "workspace", "projects", "example-app", ".env"))
 	if err != nil || string(content) != "TOKEN=abc" {
 		t.Fatalf("workspace file: %s %v", content, err)
 	}
@@ -182,7 +182,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(log), "projects/jellyfin|compose --project-name jellyfin -f compose.yaml up -d") {
+	if !strings.Contains(string(log), "projects/example-app|compose --project-name example-app -f compose.yaml up -d") {
 		t.Fatalf("Compose was not run in plugin workspace: %s", log)
 	}
 }

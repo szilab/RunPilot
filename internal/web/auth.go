@@ -222,27 +222,6 @@ func (s *Server) revokeSessionTickets(sessionID string) {
 		}
 	}
 	s.applicationTicketMu.Unlock()
-	s.ticketMu.Lock()
-	for id, ticket := range s.tickets {
-		if ticket.SessionID == sessionID {
-			delete(s.tickets, id)
-		}
-	}
-	s.ticketMu.Unlock()
-	s.dockerAttachMu.Lock()
-	for id, ticket := range s.dockerAttachTickets {
-		if ticket.SessionID == sessionID {
-			delete(s.dockerAttachTickets, id)
-		}
-	}
-	s.dockerAttachMu.Unlock()
-	s.remoteTicketMu.Lock()
-	for id, ticket := range s.remoteTickets {
-		if ticket.AuthSessionID == sessionID {
-			delete(s.remoteTickets, id)
-		}
-	}
-	s.remoteTicketMu.Unlock()
 }
 
 func (s *Server) rememberSessionTickets(sessionID string, value any) {

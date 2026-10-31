@@ -87,7 +87,7 @@ func newNetworkHost(t *testing.T) *networkHost {
 	t.Helper()
 	host := &networkHost{storage: map[string]json.RawMessage{}, states: map[string]string{}, arp: map[string]string{}}
 	host.storage["targets"] = json.RawMessage(`{"version":1,"nextId":4,"targets":[
-		{"id":"rdp-1","name":"Desk","options":{"host":"192.0.2.20","port":3389}},
+		{"id":"rdp-1","name":"Workstation","options":{"host":"192.0.2.20","port":3389}},
 		{"id":"rdp-2","name":"Laptop","options":{"host":"192.0.2.21"},"macAddress":"AA-BB-CC-00-00-02"},
 		{"id":"rdp-3","name":"Gone","options":{"host":"192.0.2.22"}}]}`)
 	host.storage["vncTargets"] = json.RawMessage(`{"version":1,"nextId":2,"targets":[{"id":"vnc-1","name":"Pi","host":"192.0.2.30","port":5900,"connectTimeoutSeconds":10}]}`)
@@ -165,19 +165,19 @@ func TestWakeTargetPrefersConfiguredThenDiscoveredThenLookup(t *testing.T) {
 
 func TestSavingTargetsControlsMACFields(t *testing.T) {
 	host := newNetworkHost(t)
-	host.storage["targets"] = json.RawMessage(`{"version":1,"nextId":2,"targets":[{"id":"rdp-1","name":"Desk","options":{"host":"192.0.2.20","port":3389},"discoveredMac":"3c:7c:3f:12:34:56"}]}`)
+	host.storage["targets"] = json.RawMessage(`{"version":1,"nextId":2,"targets":[{"id":"rdp-1","name":"Workstation","options":{"host":"192.0.2.20","port":3389},"discoveredMac":"3c:7c:3f:12:34:56"}]}`)
 	p := newPlugin()
 	save := func(body string) *rpcError {
 		_, failure := p.handle("rdp.targets.save", json.RawMessage(body))
 		return failure
 	}
-	if failure := save(`{"target":{"id":"rdp-1","name":"Desk","options":{"host":"192.0.2.20","port":3389},"discoveredMac":"99:99:99:99:99:99"}}`); failure != nil {
+	if failure := save(`{"target":{"id":"rdp-1","name":"Workstation","options":{"host":"192.0.2.20","port":3389},"discoveredMac":"99:99:99:99:99:99"}}`); failure != nil {
 		t.Fatal(failure.Message)
 	}
 	if stored := string(host.storage["targets"]); !strings.Contains(stored, "3c:7c:3f:12:34:56") || strings.Contains(stored, "99:99") {
 		t.Fatalf("client changed the learned MAC: %s", stored)
 	}
-	if failure := save(`{"target":{"id":"rdp-1","name":"Desk","options":{"host":"192.0.2.99","port":3389},"macAddress":"AABB.CCDD.EEFF"}}`); failure != nil {
+	if failure := save(`{"target":{"id":"rdp-1","name":"Workstation","options":{"host":"192.0.2.99","port":3389},"macAddress":"AABB.CCDD.EEFF"}}`); failure != nil {
 		t.Fatal(failure.Message)
 	}
 	if stored := string(host.storage["targets"]); strings.Contains(stored, "discoveredMac") || !strings.Contains(stored, `"macAddress":"aa:bb:cc:dd:ee:ff"`) {

@@ -57,7 +57,7 @@ func Open(dataDir string) (*Store, error) {
 }
 
 // OpenWithConfigDir opens configuration from configDir when explicitly set;
-// otherwise configuration remains beside the application data for compatibility.
+// otherwise the configuration file lives in the data directory.
 func OpenWithConfigDir(dataDir, configDir string) (*Store, error) {
 	var err error
 	dataDir, err = ResolveDataDir(dataDir)
@@ -102,32 +102,9 @@ func OpenWithConfigDir(dataDir, configDir string) (*Store, error) {
 	if err := yaml.Unmarshal(b, &s.cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", s.path, err)
 	}
-	// Storage used to be persisted configuration. Decode it only so opening an
-	// older file can rewrite it without the obsolete section; locations are now
-	// discovered at runtime by the Storage registry. A valid token without the
-	// new setup marker is an existing installation and remains initialized.
-	var raw map[string]any
-	if err := yaml.Unmarshal(b, &raw); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", s.path, err)
-	}
-	_, hadLegacyStorage := raw["storage"]
-	_, hadLegacyProcesses := raw["processes"]
-	serverRaw, _ := raw["server"].(map[string]any)
-	_, hadSetupMarker := serverRaw["setupComplete"]
-	_, hadBearerAuthSetting := serverRaw["bearerAuthEnabled"]
-	if !hadSetupMarker && s.cfg.Server.Token != "" {
-		s.cfg.Server.SetupComplete = true
-	}
-	// Preserve the established API-token integration path on upgrades. Fresh
-	// configurations persist false, so bearer use remains an explicit choice.
-	if !hadBearerAuthSetting && s.cfg.Server.SetupComplete {
-		s.cfg.Server.BearerAuthEnabled = true
-	}
 	before := clone(s.cfg)
 	normalize(&s.cfg)
-	if before.Server.Token == "" {
-	}
-	if hadLegacyStorage || hadLegacyProcesses || !hadBearerAuthSetting || !reflect.DeepEqual(before, s.cfg) {
+	if !reflect.DeepEqual(before, s.cfg) {
 		if err := s.saveLocked(); err != nil {
 			return nil, err
 		}
@@ -245,20 +222,13 @@ func defaultConfig() (model.Config, error) {
 	config := model.Config{
 		Version: 1,
 		Server: model.ServerConfig{
-			Bind:          "127.0.0.1:9070",
+			Bind:          "127.0.0.1",
 			Port:          9070,
 			BasePath:      "/",
 			Token:         token,
 			SetupComplete: false,
 		},
-		Jobs:    []model.JobDefinition{},
 		Plugins: map[string]model.PluginSettings{},
-	}
-	if runtime.GOOS == "windows" {
-		config.Software.Providers = []model.SoftwareProviderDefinition{{
-			ID: "scoop", Name: "RunPilot Scoop", Type: model.SoftwareProviderScoop,
-			Scoop: &model.ScoopProviderSpec{},
-		}}
 	}
 	return config, nil
 }
@@ -268,7 +238,10 @@ func normalize(c *model.Config) error {
 		c.Version = 1
 	}
 	if c.Server.Bind == "" {
-		c.Server.Bind = "127.0.0.1:9070"
+		c.Server.Bind = "127.0.0.1"
+	}
+	if c.Server.Port == 0 {
+		c.Server.Port = 9070
 	}
 	if c.Server.BasePath == "" {
 		c.Server.BasePath = "/"
@@ -289,52 +262,6 @@ func normalize(c *model.Config) error {
 	}
 	if c.Plugins == nil {
 		c.Plugins = map[string]model.PluginSettings{}
-	}
-	if runtime.GOOS == "windows" {
-		hasScoop := false
-		for _, provider := range c.Software.Providers {
-			if provider.ID == "scoop" {
-				hasScoop = true
-				break
-			}
-		}
-		if !hasScoop {
-			c.Software.Providers = append(c.Software.Providers, model.SoftwareProviderDefinition{
-				ID: "scoop", Name: "RunPilot Scoop", Type: model.SoftwareProviderScoop,
-				Scoop: &model.ScoopProviderSpec{},
-			})
-		}
-	}
-	jobs := c.Jobs[:0]
-	for i := range c.Jobs {
-		if c.Jobs[i].Type != model.JobBackup {
-			continue
-		}
-		model.NormalizeJob(&c.Jobs[i])
-		jobs = append(jobs, c.Jobs[i])
-	}
-	c.Jobs = jobs
-	// RDP and VNC targets now belong to their plugin-owned storage. Remove
-	// obsolete combined-core targets once when opening an older configuration.
-	targets := c.RemoteTargets[:0]
-	for _, target := range c.RemoteTargets {
-		if target.Provider == "rdp" || target.Provider == "vnc" {
-			continue
-		}
-		targets = append(targets, target)
-	}
-	c.RemoteTargets = targets
-	for i := range c.RemoteTargets {
-		target := &c.RemoteTargets[i]
-		if target.DBusMode != model.RemoteDBusIsolated && target.DBusMode != model.RemoteDBusHost {
-			if target.ForwardDBus {
-				target.DBusMode = model.RemoteDBusHost
-			} else {
-				target.DBusMode = model.RemoteDBusIsolated
-			}
-		}
-		// Remove the compatibility field on the next normal configuration save.
-		target.ForwardDBus = false
 	}
 	return nil
 }

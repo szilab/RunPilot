@@ -28,8 +28,8 @@ func TestCoreShellLeavesFeatureNavigationToPlugins(t *testing.T) {
 		t.Error("legacy Tasks page remains in the shell")
 	}
 	for _, id := range []string{"storage", "software"} {
-		if strings.Contains(page, `id="`+id+`Page"`) || !strings.Contains(page, `id="legacy`+strings.ToUpper(id[:1])+id[1:]+`Page"`) {
-			t.Errorf("legacy %s markup reserves the plugin page ID", id)
+		if strings.Contains(page, `id="`+id+`Page"`) || strings.Contains(page, `id="legacy`+strings.ToUpper(id[:1])+id[1:]+`Page"`) {
+			t.Errorf("removed %s markup remains in the shell", id)
 		}
 	}
 	if strings.Contains(page, `id="legacyDockerPage"`) || strings.Contains(page, `id="dockerPage"`) {
@@ -142,7 +142,7 @@ func TestPluginSettingsUseSharedDialogsAndNamedNavigationIcons(t *testing.T) {
 	}
 }
 
-func TestPluginNavigationCanRenderActionsBesideThemeSwitcher(t *testing.T) {
+func TestPluginNavigationRendersActionsBeforeThemeSwitcher(t *testing.T) {
 	index, err := staticFS.ReadFile("static/index.html")
 	if err != nil {
 		t.Fatal(err)
@@ -150,8 +150,8 @@ func TestPluginNavigationCanRenderActionsBesideThemeSwitcher(t *testing.T) {
 	page := string(index)
 	theme := strings.Index(page, `id="themeToggle"`)
 	actions := strings.Index(page, `id="pluginHeaderActions"`)
-	if theme < 0 || actions < 0 || actions < theme {
-		t.Fatal("plugin header action slot must follow the theme switcher")
+	if theme < 0 || actions < 0 || actions > theme {
+		t.Fatal("plugin header action slot must precede the theme switcher")
 	}
 	app, err := staticFS.ReadFile("static/app.js")
 	if err != nil {
@@ -299,15 +299,6 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 		`id="overviewPage"`,
 		`runpilot-logo.png`,
 		`id="themeToggle"`,
-		`id="legacySoftwarePage"`,
-		`id="softwareProviderSelect"`,
-		`id="softwareProviderCard"`,
-		`data-software-tab="buckets"`,
-		`id="softwareBucketBar"`,
-		`class="row-list"`,
-		`for="storageProvider"`,
-		`class="storage-provider-label">Location</label>`,
-		`id="storageNewFile"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("index.html does not contain %q", want)
@@ -347,7 +338,7 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 			t.Fatalf("UI still contains obsolete presentation %q", removed)
 		}
 	}
-	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "hostDashboard.setActive", "function renderSoftware", "function softwarePackageFacts", "function loadSoftwareView", "function changeSoftwareProvider", "function softwareAddBucket", "software-protected-action", "softwareProviderSelect", "softwareLoading", "No software providers available", "/buckets", "storagePathCapabilities=listing.capabilities", "setStorageEntryLoading", "function initializeSidebar", "sidebarStorageKey"} {
+	for _, want := range []string{"function startAutoRefresh", "[data-dismiss]", "hostDashboard.setActive", "function initializeSidebar", "sidebarStorageKey"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js does not contain %q", want)
 		}
@@ -385,11 +376,10 @@ func TestStaticUIUsesRowsAndAutomaticRefresh(t *testing.T) {
 			t.Fatalf("compact responsive UI treatment is missing %q", want)
 		}
 	}
-	if strings.Contains(script, "Helyi fájlrendszer kezelése.") {
-		t.Fatal("app.js still exposes the obsolete storage subtitle")
-	}
-	if !strings.Contains(script, `title.textContent=".."`) || !strings.Contains(script, `meta.textContent="parent folder"`) {
-		t.Fatal("app.js does not render parent navigation as a folder entry")
+	for _, removed := range []string{"api/v1/storage", "api/v1/software", "function browseStorage", "function renderSoftware", "textEditorDialog"} {
+		if strings.Contains(page+script, removed) {
+			t.Fatalf("removed Storage/Software UI remains: %s", removed)
+		}
 	}
 }
 

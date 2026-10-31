@@ -26,8 +26,7 @@ There is no per-plugin permission list in the target architecture. All loaded pl
 
 The implemented manifest accepts an optional `platforms` list containing only
 `linux` and `windows`; omitting it means platform-independent. Declared backend
-and frontend files must be present in a package. The legacy `permissions` field
-is no longer accepted. The precise package, ABI, capability and envelope
+and frontend files must be present in a package. The precise package, ABI, capability and envelope
 contracts are in [PLUGIN_API.md](PLUGIN_API.md).
 
 Backend and frontend compatibility use independent SemVer contract versions,
@@ -114,10 +113,9 @@ runpilot.ws
 
 Feature frontend code must not depend on private RunPilot JavaScript implementation details.
 
-The public namespaces and their registration hosts are implemented. The former
-legacy Remote frontend compatibility surface has been removed; remote features
-register through the same public navigation, UI, and WebSocket APIs as other
-plugins.
+The public namespaces and their registration hosts are implemented. Remote
+features register through the same public navigation, UI, and WebSocket APIs as
+other plugins.
 
 ## WebSocket protocol
 
@@ -188,11 +186,22 @@ Host metrics presentation is built into Overview. No System plugin expansion is
 part of the registry implementation.
 
 `plugins/tasks` owns the Tasks page for continuous and scheduled command tasks.
-It is publishable, but is not installed or enabled automatically. Legacy task
-definitions remain separate state pending a migration decision. Backup is not
+It is publishable, but is not installed or enabled automatically. Backup is not
 part of this plugin. Unit tests inject a fake host;
 `internal/core/tasks_plugin_test.go` runs the real ABI-v2 WASM through the normal
 controller path.
+
+`plugins/backup` (plugin ID `backup`, backend contract 1.4) owns the Backup page:
+Restic, rsync (Linux) and Robocopy (Windows) jobs with their own schedules,
+run history, Restic snapshots, repository check/unlock/init and restore into a
+new or empty folder. Job definitions use plugin `storage.*`; the engine
+commands, exit-code rules and path checks live in the plugin
+(`backend/engines.go`, `backend/paths.go`). Its folder picker lists folders
+through `workspace.list` with an external `root`, like Files. Passwords and keys
+stay in host files that jobs reference. Unit tests inject a fake host;
+`internal/core/backup_plugin_test.go` runs the real WASM with a fake restic
+script and, when installed, the real rsync. Regenerate the WASM with
+`go generate ./plugins/backup/backend`.
 
 `plugins/terminal` provides interactive sessions through the generic process
 session capability. Its tab strip uses `+` to open a session and per-tab close
@@ -208,15 +217,28 @@ process session with the entered command and arguments, without saving them
 or interrupting existing sessions. Regenerate its WASM backend with
 `go generate ./plugins/terminal/backend` after backend changes.
 
-`plugins/remote` is published as plugin ID `remote`, providing RDP and VNC.
-It owns both target lists and session types, uses the generic
-`network.stream.*` capability, packages Guacamole and noVNC 1.7.0 with their
-license files, and provides one protocol-tabbed navigation page. Passwords are
-never persisted. Core no longer contains legacy RDP/VNC providers or
-transports.
-Xpra remains a temporary internal legacy implementation without normal UI
-exposure; its migration is deferred while reusable host lifecycle capabilities
-are designed.
+`plugins/remote` is published as plugin ID `remote`, providing RDP, VNC and
+Xpra. It owns all target lists and session types, uses the generic
+`network.stream.*` capability, packages Guacamole, noVNC 1.7.0 and the Xpra
+HTML5 client v19 with their license files, and provides one protocol-tabbed
+navigation page. The protocols share `session-toolbar.js`,
+`diagnostics-dialog.js` and `stream-channel.js`. Xpra servers run through
+`process.start` with `workspaceDirectory` and are reached through a
+`network.stream.open` `workspaceSocket`; `web/xpra-bridge.js` connects the
+packaged client to that stream (see `web/vendor/xpra-html5/README.runpilot.md`).
+Passwords are never persisted. Core contains no Remote provider, transport or
+Xpra runtime. Regenerate its WASM backend with
+`go generate ./plugins/remote/backend` after backend changes.
+
+`plugins/files` (plugin ID `files`, backend contract 1.3) provides the file
+manager for the whole host filesystem. It has no settings: its backend maps
+every browser path onto `workspace.*` with `/` as `root` (on Windows the drive
+of the path, with the drives listed from `system.status` at the top), and the
+service account's permissions decide what succeeds. The top folder and drive
+roots can be listed but never renamed, moved or deleted. Background operation events are relayed
+to the browser as `files.operation`, and the browser uploads and downloads
+directly through the host transfer route. Regenerate its WASM backend with
+`go generate ./plugins/files/backend` after backend changes.
 
 Browser regression checks are opt-in: set `RUNPILOT_PLAYWRIGHT_MODULE` to a local
 Playwright module and optionally `RUNPILOT_BROWSER_EXECUTABLE` to its browser,
@@ -224,7 +246,12 @@ then run `go test ./internal/web -run 'Test(UI|WebApps)RealBrowser'`.
 `RUNPILOT_UI_SCREENSHOTS` saves the UI test's light/dark desktop, tablet, and
 mobile captures. These tests use temporary application data and local fixtures.
 
-For a manual isolated development instance, also set `RUNPILOT_DATA_ROOT_FILE`
+For a development instance from this checkout run `tools/dev.sh`: it installs
+every plugin under `plugins/` from source into the git-ignored `./data`,
+enables them on the first start, keeps its locator in `./data/.data-root` and
+runs on port 9070 (`PORT=…` to change; `--wasm` also rebuilds the TinyGo
+backends, using Docker when TinyGo is not installed). For any other manual
+isolated instance, also set `RUNPILOT_DATA_ROOT_FILE`
 to a locator inside its temporary deployment directory. Separate `--data-dir`
 and `--config-dir` flags do not isolate the deployment locator: completing
 initial setup persists the selected data root there.

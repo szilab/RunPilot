@@ -161,7 +161,6 @@ const {chromium} = require(process.env.RUNPILOT_PLAYWRIGHT_MODULE);
     await page.locator(".account-menu > summary").click();
     await page.locator("#logoutButton").click();
     await page.locator("#loginDialog[open]").waitFor();
-    assert.equal(await page.evaluate(() => localStorage.getItem("runpilot.token")), null);
     assert.deepEqual(errors, []);
     await context.close();
     console.log("Login, persistent metrics across navigation/reload, keyboard tabs, drafts, plugins, confirmations, themes, responsive shell, Terminal, account popup/password change, nested basePath, and logout passed");

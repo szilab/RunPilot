@@ -19,7 +19,7 @@ func TestOpenDoesNotCreateLegacyHistoryLayout(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dataDir, "legacy", "history.db")); !os.IsNotExist(err) {
 		t.Fatalf("legacy database exists: %v", err)
 	}
-	if got := store.RunLogPath("backup-run"); got != filepath.Join(dataDir, "internal", "runs", "backup-run.log") {
-		t.Fatalf("internal log path = %s", got)
+	if _, err := os.Stat(filepath.Join(dataDir, "internal", "runs")); !os.IsNotExist(err) {
+		t.Fatalf("obsolete Backup log directory created: %v", err)
 	}
 }

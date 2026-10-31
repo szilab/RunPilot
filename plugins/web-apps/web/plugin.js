@@ -8,13 +8,6 @@ export function launchGateway(opened, opener = window.open.bind(window)) {
   opener(base.pathname + "#" + params, "_blank", "noopener,noreferrer");
 }
 
-async function removeWorker(prefix) {
-  try {
-    const registration = await navigator.serviceWorker?.getRegistration(new URL(prefix, location.origin).href);
-    if (registration && new URL(registration.scope).pathname === prefix && new URL(registration.active?.scriptURL || registration.waiting?.scriptURL).pathname === prefix + "__runpilot__/sw.js") await registration.unregister();
-  } catch { /* Stale workers still fail closed after host-side publication removal. */ }
-}
-
 export async function activate(runpilot) {
   const call = async (method, params = {}) => { const result = await runpilot.ws.call("web.apps", method, params); if (result?.error) throw new Error(result.error.message || "Plugin request failed"); return result; };
   const escape = runpilot.ui.escape;
@@ -50,7 +43,7 @@ export async function activate(runpilot) {
         target.customHeaders[line.slice(0, split).trim()] = line.slice(split + 1).trim();
       }
       if (!Object.keys(target.customHeaders).length) delete target.customHeaders;
-      try { await call("apps.targets.save", { target }); if (existing.mountPath && existing.mountPath !== target.mountPath) await removeWorker(publicPrefix(base, existing.mountPath)); dialog.close(); await load(); }
+      try { await call("apps.targets.save", { target }); dialog.close(); await load(); }
       catch (error) { dialog.querySelector("[data-error]").textContent = error.message; button.disabled = false; }
     };
     dialog.addEventListener("close", () => dialog.remove(), { once: true }); document.body.append(dialog); dialog.showModal();
@@ -68,7 +61,7 @@ export async function activate(runpilot) {
       const button = (label, style, work) => { const el = document.createElement("button"); el.type = "button"; el.className = "button " + style; el.textContent = label; el.onclick = work; actions.append(el); };
       button("Open", "primary small", () => action(async () => { const params = { targetId: target.id }; if (target.forwardPublicHost || target.forwardPublicScheme) { params.publicHost = location.host; params.publicScheme = location.protocol.slice(0, -1); } const opened = await call("apps.session.open", params); launchGateway(opened); }));
       button("Edit", "secondary small", () => edit(target));
-      button("Delete", "danger small", async () => { if (await (runpilot.ui.confirm ? runpilot.ui.confirm({title:"Delete Web App?",message:`Remove “${target.name}” and close its active sessions?`,confirmLabel:"Delete Web App",danger:true}) : confirm(`Delete Web App “${target.name}”?`))) void action(async () => { await call("apps.targets.delete", { id: target.id }); await removeWorker(publicPrefix(base, target.mountPath)); }); });
+      button("Delete", "danger small", async () => { if (await (runpilot.ui.confirm ? runpilot.ui.confirm({title:"Delete Web App?",message:`Remove “${target.name}” and close its active sessions?`,confirmLabel:"Delete Web App",danger:true}) : confirm(`Delete Web App “${target.name}”?`))) void action(async () => { await call("apps.targets.delete", { id: target.id }); }); });
       const active = sessions.filter(session => session.targetId === target.id);
       if (active.length) button(`Close sessions (${active.length})`, "secondary small", () => action(async () => { for (const session of active) await call("apps.session.close", { id: session.id }); }));
       card.querySelector(".webapps-meta-row").append(actions); root.append(card);
@@ -80,7 +73,7 @@ export async function activate(runpilot) {
     try { const [t, s] = await Promise.all([call("apps.targets.list"), call("apps.sessions.list")]); targets = t.targets; sessions = s.sessions; }
     catch (error) { message = error.message; } render();
   }
-  runpilot.navigation.register({ id: "web-apps", title: "Web Apps", shortcut:{title:"Open Web Apps",description:"Your web applications",order:40}, description: "Secure access to the web applications on your host.", icon: { src: new URL("./icon.svg", import.meta.url).href }, render(root) { page = root; root.replaceChildren(runpilot.ui.EmptyState({title:"Loading Web Apps…",message:"Retrieving your saved applications."})); void load(); }, headerActions(root) { const button = document.createElement("button"); button.className = "button primary small"; button.textContent = "Add Web App"; button.onclick = () => edit(); root.append(button); } });
+  runpilot.navigation.register({ id: "web-apps", title: "Web Apps", description: "Secure access to the web applications on your host.", icon: { src: new URL("./icon.svg", import.meta.url).href }, render(root) { page = root; root.replaceChildren(runpilot.ui.EmptyState({title:"Loading Web Apps…",message:"Retrieving your saved applications."})); void load(); }, headerActions(root) { const button = document.createElement("button"); button.className = "button primary small"; button.textContent = "Add Web App"; button.onclick = () => edit(); root.append(button); } });
   const refresh = setInterval(() => { if (page?.isConnected && page.classList.contains("active")) void load(); }, 30000);
   return { dispose() { disposed = true; clearInterval(refresh); } };
 }

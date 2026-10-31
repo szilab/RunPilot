@@ -4,17 +4,8 @@
 .tasks-plugin-dialog { max-height: calc(100vh - 32px); overflow: auto; }
 .tasks-plugin-advanced { min-width: 0; }
 .tasks-plugin-output { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
-.run-history-dialog [data-history-list] { padding-inline-end: 8px; }
-.run-history-dialog [data-history-list] > .run-history-row.active { box-shadow: inset 0 0 0 2px var(--rp-accent); }
-.run-history-dialog [data-history-list] > .run-history-row:first-child { border-radius: calc(var(--rp-radius-large) - 1px) calc(var(--rp-radius-large) - 1px) 0 0; }
-.run-history-dialog [data-history-list] > .run-history-row:last-child { border-radius: 0 0 calc(var(--rp-radius-large) - 1px) calc(var(--rp-radius-large) - 1px); }
-.run-history-dialog [data-history-list] > .run-history-row:only-child { border-radius: calc(var(--rp-radius-large) - 1px); }
 .environment-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; margin-top: 8px; }
 .run-history-dialog { width: min(1050px, calc(100vw - 32px)); }
-.run-history-layout { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(0, 1.5fr); gap: 16px; }
-.run-history-row { display: grid; width: 100%; gap: 8px; text-align: left; padding: 14px; border: 0; border-bottom: 1px solid var(--rp-border); color: var(--rp-text); background: var(--rp-surface-elevated); }
-.run-history-row:hover { background: var(--rp-accent-soft, var(--rp-surface)); }
-.run-history-output { margin: 0; min-height: 280px; }
 @media (max-width: 700px) {
   .environment-row { grid-template-columns: minmax(0, 1fr); }
   .environment-row button { justify-self: start; }
@@ -45,4 +36,40 @@
 .task-card-actions > div { display: flex; flex-wrap: wrap; gap: 6px; }
 @media (max-width: 900px) {
   .tasks-plugin .task-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Editor: only the chosen task type's fields are shown. */
+.tasks-plugin-section { min-width: 0; margin: 0; padding: 0; border: 0; align-items: end; }
+.tasks-plugin-section.hidden { display: none; }
+.tasks-plugin-schedule-value > input { width: 100%; }
+.tasks-plugin-type { display: grid; gap: 6px; color: var(--rp-text); font-size: 13px; }
+.tasks-plugin-type .rp-segmented { width: 100%; }
+.tasks-plugin-type .rp-segmented > label { flex: 1; justify-content: center; cursor: pointer; }
+.tasks-plugin-type .rp-segmented > label > input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.tasks-plugin-type .rp-segmented > label:has(input:checked) { background: var(--rp-accent-soft); color: var(--rp-accent); }
+.tasks-plugin-type .rp-segmented > label:has(input:focus-visible) { outline: 2px solid var(--rp-accent); outline-offset: 1px; }
+.tasks-plugin-check { align-self: center; }
+
+/* Run history: a paged list of compact rows beside the selected output. */
+.run-history-layout { display: grid; grid-template-columns: minmax(280px, .9fr) minmax(0, 1.6fr); gap: 16px; align-items: stretch; }
+.run-history-runs { display: grid; gap: 10px; min-width: 0; }
+.run-history-list { overflow: hidden; border: 1px solid var(--rp-border); border-radius: var(--rp-radius-sm); background: var(--rp-surface-elevated); }
+.run-history-row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 0; border-bottom: 1px solid var(--rp-border); border-left: 3px solid transparent; border-radius: 0; color: var(--rp-text); background: transparent; text-align: left; cursor: pointer; }
+.run-history-row:last-child { border-bottom: 0; }
+.run-history-row:hover { background: var(--rp-accent-soft); }
+.run-history-row.active { border-left-color: var(--rp-accent); background: var(--rp-accent-soft); }
+.run-history-row:focus-visible { outline: 2px solid var(--rp-accent); outline-offset: -2px; }
+.run-history-when { display: grid; min-width: 0; gap: 1px; }
+.run-history-when strong { color: var(--rp-text-strong); font-size: 13px; white-space: nowrap; }
+.run-history-when .meta { font-size: 12px; }
+.run-history-message { overflow: hidden; color: var(--rp-text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.run-history-row .status { flex: 0 0 auto; }
+.run-history-pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--rp-text-muted); font-size: 12px; }
+.run-history-pager:empty { display: none; }
+.run-history-log { position: relative; min-width: 0; min-height: 320px; }
+/* The output fills the height of the run list and scrolls inside it. */
+.run-history-output { position: absolute; inset: 0; margin: 0; min-height: 0; max-height: none; }
+@media (max-width: 700px) {
+  .run-history-layout { grid-template-columns: minmax(0, 1fr); }
+  .run-history-output { position: static; min-height: 280px; max-height: 50vh; }
 }
