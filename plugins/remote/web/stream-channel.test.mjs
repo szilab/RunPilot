@@ -55,3 +55,11 @@ test("raw channel rejects text frames", () => {
   const channel = createStreamChannel(streamHandle(), { label: "VNC" });
   assert.throws(() => channel.send("password"), /binary/);
 });
+
+test("raw channel exposes the properties noVNC checks with Object.keys", () => {
+  const channel = createStreamChannel(streamHandle(), { label: "VNC" });
+  const keys = [...Object.keys(channel), ...Object.getOwnPropertyNames(Object.getPrototypeOf(channel))];
+  for (const prop of ["send", "close", "binaryType", "onerror", "onmessage", "onopen", "protocol", "readyState"]) {
+    assert.ok(keys.includes(prop), `missing ${prop}`);
+  }
+});

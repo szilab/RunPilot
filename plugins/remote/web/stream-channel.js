@@ -20,8 +20,10 @@ export function createStreamChannel(stream, { label = "Remote", pending = [], an
   const channel = new EventTarget();
   const handlers = Object.create(null);
   for (const name of ["open", "message", "error", "close"]) {
+    // Enumerable so noVNC's Object.keys based raw channel check finds them.
     Object.defineProperty(channel, `on${name}`, {
       configurable: true,
+      enumerable: true,
       get: () => handlers[name] || null,
       set: handler => { handlers[name] = typeof handler === "function" ? handler : null; },
     });

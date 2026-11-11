@@ -31,7 +31,7 @@
       this._sendChain = Promise.resolve();
       this._handlers = Object.create(null);
       for (const name of ["open", "message", "error", "close"]) Object.defineProperty(this, "on" + name, {
-        configurable: true, get: () => this._handlers[name] || null,
+        configurable: true, enumerable: true, get: () => this._handlers[name] || null,
         set: handler => { if (this._handlers[name]) this.removeEventListener(name, this._handlers[name]); this._handlers[name] = typeof handler === "function" ? handler : null; if (this._handlers[name]) this.addEventListener(name, this._handlers[name]); }
       });
       const channel = new MessageChannel(); this._port = channel.port1;

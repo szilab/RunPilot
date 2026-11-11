@@ -2,7 +2,7 @@ apiVersion: runpilot.plugin/v1
 id: remote
 name: Remote Desktop
 description: RDP and VNC remote desktop access and Xpra sessions on the RunPilot host
-version: 1.2.0
+version: 1.2.1
 requires:
   backend: ">=1.2.0 <2.0.0"
   frontend: ">=1.0.0 <2.0.0"

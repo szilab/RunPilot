@@ -31,6 +31,13 @@ const withTimeout = (promise, label) => {
 (async () => {
   const WS = context.WebSocket;
   assert.equal(WS.CONNECTING, 0); assert.equal(WS.OPEN, 1); assert.equal(WS.CLOSING, 2); assert.equal(WS.CLOSED, 3);
+  {
+    // noVNC checks raw channels with Object.keys plus the prototype's own names.
+    const probe = new WS("wss://public.example/p/app/probe"); sockets.push(probe);
+    const names = [...Object.keys(probe), ...Object.getOwnPropertyNames(Object.getPrototypeOf(probe))];
+    for (const name of ["send", "close", "binaryType", "onerror", "onmessage", "onopen", "protocol", "readyState"]) assert.ok(names.includes(name), `missing ${name}`);
+    probe._port.close(); bridges.at(-1).port.close();
+  }
   for (const protocols of [undefined, "runpilot", ["runpilot", "v2"]]) {
     const socket = protocols === undefined ? new WS("wss://public.example/p/app/socket?x=1") : new WS("wss://public.example/p/app/socket", protocols);
     sockets.push(socket);
