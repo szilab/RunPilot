@@ -79,7 +79,13 @@ func TestBackupPluginWASMRunsJobs(t *testing.T) {
 				return view["status"].(map[string]any)
 			}
 		}
-		t.Fatalf("job %s not listed", id)
+		for _, item := range must("backup.list", nil)["repositories"].([]any) {
+			view := item.(map[string]any)
+			if view["repository"].(map[string]any)["id"] == id {
+				return view["status"].(map[string]any)
+			}
+		}
+		t.Fatalf("job or repository %s not listed", id)
 		return nil
 	}
 	finished := func(id string) map[string]any {
@@ -102,9 +108,15 @@ func TestBackupPluginWASMRunsJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := t.TempDir()
+	repository := must("backup.repository.create", map[string]any{"repository": map[string]any{"name": "Local", "location": filepath.Join(tools, "repo"), "environmentFile": envFile, "executable": restic}})
+	repoID := repository["repository"].(map[string]any)["id"].(string)
+	must("backup.repository.maintenance", map[string]any{"id": repoID, "kind": "init"})
+	if state := finished(repoID); state["lastKind"] != "init" || state["lastSuccess"] != true {
+		t.Fatalf("init = %v", state)
+	}
 	created := must("backup.create", map[string]any{"job": map[string]any{"name": "Data", "engine": "restic", "enabled": true,
 		"schedule": map[string]any{"type": "daily", "timeOfDay": "03:00"},
-		"restic":   map[string]any{"executable": restic, "repository": filepath.Join(tools, "repo"), "environmentFile": envFile, "sources": []string{source}, "retention": map[string]any{"keepLast": 3}}}})
+		"restic":   map[string]any{"repositoryId": repoID, "sources": []string{source}, "retention": map[string]any{"keepLast": 3}}}})
 	id := created["job"].(map[string]any)["id"].(string)
 	next, err := time.Parse(time.RFC3339Nano, created["status"].(map[string]any)["nextRunAt"].(string))
 	if err != nil || next.Before(time.Now()) || next.After(time.Now().Add(25*time.Hour)) {
@@ -115,7 +127,7 @@ func TestBackupPluginWASMRunsJobs(t *testing.T) {
 		t.Fatalf("restic run = %v", state)
 	}
 	calls, _ := os.ReadFile(filepath.Join(tools, "calls.log"))
-	if lines := strings.Split(strings.TrimSpace(string(calls)), "\n"); len(lines) != 2 || !strings.HasSuffix(lines[0], "backup "+source) || !strings.Contains(lines[1], "forget --keep-last 3") {
+	if lines := strings.Split(strings.TrimSpace(string(calls)), "\n"); len(lines) != 3 || !strings.HasSuffix(lines[0], " init") || !strings.HasSuffix(lines[1], "backup "+source) || !strings.Contains(lines[2], "forget --keep-last 3") {
 		t.Fatalf("restic calls = %q", calls)
 	}
 	runs := must("backup.history", map[string]any{"id": id})["runs"].([]any)
@@ -123,19 +135,19 @@ func TestBackupPluginWASMRunsJobs(t *testing.T) {
 	if !strings.Contains(output, "snapshot 01234567 saved") || !strings.Contains(output, "Step 2/2: retention") || strings.Contains(output, "s3cret") {
 		t.Fatalf("output = %q", output)
 	}
-	snapshots := must("backup.snapshots", map[string]any{"id": id})["snapshots"].([]any)
+	snapshots := must("backup.repository.snapshots", map[string]any{"id": repoID})["snapshots"].([]any)
 	if len(snapshots) != 1 || snapshots[0].(map[string]any)["shortId"] != "01234567" {
 		t.Fatalf("snapshots = %v", snapshots)
 	}
 	target := filepath.Join(t.TempDir(), "restored")
-	must("backup.restore", map[string]any{"id": id, "snapshot": "0123456789abcdef", "target": target})
-	if state := finished(id); state["lastKind"] != "restore" || state["lastSuccess"] != true {
+	must("backup.repository.restore", map[string]any{"id": repoID, "snapshot": "0123456789abcdef", "target": target})
+	if state := finished(repoID); state["lastKind"] != "restore" || state["lastSuccess"] != true {
 		t.Fatalf("restore = %v", state)
 	}
 	if err := os.WriteFile(filepath.Join(source, "keep.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, message := call("backup.restore", map[string]any{"id": id, "snapshot": "latest", "target": source}); message == "" {
+	if _, message := call("backup.repository.restore", map[string]any{"id": repoID, "snapshot": "latest", "target": source}); message == "" {
 		t.Fatal("a restore into the backed-up folder was accepted")
 	}
 	if folders := must("backup.browse", map[string]any{"path": strings.TrimPrefix(filepath.ToSlash(tools), "/")})["folders"].([]any); len(folders) != 0 {

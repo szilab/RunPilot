@@ -25,7 +25,7 @@ func (p *plugin) handle(operation string, request json.RawMessage) (any, *rpcErr
 	switch operation {
 	case "backup.list":
 		p.reconcile()
-		result := map[string]any{"jobs": p.views(), "os": p.hostOS(), "tools": p.toolsFor(false)}
+		result := map[string]any{"jobs": p.views(), "repositories": p.repoViews(), "os": p.hostOS(), "tools": p.toolsFor(false)}
 		if p.loadError != "" {
 			result["loadError"] = p.loadError
 		}
@@ -58,20 +58,44 @@ func (p *plugin) handle(operation string, request json.RawMessage) (any, *rpcErr
 			return nil, err
 		}
 		if operation == "backup.stop" {
-			if e := p.stop(j); e != nil {
+			if e := p.stop(j.ID, j.Name); e != nil {
 				return nil, hostFailure(e)
 			}
 			return p.view(j, p.nextRuns()), nil
 		}
-		if e := validateJob(j, p.hostOS()); e != nil {
+		if e := p.checkJob(j); e != nil {
 			return nil, rpcFail("invalid_argument", e.Error())
 		}
-		runID, e := p.start(j, kindBackup, backupPlan(j, p.hostOS()), true)
+		repo := p.repoOf(j)
+		runID, e := p.start(jobSubject(j, repo), kindBackup, backupPlan(j, repo, p.hostOS()), true)
 		if e != nil {
 			return nil, hostFailure(e)
 		}
 		return map[string]any{"runId": runID, "job": p.view(j, p.nextRuns())}, nil
-	case "backup.maintenance":
+	case "backup.repository.create", "backup.repository.update":
+		var args struct {
+			Repository Repository `json:"repository"`
+		}
+		if err := decodeRequest(request, &args); err != nil {
+			return nil, err
+		}
+		return p.saveRepository(args.Repository, operation == "backup.repository.create")
+	case "backup.repository.delete":
+		repo, err := p.repoFor(request)
+		if err != nil {
+			return nil, err
+		}
+		return p.removeRepository(repo)
+	case "backup.repository.stop":
+		repo, err := p.repoFor(request)
+		if err != nil {
+			return nil, err
+		}
+		if e := p.stop(repo.ID, repo.Name); e != nil {
+			return nil, hostFailure(e)
+		}
+		return p.repoView(repo), nil
+	case "backup.repository.maintenance":
 		var args struct {
 			ID   string `json:"id"`
 			Kind string `json:"kind"`
@@ -79,29 +103,29 @@ func (p *plugin) handle(operation string, request json.RawMessage) (any, *rpcErr
 		if err := decodeRequest(request, &args); err != nil {
 			return nil, err
 		}
-		j, err := p.resticJob(args.ID)
+		repo, err := p.usableRepo(args.ID)
 		if err != nil {
 			return nil, err
 		}
 		if _, ok := maintenance[args.Kind]; !ok {
 			return nil, rpcFail("invalid_argument", "unknown maintenance operation")
 		}
-		runID, e := p.start(j, args.Kind, maintenancePlan(args.Kind, j.Restic, p.hostOS()), true)
+		runID, e := p.start(repoSubject(repo), args.Kind, maintenancePlan(args.Kind, repo, p.hostOS()), true)
 		if e != nil {
 			return nil, hostFailure(e)
 		}
 		return map[string]any{"runId": runID}, nil
-	case "backup.snapshots":
+	case "backup.repository.snapshots":
 		var args idRequest
 		if err := decodeRequest(request, &args); err != nil {
 			return nil, err
 		}
-		j, err := p.resticJob(args.ID)
+		repo, err := p.usableRepo(args.ID)
 		if err != nil {
 			return nil, err
 		}
-		return p.snapshots(j)
-	case "backup.restore":
+		return p.snapshots(repo)
+	case "backup.repository.restore":
 		var args struct {
 			ID       string   `json:"id"`
 			Snapshot string   `json:"snapshot"`
@@ -111,11 +135,11 @@ func (p *plugin) handle(operation string, request json.RawMessage) (any, *rpcErr
 		if err := decodeRequest(request, &args); err != nil {
 			return nil, err
 		}
-		j, err := p.resticJob(args.ID)
+		repo, err := p.usableRepo(args.ID)
 		if err != nil {
 			return nil, err
 		}
-		return p.restore(j, strings.TrimSpace(args.Snapshot), strings.TrimSpace(args.Target), trimList(args.Include))
+		return p.restore(repo, strings.TrimSpace(args.Snapshot), strings.TrimSpace(args.Target), trimList(args.Include))
 	case "backup.history":
 		var args struct {
 			ID    string `json:"id"`
@@ -190,19 +214,32 @@ func (p *plugin) jobFor(request json.RawMessage) (*Job, *rpcError) {
 	return j, nil
 }
 
-func (p *plugin) resticJob(id string) (*Job, *rpcError) {
+func (p *plugin) repoFor(request json.RawMessage) (*Repository, *rpcError) {
+	var args idRequest
+	if err := decodeRequest(request, &args); err != nil {
+		return nil, err
+	}
+	if err := p.writable(); err != nil {
+		return nil, err
+	}
+	repo := p.findRepo(args.ID)
+	if repo == nil {
+		return nil, rpcFail("not_found", "unknown repository")
+	}
+	return repo, nil
+}
+
+// usableRepo returns a repository that can be handed to restic.
+func (p *plugin) usableRepo(id string) (*Repository, *rpcError) {
 	raw, _ := json.Marshal(idRequest{ID: id})
-	j, err := p.jobFor(raw)
+	repo, err := p.repoFor(raw)
 	if err != nil {
 		return nil, err
 	}
-	if j.Engine != engineRestic || j.Restic == nil {
-		return nil, rpcFail("invalid_argument", "only restic jobs have snapshots and repository tools")
-	}
-	if e := validateJob(j, p.hostOS()); e != nil {
+	if e := validateRepository(repo, p.hostOS()); e != nil {
 		return nil, rpcFail("invalid_argument", e.Error())
 	}
-	return j, nil
+	return repo, nil
 }
 
 // save1 creates or updates a job. The previous schedule is restored when
@@ -230,8 +267,16 @@ func (p *plugin) save1(input Job, create bool) (any, *rpcError) {
 		if p.jobs[index].Engine != j.Engine {
 			return nil, rpcFail("invalid_argument", "the engine of a job cannot be changed")
 		}
+		// The repository is chosen once; moving a backup to another
+		// repository would orphan its snapshots and retention.
+		if old := p.jobs[index].Restic; old != nil && j.Restic != nil && old.RepositoryID != j.Restic.RepositoryID {
+			return nil, rpcFail("invalid_argument", "the repository of a backup cannot be changed; delete the backup and create a new one")
+		}
 	}
 	if err := validateJob(&j, p.hostOS()); err != nil {
+		return nil, rpcFail("invalid_argument", err.Error())
+	}
+	if err := p.checkJob(&j); err != nil {
 		return nil, rpcFail("invalid_argument", err.Error())
 	}
 	if err := p.validateSchedule(&j); err != nil {
@@ -285,6 +330,74 @@ func (p *plugin) remove(j *Job) (any, *rpcError) {
 	return map[string]any{"deleted": j.ID}, nil
 }
 
+// saveRepository creates or updates a repository. Its location is fixed once
+// backups use it, because they own the snapshots stored there.
+func (p *plugin) saveRepository(input Repository, create bool) (any, *rpcError) {
+	if err := p.writable(); err != nil {
+		return nil, err
+	}
+	repo := input
+	normalizeRepository(&repo)
+	index := -1
+	next := p.nextRepo
+	if create {
+		if len(p.repos) >= maxRepositories {
+			return nil, rpcFail("limit_reached", "too many repositories")
+		}
+		repo.ID, next = "repo-"+itoa(next), next+1
+	} else {
+		for i, existing := range p.repos {
+			if existing.ID == repo.ID {
+				index = i
+			}
+		}
+		if index < 0 {
+			return nil, rpcFail("not_found", "unknown repository")
+		}
+		if p.repos[index].Location != repo.Location && p.jobsUsing(repo.ID) > 0 {
+			return nil, rpcFail("invalid_argument", "the location of a repository used by backups cannot be changed")
+		}
+	}
+	if err := validateRepository(&repo, p.hostOS()); err != nil {
+		return nil, rpcFail("invalid_argument", err.Error())
+	}
+	repos := append([]*Repository(nil), p.repos...)
+	if create {
+		repos = append(repos, &repo)
+	} else {
+		repos[index] = &repo
+	}
+	if err := p.saveRepos(repos, next); err != nil {
+		return nil, hostFailure(err)
+	}
+	p.repos, p.nextRepo = repos, next
+	p.runtimeOf(repo.ID).err = ""
+	p.publish("backup.changed", map[string]any{"id": repo.ID})
+	return p.repoView(&repo), nil
+}
+
+func (p *plugin) removeRepository(repo *Repository) (any, *rpcError) {
+	if p.runtimeOf(repo.ID).op != nil {
+		return nil, rpcFail("already_running", "stop \""+repo.Name+"\" before deleting it")
+	}
+	if n := p.jobsUsing(repo.ID); n > 0 {
+		return nil, rpcFail("in_use", "\""+repo.Name+"\" is used by "+itoa(n)+" backup(s); delete them first")
+	}
+	repos := []*Repository{}
+	for _, existing := range p.repos {
+		if existing.ID != repo.ID {
+			repos = append(repos, existing)
+		}
+	}
+	if err := p.saveRepos(repos, p.nextRepo); err != nil {
+		return nil, hostFailure(err)
+	}
+	p.repos = repos
+	delete(p.rt, repo.ID)
+	p.publish("backup.changed", map[string]any{"id": repo.ID})
+	return map[string]any{"deleted": repo.ID}, nil
+}
+
 type snapshot struct {
 	ID       string   `json:"id"`
 	ShortID  string   `json:"shortId"`
@@ -296,17 +409,15 @@ type snapshot struct {
 	Bytes    int64    `json:"bytes,omitempty"`
 }
 
-// snapshots lists the job's snapshots without locking the repository, so it
+// snapshots lists the repository's snapshots without locking the repository, so it
 // also works while a backup runs. It is a bounded call; slow remote
 // repositories time out instead of blocking the plugin.
-func (p *plugin) snapshots(j *Job) (any, *rpcError) {
-	env, err := p.environment(j)
+func (p *plugin) snapshots(repo *Repository) (any, *rpcError) {
+	env, err := p.environment(repo)
 	if err != nil {
 		return nil, rpcFail("invalid_argument", err.Error())
 	}
-	r := j.Restic
-	args := append(resticBase(r), "--no-lock", "snapshots", "--json")
-	args = append(args, resticTagFilter(r)...)
+	args := append(resticBase(repo), "--no-lock", "snapshots", "--json")
 	var result struct {
 		ExitCode int    `json:"exitCode"`
 		Stdout   string `json:"stdout"`
@@ -314,7 +425,7 @@ func (p *plugin) snapshots(j *Job) (any, *rpcError) {
 		TimedOut bool   `json:"timedOut"`
 		Trunc    bool   `json:"stdoutTruncated"`
 	}
-	command := executable(r.Executable, "restic", p.hostOS())
+	command := executable(repo.Executable, "restic", p.hostOS())
 	if err := callHost("process.run", map[string]any{"command": command, "args": args, "environment": env, "timeoutSeconds": 100, "maxOutputBytes": 2 << 20, "tailOutput": false}, &result); err != nil {
 		if isNotFound(err) {
 			return nil, rpcFail("tool_missing", command+" is not installed on this host")
@@ -372,7 +483,7 @@ func lastLine(text, fallback string) string {
 
 // restore restores a snapshot into a new or empty folder. It never writes
 // into the original location.
-func (p *plugin) restore(j *Job, snapshotID, target string, include []string) (any, *rpcError) {
+func (p *plugin) restore(repo *Repository, snapshotID, target string, include []string) (any, *rpcError) {
 	if !validSnapshot(snapshotID) {
 		return nil, rpcFail("invalid_argument", "invalid snapshot")
 	}
@@ -380,9 +491,14 @@ func (p *plugin) restore(j *Job, snapshotID, target string, include []string) (a
 	if !absolutePath(target, hostOS) {
 		return nil, rpcFail("invalid_argument", "the restore target must be an absolute path")
 	}
-	for _, source := range j.Restic.Sources {
-		if sameFolder(source, target, hostOS) {
-			return nil, rpcFail("invalid_argument", "restore into a new folder outside the backed-up folders")
+	for _, j := range p.jobs {
+		if j.Restic == nil || j.Restic.RepositoryID != repo.ID {
+			continue
+		}
+		for _, source := range j.Restic.Sources {
+			if sameFolder(source, target, hostOS) {
+				return nil, rpcFail("invalid_argument", "restore into a new folder outside the backed-up folders")
+			}
 		}
 	}
 	if err := validList("paths", include); err != nil {
@@ -391,7 +507,7 @@ func (p *plugin) restore(j *Job, snapshotID, target string, include []string) (a
 	if err := p.emptyOrMissing(target); err != nil {
 		return nil, err
 	}
-	runID, err := p.start(j, kindRestore, restorePlan(j.Restic, hostOS, snapshotID, target, include), true)
+	runID, err := p.start(repoSubject(repo), kindRestore, restorePlan(repo, hostOS, snapshotID, target, include), true)
 	if err != nil {
 		return nil, hostFailure(err)
 	}
@@ -428,7 +544,11 @@ func (p *plugin) event(operation string, payload json.RawMessage) {
 				p.unregister(fired.ID)
 				return
 			}
-			_, _ = p.start(j, kindBackup, backupPlan(j, p.hostOS()), false)
+			if p.checkJob(j) != nil {
+				return
+			}
+			repo := p.repoOf(j)
+			_, _ = p.start(jobSubject(j, repo), kindBackup, backupPlan(j, repo, p.hostOS()), false)
 		}
 	}
 }

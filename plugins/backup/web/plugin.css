@@ -17,6 +17,10 @@
 .backup-tool-notice > div { margin-top: 4px; }
 @media (max-width: 900px) { .backup-plugin .backup-grid { grid-template-columns: minmax(0, 1fr); } }
 
+/* Backups / Repositories switch, like the Remote plugin's protocol tabs. */
+.backup-tabs { margin-bottom: 16px; }
+.backup-plugin > .notice { margin-bottom: 16px; }
+
 /* Editor */
 .backup-editor-dialog { max-height: calc(100vh - 32px); overflow: auto; }
 .backup-section { min-width: 0; margin: 0; padding: 0; border: 0; align-items: end; }
@@ -36,6 +40,8 @@
 .backup-engine-choice .rp-segmented > label:has(input:checked) { background: var(--rp-accent-soft); color: var(--rp-accent); }
 .backup-engine-choice .rp-segmented > label:has(input:focus-visible) { outline: 2px solid var(--rp-accent); outline-offset: 1px; }
 .backup-engine-help { margin: 0; }
+.backup-repository-dialog { width: min(560px, calc(100vw - 32px)); }
+.backup-editor-dialog label > .meta { font-weight: 400; }
 .backup-retention { display: grid; gap: 6px; }
 .backup-retention strong { color: var(--rp-text-strong); font-size: 13px; }
 .backup-retention-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
@@ -57,6 +63,7 @@
 /* Snapshots and restore */
 .backup-snapshots-dialog { width: min(980px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
 .backup-snapshots-dialog .dialog-head p { margin: 2px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.backup-snapshot-list .notice > div { margin-top: 4px; }
 .backup-snapshot-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .backup-snapshot-tools > span { flex: 1; }
 .backup-snapshot-list { overflow: auto; max-height: 45vh; border: 1px solid var(--rp-border); border-radius: var(--rp-radius-sm); }

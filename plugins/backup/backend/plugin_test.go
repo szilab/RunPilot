@@ -158,7 +158,17 @@ func setup(t *testing.T, hostOS string) (*plugin, *fakeHost) {
 	t.Cleanup(func() { callHost = original })
 	p := newPlugin()
 	p.init()
+	// Every test starts with one repository, repo-1, that restic jobs use.
+	params := repositoryParams()
+	if hostOS == "windows" {
+		params["passwordFile"] = `C:\ProgramData\restic\password`
+	}
+	call(t, p, "backup.repository.create", map[string]any{"repository": params})
 	return p, host
+}
+
+func repositoryParams() map[string]any {
+	return map[string]any{"name": " Offsite ", "location": "/backup/repo", "passwordFile": "/etc/restic/password"}
 }
 
 func call(t *testing.T, p *plugin, method string, params any) map[string]any {
@@ -184,7 +194,7 @@ func callRaw(p *plugin, method string, params any) (map[string]any, *rpcError) {
 
 func resticJob() map[string]any {
 	return map[string]any{"name": " Photos ", "enabled": true, "engine": "restic", "schedule": map[string]any{"type": "daily", "timeOfDay": "03:00"},
-		"restic": map[string]any{"repository": "/backup/repo", "passwordFile": "/etc/restic/password", "sources": []string{"/srv/photos", " "}, "excludes": []string{"*.tmp"}, "tags": []string{"photos"},
+		"restic": map[string]any{"repositoryId": "repo-1", "sources": []string{"/srv/photos", " "}, "excludes": []string{"*.tmp"}, "tags": []string{"photos"},
 			"retention": map[string]any{"keepDaily": 7, "keepMonthly": 6, "prune": true}, "checkAfterBackup": true}}
 }
 
@@ -301,15 +311,16 @@ func TestMirrorEnginesFollowTheHost(t *testing.T) {
 		{"name": "x", "engine": "rsync", "mirror": map[string]any{"source": "/srv", "destination": "/srv/backup"}},
 		{"name": "x", "engine": "rsync", "mirror": map[string]any{"source": "relative", "destination": "/b"}},
 		{"name": "x", "engine": "rdiff-backup"},
-		{"name": "x", "engine": "restic", "restic": map[string]any{"repository": "/r", "sources": []string{"/a"}}},
-		{"name": "x", "engine": "restic", "schedule": map[string]any{"type": "cron", "cron": "bad"}, "restic": map[string]any{"repository": "/r", "passwordFile": "/p", "sources": []string{"/a"}}},
-		{"name": "x", "engine": "restic", "restic": map[string]any{"repository": "/r", "passwordFile": "/p", "sources": []string{"/a"}, "retention": map[string]any{"keepWithin": "7 days"}}},
+		{"name": "x", "engine": "restic", "restic": map[string]any{"sources": []string{"/a"}}},
+		{"name": "x", "engine": "restic", "restic": map[string]any{"repositoryId": "repo-9", "sources": []string{"/a"}}},
+		{"name": "x", "engine": "restic", "schedule": map[string]any{"type": "cron", "cron": "bad"}, "restic": map[string]any{"repositoryId": "repo-1", "sources": []string{"/a"}}},
+		{"name": "x", "engine": "restic", "restic": map[string]any{"repositoryId": "repo-1", "sources": []string{"/a"}, "retention": map[string]any{"keepWithin": "7 days"}}},
 	} {
 		if _, failure := callRaw(p, "backup.create", map[string]any{"job": bad}); failure == nil {
 			t.Errorf("job %v was accepted", bad)
 		}
 	}
-	update := map[string]any{"id": "job-1", "name": "Docs", "engine": "restic", "restic": map[string]any{"repository": "/r", "passwordFile": "/p", "sources": []string{"/a"}}}
+	update := map[string]any{"id": "job-1", "name": "Docs", "engine": "restic", "restic": map[string]any{"repositoryId": "repo-1", "sources": []string{"/a"}}}
 	if _, failure := callRaw(p, "backup.update", map[string]any{"job": update}); failure == nil {
 		t.Fatal("the engine was changed")
 	}
@@ -334,23 +345,23 @@ func TestRestoreNeverOverwrites(t *testing.T) {
 	host.files["/|restore/old.txt"] = "x"
 	host.files["/|empty"] = ""
 	for _, params := range []map[string]any{
-		{"id": "job-1", "snapshot": "latest", "target": "/restore"},
-		{"id": "job-1", "snapshot": "latest", "target": "/srv/photos/restored"},
-		{"id": "job-1", "snapshot": "latest", "target": "relative"},
-		{"id": "job-1", "snapshot": "../x", "target": "/new"},
-		{"id": "job-1", "snapshot": "latest", "target": "/"},
+		{"id": "repo-1", "snapshot": "latest", "target": "/restore"},
+		{"id": "repo-1", "snapshot": "latest", "target": "/srv/photos/restored"},
+		{"id": "repo-1", "snapshot": "latest", "target": "relative"},
+		{"id": "repo-1", "snapshot": "../x", "target": "/new"},
+		{"id": "repo-1", "snapshot": "latest", "target": "/"},
 	} {
-		if _, failure := callRaw(p, "backup.restore", params); failure == nil {
+		if _, failure := callRaw(p, "backup.repository.restore", params); failure == nil {
 			t.Errorf("restore %v was accepted", params)
 		}
 	}
-	call(t, p, "backup.restore", map[string]any{"id": "job-1", "snapshot": "4f2a9c1e", "target": "/empty", "include": []string{"/srv/photos/2024"}})
+	call(t, p, "backup.repository.restore", map[string]any{"id": "repo-1", "snapshot": "4f2a9c1e", "target": "/empty", "include": []string{"/srv/photos/2024"}})
 	if args := strings.Join(toStrings(host.started[0]["args"]), " "); !strings.HasSuffix(args, "restore 4f2a9c1e --target /empty --include /srv/photos/2024") || host.runs["run-1"]["kind"] != "restore" {
 		t.Fatalf("restore = %v", args)
 	}
 	exit(p, "proc-1", 0)
-	call(t, p, "backup.restore", map[string]any{"id": "job-1", "snapshot": "latest", "target": "/missing/new"})
-	if _, failure := callRaw(p, "backup.maintenance", map[string]any{"id": "job-1", "kind": "forget"}); failure == nil {
+	call(t, p, "backup.repository.restore", map[string]any{"id": "repo-1", "snapshot": "latest", "target": "/missing/new"})
+	if _, failure := callRaw(p, "backup.repository.maintenance", map[string]any{"id": "repo-1", "kind": "forget"}); failure == nil {
 		t.Fatal("unknown maintenance accepted")
 	}
 }
@@ -358,9 +369,7 @@ func TestRestoreNeverOverwrites(t *testing.T) {
 func TestEnvironmentFileAndSnapshots(t *testing.T) {
 	p, host := setup(t, "linux")
 	job := resticJob()
-	restic := job["restic"].(map[string]any)
-	delete(restic, "passwordFile")
-	restic["environmentFile"] = "/etc/restic/b2.env"
+	call(t, p, "backup.repository.update", map[string]any{"repository": map[string]any{"id": "repo-1", "name": "Offsite", "location": "/backup/repo", "environmentFile": "/etc/restic/b2.env"}})
 	call(t, p, "backup.create", map[string]any{"job": job})
 	if _, failure := callRaw(p, "backup.run", map[string]any{"id": "job-1"}); failure == nil {
 		t.Fatal("a run without its environment file started")
@@ -371,6 +380,9 @@ func TestEnvironmentFileAndSnapshots(t *testing.T) {
 	host.files["/|etc/restic/b2.env"] = "# B2\nexport RESTIC_PASSWORD='secret value'\nB2_ACCOUNT_ID=abc\n\n"
 	call(t, p, "backup.run", map[string]any{"id": "job-1"})
 	env := host.started[0]["environment"].(map[string]any)
+	if env["RESTIC_PROGRESS_FPS"] != progressFPS {
+		t.Fatalf("restic gets no progress setting: %v", env)
+	}
 	if env["RESTIC_PASSWORD"] != "secret value" || env["B2_ACCOUNT_ID"] != "abc" {
 		t.Fatalf("environment = %v", env)
 	}
@@ -378,12 +390,12 @@ func TestEnvironmentFileAndSnapshots(t *testing.T) {
 		t.Fatal("a secret reached the log")
 	}
 	host.run = func(args map[string]any) (map[string]any, error) {
-		if strings.Join(toStrings(args["args"]), " ") != "--repo /backup/repo --no-lock snapshots --json --tag photos" || args["environment"].(map[string]any)["RESTIC_PASSWORD"] != "secret value" {
+		if strings.Join(toStrings(args["args"]), " ") != "--repo /backup/repo --no-lock snapshots --json" || args["environment"].(map[string]any)["RESTIC_PASSWORD"] != "secret value" {
 			t.Fatalf("snapshots call = %v", args)
 		}
 		return map[string]any{"exitCode": 0, "stdout": `[{"id":"aa","short_id":"a","time":"2026-10-01T03:00:00Z","paths":["/srv/photos"],"summary":{"total_files_processed":3,"total_bytes_processed":42}},{"id":"bb","short_id":"b","time":"2026-10-30T03:00:00Z","paths":["/srv/photos"]}]`}, nil
 	}
-	listed := call(t, p, "backup.snapshots", map[string]any{"id": "job-1"})
+	listed := call(t, p, "backup.repository.snapshots", map[string]any{"id": "repo-1"})
 	snapshots := listed["snapshots"].([]any)
 	if len(snapshots) != 2 || snapshots[0].(map[string]any)["id"] != "bb" || snapshots[1].(map[string]any)["bytes"] != float64(42) {
 		t.Fatalf("snapshots = %v", snapshots)
@@ -391,7 +403,7 @@ func TestEnvironmentFileAndSnapshots(t *testing.T) {
 	host.run = func(map[string]any) (map[string]any, error) {
 		return map[string]any{"exitCode": 1, "stderr": "Fatal: unable to open config file: no such file\n"}, nil
 	}
-	if _, failure := callRaw(p, "backup.snapshots", map[string]any{"id": "job-1"}); failure == nil || failure.Message != "Fatal: unable to open config file: no such file" {
+	if _, failure := callRaw(p, "backup.repository.snapshots", map[string]any{"id": "repo-1"}); failure == nil || failure.Message != "Fatal: unable to open config file: no such file" {
 		t.Fatalf("failed snapshots = %+v", failure)
 	}
 	host.run = func(map[string]any) (map[string]any, error) { return nil, capFailure("not_found") }
@@ -439,5 +451,78 @@ func TestStoredJobsSurviveARestart(t *testing.T) {
 	broken.init()
 	if _, failure := callRaw(broken, "backup.create", map[string]any{"job": resticJob()}); failure == nil || failure.Code != "state_unreadable" {
 		t.Fatalf("broken state = %+v", failure)
+	}
+}
+
+func TestRepositoriesAreSeparateObjects(t *testing.T) {
+	p, host := setup(t, "linux")
+	listed := call(t, p, "backup.list", nil)
+	repos := listed["repositories"].([]any)
+	if len(repos) != 1 || repos[0].(map[string]any)["repository"].(map[string]any)["name"] != "Offsite" || repos[0].(map[string]any)["jobs"] != float64(0) {
+		t.Fatalf("repositories = %v", repos)
+	}
+	for _, bad := range []map[string]any{
+		{"name": "", "location": "/r", "passwordFile": "/p"},
+		{"name": "x", "location": "", "passwordFile": "/p"},
+		{"name": "x", "location": "/r"},
+		{"name": "x", "location": "/r", "passwordFile": "relative"},
+	} {
+		if _, failure := callRaw(p, "backup.repository.create", map[string]any{"repository": bad}); failure == nil {
+			t.Errorf("repository %v was accepted", bad)
+		}
+	}
+
+	// Initialize and check run against the repository, not a backup.
+	call(t, p, "backup.repository.maintenance", map[string]any{"id": "repo-1", "kind": "init"})
+	if args := strings.Join(toStrings(host.started[0]["args"]), " "); args != "--repo /backup/repo --password-file /etc/restic/password init" || host.runs["run-1"]["subject"] != "repo-1" || host.runs["run-1"]["kind"] != "init" {
+		t.Fatalf("init = %v run %v", host.started[0], host.runs["run-1"])
+	}
+	if _, failure := callRaw(p, "backup.repository.maintenance", map[string]any{"id": "repo-1", "kind": "check"}); failure == nil || failure.Code != "already_running" {
+		t.Fatalf("second operation = %+v", failure)
+	}
+	exit(p, "proc-1", 0)
+	if status := call(t, p, "backup.list", nil)["repositories"].([]any)[0].(map[string]any)["status"].(map[string]any); status["state"] != "idle" || status["lastKind"] != "init" || status["lastSuccess"] != true {
+		t.Fatalf("repository status = %v", status)
+	}
+	if _, failure := callRaw(p, "backup.repository.maintenance", map[string]any{"id": "job-1", "kind": "check"}); failure == nil {
+		t.Fatal("a job id was accepted as a repository")
+	}
+
+	// A backup is bound to its repository for life.
+	call(t, p, "backup.repository.create", map[string]any{"repository": map[string]any{"name": "Other", "location": "/other", "passwordFile": "/etc/restic/other"}})
+	call(t, p, "backup.create", map[string]any{"job": resticJob()})
+	if n := call(t, p, "backup.list", nil)["repositories"].([]any)[0].(map[string]any)["jobs"]; n != float64(1) {
+		t.Fatalf("job count = %v", n)
+	}
+	moved := resticJob()
+	moved["id"] = "job-1"
+	moved["restic"].(map[string]any)["repositoryId"] = "repo-2"
+	if _, failure := callRaw(p, "backup.update", map[string]any{"job": moved}); failure == nil || !strings.Contains(failure.Message, "cannot be changed") {
+		t.Fatalf("repository change = %+v", failure)
+	}
+	same := resticJob()
+	same["id"] = "job-1"
+	same["name"] = "Photos renamed"
+	call(t, p, "backup.update", map[string]any{"job": same})
+
+	// Used repositories can neither be deleted nor moved, but credentials can change.
+	if _, failure := callRaw(p, "backup.repository.delete", map[string]any{"id": "repo-1"}); failure == nil || failure.Code != "in_use" {
+		t.Fatalf("delete used repository = %+v", failure)
+	}
+	if _, failure := callRaw(p, "backup.repository.update", map[string]any{"repository": map[string]any{"id": "repo-1", "name": "Offsite", "location": "/elsewhere", "passwordFile": "/etc/restic/password"}}); failure == nil {
+		t.Fatal("the location of a used repository changed")
+	}
+	call(t, p, "backup.repository.update", map[string]any{"repository": map[string]any{"id": "repo-1", "name": "Offsite 2", "location": "/backup/repo", "passwordFile": "/etc/restic/new"}})
+	call(t, p, "backup.run", map[string]any{"id": "job-1"})
+	if args := strings.Join(toStrings(host.started[1]["args"]), " "); !strings.HasPrefix(args, "--repo /backup/repo --password-file /etc/restic/new backup") {
+		t.Fatalf("backup uses %q", args)
+	}
+	for _, process := range []string{"proc-2", "proc-3", "proc-4"} { // backup, retention, check
+		exit(p, process, 0)
+	}
+	call(t, p, "backup.delete", map[string]any{"id": "job-1"})
+	call(t, p, "backup.repository.delete", map[string]any{"id": "repo-1"})
+	if repos := call(t, p, "backup.list", nil)["repositories"].([]any); len(repos) != 1 {
+		t.Fatalf("repositories after delete = %v", repos)
 	}
 }

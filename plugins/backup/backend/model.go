@@ -12,6 +12,7 @@ const (
 	engineRobocopy = "robocopy"
 
 	maxJobs           = 200
+	maxRepositories   = 100
 	maxNameLength     = 200
 	maxString         = 4096
 	maxListItems      = 256
@@ -37,20 +38,28 @@ type Retention struct {
 	Prune       bool   `json:"prune,omitempty"`
 }
 
-// Restic backs up folders into a versioned, deduplicated repository. The
-// repository password stays outside RunPilot: a password file, or an
-// environment file that restic reads its settings from.
+// Restic backs up folders into a repository object. The assignment is made
+// when the job is created and never changes afterwards.
 type Restic struct {
-	Executable       string     `json:"executable,omitempty"`
-	Repository       string     `json:"repository"`
-	PasswordFile     string     `json:"passwordFile,omitempty"`
-	EnvironmentFile  string     `json:"environmentFile,omitempty"`
+	RepositoryID     string     `json:"repositoryId"`
 	Sources          []string   `json:"sources"`
 	Excludes         []string   `json:"excludes,omitempty"`
 	Tags             []string   `json:"tags,omitempty"`
 	UseFsSnapshot    bool       `json:"useFsSnapshot,omitempty"`
 	Retention        *Retention `json:"retention,omitempty"`
 	CheckAfterBackup bool       `json:"checkAfterBackup,omitempty"`
+}
+
+// Repository is a restic repository with the host files that unlock it. The
+// repository password stays outside RunPilot: a password file, or an
+// environment file that restic reads its settings from.
+type Repository struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Location        string `json:"location"`
+	PasswordFile    string `json:"passwordFile,omitempty"`
+	EnvironmentFile string `json:"environmentFile,omitempty"`
+	Executable      string `json:"executable,omitempty"`
 }
 
 // Mirror copies a folder to a destination with rsync (Linux) or robocopy
@@ -111,8 +120,7 @@ func normalizeJob(j *Job) {
 	case engineRestic:
 		j.Mirror = nil
 		if r := j.Restic; r != nil {
-			r.Executable, r.Repository = strings.TrimSpace(r.Executable), strings.TrimSpace(r.Repository)
-			r.PasswordFile, r.EnvironmentFile = strings.TrimSpace(r.PasswordFile), strings.TrimSpace(r.EnvironmentFile)
+			r.RepositoryID = strings.TrimSpace(r.RepositoryID)
 			r.Sources, r.Excludes, r.Tags = trimList(r.Sources), trimList(r.Excludes), trimList(r.Tags)
 			if k := r.Retention; k != nil {
 				k.KeepWithin = strings.TrimSpace(k.KeepWithin)
@@ -175,8 +183,8 @@ func validateJob(j *Job, hostOS string) error {
 		if r == nil {
 			return fail("restic settings are required")
 		}
-		if r.Repository == "" {
-			return fail("repository is required")
+		if r.RepositoryID == "" {
+			return fail("choose a repository")
 		}
 		if len(r.Sources) == 0 {
 			return fail("add at least one folder to back up")
@@ -184,19 +192,6 @@ func validateJob(j *Job, hostOS string) error {
 		for _, source := range r.Sources {
 			if !absolutePath(source, hostOS) {
 				return fail("folder \"" + source + "\" must be an absolute path")
-			}
-		}
-		if r.PasswordFile == "" && r.EnvironmentFile == "" {
-			return fail("restic needs a password file or an environment file that sets RESTIC_PASSWORD or RESTIC_PASSWORD_FILE")
-		}
-		for label, value := range map[string]string{"password file": r.PasswordFile, "environment file": r.EnvironmentFile} {
-			if value != "" && !absolutePath(value, hostOS) {
-				return fail("the " + label + " must be an absolute path")
-			}
-		}
-		for label, value := range map[string]string{"executable": r.Executable, "repository": r.Repository, "password file": r.PasswordFile, "environment file": r.EnvironmentFile} {
-			if err := validValue(label, value); err != nil {
-				return err
 			}
 		}
 		if err := validList("folders", r.Sources); err != nil {
@@ -265,6 +260,39 @@ func validateJob(j *Job, hostOS string) error {
 		}
 	default:
 		return fail("engine must be restic, rsync or robocopy")
+	}
+	return nil
+}
+
+func normalizeRepository(r *Repository) {
+	r.Name, r.Location = strings.TrimSpace(r.Name), strings.TrimSpace(r.Location)
+	r.PasswordFile, r.EnvironmentFile = strings.TrimSpace(r.PasswordFile), strings.TrimSpace(r.EnvironmentFile)
+	r.Executable = strings.TrimSpace(r.Executable)
+}
+
+// validateRepository checks a normalized repository on the given host OS.
+func validateRepository(r *Repository, hostOS string) error {
+	if r.Name == "" {
+		return fail("name is required")
+	}
+	if len(r.Name) > maxNameLength {
+		return fail("name is too long")
+	}
+	if r.Location == "" {
+		return fail("repository location is required")
+	}
+	if r.PasswordFile == "" && r.EnvironmentFile == "" {
+		return fail("restic needs a password file or an environment file that sets RESTIC_PASSWORD or RESTIC_PASSWORD_FILE")
+	}
+	for label, value := range map[string]string{"password file": r.PasswordFile, "environment file": r.EnvironmentFile} {
+		if value != "" && !absolutePath(value, hostOS) {
+			return fail("the " + label + " must be an absolute path")
+		}
+	}
+	for label, value := range map[string]string{"executable": r.Executable, "location": r.Location, "password file": r.PasswordFile, "environment file": r.EnvironmentFile} {
+		if err := validValue(label, value); err != nil {
+			return err
+		}
 	}
 	return nil
 }

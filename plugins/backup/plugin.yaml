@@ -1,8 +1,8 @@
 apiVersion: runpilot.plugin/v1
 id: backup
 name: Backup
-description: Scheduled restic, rsync and robocopy backups with restore and run history
-version: 0.1.0
+description: Scheduled restic, rsync and robocopy backups with separate repositories, restore and run history
+version: 0.2.2
 requires:
   frontend: ">=1.0.0 <2.0.0"
   backend: ">=1.4.0 <2.0.0"

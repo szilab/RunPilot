@@ -114,9 +114,9 @@ export function jobFromForm(v) {
     };
     const hasRetention = retention.keepLast || retention.keepDaily || retention.keepWeekly || retention.keepMonthly || retention.keepYearly || retention.keepWithin;
     job.restic = {
-      repository: v.repository, passwordFile: v.passwordFile || "", environmentFile: v.environmentFile || "",
+      repositoryId: v.repositoryId || "",
       sources: lines(v.sources), excludes: lines(v.excludes), tags: String(v.tags || "").split(/[\s,]+/).filter(Boolean),
-      useFsSnapshot: !!v.useFsSnapshot, checkAfterBackup: !!v.checkAfterBackup, executable: v.executable || "",
+      useFsSnapshot: !!v.useFsSnapshot, checkAfterBackup: !!v.checkAfterBackup,
     };
     if (hasRetention) job.restic.retention = retention;
   } else {
@@ -133,9 +133,21 @@ export function jobFromForm(v) {
   return job;
 }
 
-// jobTarget is the one-line "where it goes" shown on a card.
-export function jobTarget(job) {
-  if (job.engine === "restic") return job.restic?.repository || "";
+// repositoryFromForm converts plain form values into the repository the
+// backend stores. Semantic validation stays in the backend.
+export function repositoryFromForm(v) {
+  const repository = { name: v.name, location: v.location, passwordFile: v.passwordFile || "", environmentFile: v.environmentFile || "", executable: v.executable || "" };
+  if (v.id) repository.id = v.id;
+  return repository;
+}
+
+// jobTarget is the one-line "where it goes" shown on a card: the name of the
+// repository for restic jobs.
+export function jobTarget(job, repositories = []) {
+  if (job.engine === "restic") {
+    const repository = repositories.find(view => view.repository.id === job.restic?.repositoryId)?.repository;
+    return repository ? repository.name : "Repository missing";
+  }
   return job.mirror ? `${job.mirror.source} → ${job.mirror.destination}` : "";
 }
 

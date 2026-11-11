@@ -191,14 +191,21 @@ part of this plugin. Unit tests inject a fake host;
 `internal/core/tasks_plugin_test.go` runs the real ABI-v2 WASM through the normal
 controller path.
 
-`plugins/backup` (plugin ID `backup`, backend contract 1.4) owns the Backup page:
-Restic, rsync (Linux) and Robocopy (Windows) jobs with their own schedules,
-run history, Restic snapshots, repository check/unlock/init and restore into a
-new or empty folder. Job definitions use plugin `storage.*`; the engine
+`plugins/backup` (plugin ID `backup`, backend contract 1.4) owns the Backup page,
+which switches between **Backups** and **Repositories** like the Remote plugin's
+protocol tabs. Backups are Restic, rsync (Linux) and Robocopy (Windows) jobs with
+their own schedules and run history. A Restic repository is a separate stored
+object (`backup.repository.*`): its location, password file, environment file
+and executable, plus the repository operations (initialize, check, unlock), its
+snapshots, restore into a new or empty folder, and its own run history. A
+Restic backup only stores a `repositoryId` chosen from the repositories; that
+assignment is fixed when the backup is created and can only be undone by
+deleting the backup. A repository cannot be deleted while backups use it, and
+its location cannot change then. Definitions use plugin `storage.*`; the engine
 commands, exit-code rules and path checks live in the plugin
 (`backend/engines.go`, `backend/paths.go`). Its folder picker lists folders
 through `workspace.list` with an external `root`, like Files. Passwords and keys
-stay in host files that jobs reference. Unit tests inject a fake host;
+stay in host files that repositories reference. Unit tests inject a fake host;
 `internal/core/backup_plugin_test.go` runs the real WASM with a fake restic
 script and, when installed, the real rsync. Regenerate the WASM with
 `go generate ./plugins/backup/backend`.

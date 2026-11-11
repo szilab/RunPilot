@@ -34,10 +34,10 @@ func executable(configured, name, hostOS string) string {
 	return name
 }
 
-func resticBase(r *Restic) []string {
-	args := []string{"--repo", r.Repository}
-	if r.PasswordFile != "" {
-		args = append(args, "--password-file", r.PasswordFile)
+func resticBase(repo *Repository) []string {
+	args := []string{"--repo", repo.Location}
+	if repo.PasswordFile != "" {
+		args = append(args, "--password-file", repo.PasswordFile)
 	}
 	return args
 }
@@ -51,12 +51,13 @@ func resticTagFilter(r *Restic) []string {
 	return []string{"--tag", strings.Join(r.Tags, ",")}
 }
 
-func resticStep(name string, r *Restic, hostOS string, args ...string) step {
-	return step{Name: name, Command: executable(r.Executable, "restic", hostOS), Args: append(resticBase(r), args...), Success: exitZero}
+func resticStep(name string, repo *Repository, hostOS string, args ...string) step {
+	return step{Name: name, Command: executable(repo.Executable, "restic", hostOS), Args: append(resticBase(repo), args...), Success: exitZero}
 }
 
-// backupPlan returns the steps of a scheduled or manual run.
-func backupPlan(j *Job, hostOS string) []step {
+// backupPlan returns the steps of a scheduled or manual run. repo is the
+// job's repository for restic jobs and nil for mirror jobs.
+func backupPlan(j *Job, repo *Repository, hostOS string) []step {
 	switch j.Engine {
 	case engineRestic:
 		r := j.Restic
@@ -70,7 +71,7 @@ func backupPlan(j *Job, hostOS string) []step {
 		if r.UseFsSnapshot {
 			args = append(args, "--use-fs-snapshot")
 		}
-		steps := []step{resticStep("backup", r, hostOS, append(args, r.Sources...)...)}
+		steps := []step{resticStep("backup", repo, hostOS, append(args, r.Sources...)...)}
 		if k := r.Retention; k != nil {
 			forget := append([]string{"forget"}, resticTagFilter(r)...)
 			for _, keep := range []struct {
@@ -87,10 +88,10 @@ func backupPlan(j *Job, hostOS string) []step {
 			if k.Prune {
 				forget = append(forget, "--prune")
 			}
-			steps = append(steps, resticStep("retention", r, hostOS, forget...))
+			steps = append(steps, resticStep("retention", repo, hostOS, forget...))
 		}
 		if r.CheckAfterBackup {
-			steps = append(steps, resticStep("check", r, hostOS, "check"))
+			steps = append(steps, resticStep("check", repo, hostOS, "check"))
 		}
 		return steps
 	case engineRsync:
@@ -129,19 +130,19 @@ func backupPlan(j *Job, hostOS string) []step {
 	return nil
 }
 
-// Repository maintenance operations, available for restic jobs.
+// Repository operations.
 var maintenance = map[string]string{"check": "Check repository", "unlock": "Remove stale locks", "init": "Initialize repository"}
 
-func maintenancePlan(kind string, r *Restic, hostOS string) []step {
-	return []step{resticStep(kind, r, hostOS, kind)}
+func maintenancePlan(kind string, repo *Repository, hostOS string) []step {
+	return []step{resticStep(kind, repo, hostOS, kind)}
 }
 
-func restorePlan(r *Restic, hostOS, snapshot, target string, include []string) []step {
+func restorePlan(repo *Repository, hostOS, snapshot, target string, include []string) []step {
 	args := []string{"restore", snapshot, "--target", target}
 	for _, value := range include {
 		args = append(args, "--include", value)
 	}
-	return []step{resticStep("restore", r, hostOS, args...)}
+	return []step{resticStep("restore", repo, hostOS, args...)}
 }
 
 // validSnapshot accepts a restic snapshot ID (full or short) or "latest".

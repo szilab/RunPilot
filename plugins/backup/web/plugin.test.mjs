@@ -1,19 +1,27 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { activate, browseFromNative, jobFromForm, nativeFromBrowse, relativeTime, runState, scheduleText, splitArgs, toolHint } from "./plugin.js";
+import { activate, browseFromNative, jobFromForm, nativeFromBrowse, relativeTime, repositoryFromForm, runState, scheduleText, splitArgs, toolHint } from "./plugin.js";
 
 test("form values become a restic job", () => {
   const job = jobFromForm({ name: "Photos", engine: "restic", enabled: true, timeoutMinutes: "90", scheduleType: "daily", time: "03:00", timeZone: " Europe/Berlin ",
-    repository: "/backup/repo", passwordFile: "/etc/restic/password", sources: "/srv/photos\n\n /srv/home \n", excludes: "*.tmp", tags: "photos, offsite",
+    repositoryId: "repo-1", sources: "/srv/photos\n\n /srv/home \n", excludes: "*.tmp", tags: "photos, offsite",
     keepDaily: "7", keepMonthly: "", prune: true });
   assert.equal(job.timeoutSeconds, 5400);
   assert.deepEqual(job.schedule, { type: "daily", timeOfDay: "03:00", timeZone: "Europe/Berlin" });
+  assert.equal(job.restic.repositoryId, "repo-1");
+  assert.equal(job.restic.repository, undefined);
+  assert.equal(job.restic.passwordFile, undefined);
   assert.deepEqual(job.restic.sources, ["/srv/photos", "/srv/home"]);
   assert.deepEqual(job.restic.tags, ["photos", "offsite"]);
   assert.equal(job.restic.retention.keepDaily, 7);
   assert.equal(jobFromForm({ name: "x", engine: "restic", scheduleType: "manual" }).schedule, undefined);
   assert.equal(jobFromForm({ name: "x", engine: "restic", scheduleType: "manual" }).restic.retention, undefined);
   assert.throws(() => jobFromForm({ name: "x", engine: "restic", scheduleType: "interval", intervalValue: "0" }));
+});
+
+test("form values become a repository", () => {
+  assert.deepEqual(repositoryFromForm({ id: "repo-2", name: "Offsite", location: "sftp:u@h:/r", passwordFile: "/etc/restic/password" }), { id: "repo-2", name: "Offsite", location: "sftp:u@h:/r", passwordFile: "/etc/restic/password", environmentFile: "", executable: "" });
+  assert.equal(repositoryFromForm({ name: "x", location: "/r" }).id, undefined);
 });
 
 test("form values become a mirror job", () => {
@@ -49,7 +57,7 @@ test("labels describe schedules, runs and missing tools", () => {
 
 test("the page lists jobs and escapes names", async () => {
   const listeners = [];
-  const node = () => ({ innerHTML: "", isConnected: true, addEventListener(type, fn) { listeners.push([type, fn]); }, querySelector() { return null; }, closest() { return null; } });
+  const node = () => ({ innerHTML: "", isConnected: true, addEventListener(type, fn) { listeners.push([type, fn]); }, querySelector() { return null; }, closest() { return { classList: { contains: () => true } }; } });
   let navigation, off = 0;
   const calls = [];
   const api = {
@@ -59,7 +67,8 @@ test("the page lists jobs and escapes names", async () => {
       call: async (plugin, method, params) => {
         calls.push([plugin, method, params]);
         return { os: "linux", tools: [{ engine: "restic", available: false, message: "restic is not installed on this host" }, { engine: "rsync", available: true }],
-          jobs: [{ job: { id: "job-1", name: "<b>Photos</b>", engine: "restic", enabled: true, schedule: { type: "daily", timeOfDay: "03:00" }, restic: { repository: "/repo", sources: ["/a"] } }, status: { state: "failure", lastRunAt: "2026-10-31T10:00:00Z", lastSuccess: false, lastMessage: "backup failed with exit code 1", nextRunAt: "2026-11-01T03:00:00Z" } }] };
+          repositories: [{ repository: { id: "repo-1", name: "<i>Offsite</i>", location: "/repo", passwordFile: "/p" }, jobs: 1, status: { state: "idle" } }],
+          jobs: [{ job: { id: "job-1", name: "<b>Photos</b>", engine: "restic", enabled: true, schedule: { type: "daily", timeOfDay: "03:00" }, restic: { repositoryId: "repo-1", sources: ["/a"] } }, status: { state: "failure", lastRunAt: "2026-10-31T10:00:00Z", lastSuccess: false, lastMessage: "backup failed with exit code 1", nextRunAt: "2026-11-01T03:00:00Z" } }] };
       },
       on: () => () => { off++; },
     },
@@ -73,14 +82,24 @@ test("the page lists jobs and escapes names", async () => {
   assert.match(page.innerHTML, /&lt;b&gt;Photos&lt;\/b&gt;/);
   assert.doesNotMatch(page.innerHTML, /<b>Photos/);
   assert.match(page.innerHTML, /Restic is not available/);
-  assert.match(page.innerHTML, /data-action="snapshots"/);
+  assert.doesNotMatch(page.innerHTML, /data-action="snapshots"/);
+  assert.match(page.innerHTML, /data-tab="repositories"/);
+  assert.match(page.innerHTML, /&lt;i&gt;Offsite&lt;\/i&gt;/); // the backup shows its repository by name
   assert.match(header.innerHTML, /Add backup/);
+  // The Repositories tab lists the repository with its own operations.
+  const tab = listeners.find(([type]) => type === "click")[1];
+  tab({ target: { closest: selector => selector === "[data-tab]" ? { dataset: { tab: "repositories" } } : null } });
+  assert.match(page.innerHTML, /data-repository="repo-1"/);
+  assert.match(page.innerHTML, /data-action="repo-init"/);
+  assert.match(page.innerHTML, /data-action="repo-snapshots"/);
+  assert.match(page.innerHTML, /1 backup/);
+  assert.match(header.innerHTML, /Add repository/);
   assert.ok(calls.every(([plugin]) => plugin === "backup"));
   deactivate();
-  assert.equal(off, 4);
+  assert.equal(off, 5);
 });
 
 test("arguments keep Windows paths and round-trip", async () => {
-  const { formatArgs } = await import("./helpers.js");
+  const { formatArgs } = await import("./backup-helpers.js");
   for (const args of [["/MT:8", "C:\\Logs\\a b.txt", "\\\\server\\share"], ['say "hi"', "it's", ""]]) assert.deepEqual(splitArgs(formatArgs(args)), args);
 });

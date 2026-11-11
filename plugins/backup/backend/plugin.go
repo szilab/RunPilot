@@ -59,21 +59,23 @@ func itoa(n int) string { return strconv.Itoa(n) }
 func decodeBase64(value string) ([]byte, error) { return base64.StdEncoding.DecodeString(value) }
 
 type stateFile struct {
-	Version int   `json:"version"`
-	Next    int   `json:"next"`
-	Jobs    []Job `json:"jobs"`
+	Version      int          `json:"version"`
+	Next         int          `json:"next"`
+	Jobs         []Job        `json:"jobs"`
+	NextRepo     int          `json:"nextRepository"`
+	Repositories []Repository `json:"repositories"`
 }
 
 // operation is one running backup, restore or maintenance run. Its steps
 // run one after another and write into the same history execution.
 type operation struct {
-	runID, jobID, kind, startedAt string
-	steps                         []step
-	index                         int
-	processID                     string
-	env                           map[string]string
-	timeout                       int
-	stopping                      bool
+	runID, subjectID, kind, startedAt string
+	steps                             []step
+	index                             int
+	processID                         string
+	env                               map[string]string
+	timeout                           int
+	stopping                          bool
 }
 
 // jobRuntime is in-memory only; it is rebuilt from history on start.
@@ -97,6 +99,8 @@ type hostStatus struct {
 type plugin struct {
 	jobs      []*Job
 	next      int
+	repos     []*Repository
+	nextRepo  int
 	loadError string
 	rt        map[string]*jobRuntime
 	procs     map[string]*operation
@@ -105,7 +109,7 @@ type plugin struct {
 }
 
 func newPlugin() *plugin {
-	return &plugin{next: 1, rt: map[string]*jobRuntime{}, procs: map[string]*operation{}}
+	return &plugin{next: 1, nextRepo: 1, rt: map[string]*jobRuntime{}, procs: map[string]*operation{}}
 }
 
 func (p *plugin) status() hostStatus {
@@ -128,6 +132,44 @@ func (p *plugin) find(id string) *Job {
 		}
 	}
 	return nil
+}
+
+func (p *plugin) findRepo(id string) *Repository {
+	for _, r := range p.repos {
+		if r.ID == id {
+			return r
+		}
+	}
+	return nil
+}
+
+// repoOf returns the repository a restic job is assigned to.
+func (p *plugin) repoOf(j *Job) *Repository {
+	if j.Restic == nil {
+		return nil
+	}
+	return p.findRepo(j.Restic.RepositoryID)
+}
+
+// jobsUsing counts the jobs assigned to a repository.
+func (p *plugin) jobsUsing(id string) int {
+	n := 0
+	for _, j := range p.jobs {
+		if j.Restic != nil && j.Restic.RepositoryID == id {
+			n++
+		}
+	}
+	return n
+}
+
+func (p *plugin) nameOf(id string) string {
+	if j := p.find(id); j != nil {
+		return j.Name
+	}
+	if r := p.findRepo(id); r != nil {
+		return r.Name
+	}
+	return ""
 }
 
 func (p *plugin) runtimeOf(id string) *jobRuntime {
@@ -166,12 +208,31 @@ func (p *plugin) load() {
 		return
 	}
 	seen := map[string]bool{}
+	nextRepo := state.NextRepo
+	for i := range state.Repositories {
+		r := state.Repositories[i]
+		if r.ID == "" || seen[r.ID] {
+			p.loadError = "stored backup repositories contain a missing or duplicate ID"
+			p.repos, p.nextRepo = nil, 1
+			return
+		}
+		seen[r.ID] = true
+		if n, err := strconv.Atoi(strings.TrimPrefix(r.ID, "repo-")); err == nil && n >= nextRepo {
+			nextRepo = n + 1
+		}
+		normalizeRepository(&r)
+		p.repos = append(p.repos, &r)
+	}
+	if nextRepo < 1 {
+		nextRepo = 1
+	}
+	p.nextRepo = nextRepo
 	next := state.Next
 	for i := range state.Jobs {
 		j := state.Jobs[i]
 		if j.ID == "" || seen[j.ID] {
 			p.loadError = "stored backup jobs contain a missing or duplicate ID"
-			p.jobs, p.next = nil, 1
+			p.jobs, p.next, p.repos = nil, 1, nil
 			return
 		}
 		seen[j.ID] = true
@@ -187,10 +248,21 @@ func (p *plugin) load() {
 	p.next = next
 }
 
-func (p *plugin) save(jobs []*Job, next int) error {
-	state := stateFile{Version: stateVersion, Next: next, Jobs: make([]Job, 0, len(jobs))}
+// save stores the jobs and repositories together; a caller passes the
+// collection it changed and the plugin's current value for the other one.
+func (p *plugin) save(jobs []*Job, next int) error { return p.write(jobs, next, p.repos, p.nextRepo) }
+
+func (p *plugin) saveRepos(repos []*Repository, next int) error {
+	return p.write(p.jobs, p.next, repos, next)
+}
+
+func (p *plugin) write(jobs []*Job, next int, repos []*Repository, nextRepo int) error {
+	state := stateFile{Version: stateVersion, Next: next, NextRepo: nextRepo, Jobs: make([]Job, 0, len(jobs)), Repositories: make([]Repository, 0, len(repos))}
 	for _, j := range jobs {
 		state.Jobs = append(state.Jobs, *j)
+	}
+	for _, r := range repos {
+		state.Repositories = append(state.Repositories, *r)
 	}
 	return callHost("storage.set", map[string]any{"key": storageKey, "value": state}, nil)
 }
@@ -200,10 +272,17 @@ func (p *plugin) save(jobs []*Job, next int) error {
 func (p *plugin) init() {
 	p.load()
 	if p.loadError == "" {
+		for _, repo := range p.repos {
+			r := p.runtimeOf(repo.ID)
+			p.loadLastRun(repo.ID, r)
+			if err := validateRepository(repo, p.hostOS()); err != nil {
+				r.err = err.Error()
+			}
+		}
 		for _, j := range p.jobs {
 			r := p.runtimeOf(j.ID)
-			p.loadLastRun(j, r)
-			if err := validateJob(j, p.hostOS()); err != nil {
+			p.loadLastRun(j.ID, r)
+			if err := p.checkJob(j); err != nil {
 				r.err = err.Error()
 				continue
 			}
@@ -216,11 +295,26 @@ func (p *plugin) init() {
 	_ = p.register(reconcileID, callbackCheck, &Schedule{Type: "interval", IntervalSeconds: reconcileEvery})
 }
 
-func (p *plugin) loadLastRun(j *Job, r *jobRuntime) {
+// checkJob validates a job together with the repository it points to.
+func (p *plugin) checkJob(j *Job) error {
+	if err := validateJob(j, p.hostOS()); err != nil {
+		return err
+	}
+	if j.Engine == engineRestic {
+		repo := p.repoOf(j)
+		if repo == nil {
+			return fail("the repository of this backup no longer exists")
+		}
+		return validateRepository(repo, p.hostOS())
+	}
+	return nil
+}
+
+func (p *plugin) loadLastRun(id string, r *jobRuntime) {
 	var list struct {
 		Executions []execution `json:"executions"`
 	}
-	if err := callHost("history.list", map[string]any{"subject": j.ID, "limit": 1}, &list); err != nil || len(list.Executions) == 0 {
+	if err := callHost("history.list", map[string]any{"subject": id, "limit": 1}, &list); err != nil || len(list.Executions) == 0 {
 		return
 	}
 	e := list.Executions[0]
@@ -307,33 +401,64 @@ func (p *plugin) finishHistory(runID string, code *int, success *bool, message s
 
 var kindLabels = map[string]string{kindBackup: "Backup", kindRestore: "Restore", "check": "Check repository", "unlock": "Remove stale locks", "init": "Initialize repository"}
 
-// environment reads the job's environment file, if it has one.
-func (p *plugin) environment(j *Job) (map[string]string, error) {
-	if j.Restic == nil || j.Restic.EnvironmentFile == "" {
+// environment reads the repository's environment file, if it has one.
+func (p *plugin) environment(repo *Repository) (map[string]string, error) {
+	if repo == nil || repo.EnvironmentFile == "" {
 		return nil, nil
 	}
-	return p.readEnvironmentFile(j.Restic.EnvironmentFile)
+	return p.readEnvironmentFile(repo.EnvironmentFile)
 }
 
-// start records an execution and runs the first step. A job runs one
+// progressFPS makes restic print a progress line about once a minute. Without
+// a terminal restic prints none, so a long first backup would show no output
+// until it ends. An environment file can set its own value.
+const progressFPS = "0.0167"
+
+func withProgress(env map[string]string, repo *Repository) map[string]string {
+	if repo == nil {
+		return env
+	}
+	out := map[string]string{"RESTIC_PROGRESS_FPS": progressFPS}
+	for key, value := range env {
+		out[key] = value
+	}
+	return out
+}
+
+// subject is what an operation runs for: a backup job or a repository.
+type subject struct {
+	id, name, engine string
+	timeout          int
+	repo             *Repository
+}
+
+func jobSubject(j *Job, repo *Repository) subject {
+	return subject{id: j.ID, name: j.Name, engine: j.Engine, timeout: j.TimeoutSeconds, repo: repo}
+}
+
+func repoSubject(repo *Repository) subject {
+	return subject{id: repo.ID, name: repo.Name, engine: engineRestic, repo: repo}
+}
+
+// start records an execution and runs the first step. A subject runs one
 // operation at a time: a manual request is refused, a scheduled run is
 // recorded as skipped.
-func (p *plugin) start(j *Job, kind string, steps []step, manual bool) (string, error) {
-	r := p.runtimeOf(j.ID)
+func (p *plugin) start(sub subject, kind string, steps []step, manual bool) (string, error) {
+	r := p.runtimeOf(sub.id)
 	if r.op != nil {
 		if manual {
-			return "", rpcFail("already_running", "\""+j.Name+"\" is already running")
+			return "", rpcFail("already_running", "\""+sub.name+"\" is already running")
 		}
-		runID := p.begin(j, kind)
+		runID := p.begin(sub, kind)
 		if runID != "" {
 			p.appendHistory(runID, "Skipped: "+strings.ToLower(kindLabels[r.op.kind])+" of this job was still running.\n")
 			p.finishHistory(runID, nil, nil, "skipped: the previous run was still running")
 			p.recordLast(r, runID, "", kind, nil, "skipped: the previous run was still running")
-			p.publishStatus(j)
+			p.publishStatus(sub.id)
 		}
 		return "", nil
 	}
-	runID := p.begin(j, kind)
+	runID := p.begin(sub, kind)
 	if runID == "" {
 		return "", rpcFail("failed", "could not record the run")
 	}
@@ -341,28 +466,28 @@ func (p *plugin) start(j *Job, kind string, steps []step, manual bool) (string, 
 		StartedAt string `json:"startedAt"`
 	}
 	_ = callHost("history.get", map[string]any{"id": runID}, &started)
-	op := &operation{runID: runID, jobID: j.ID, kind: kind, startedAt: started.StartedAt, steps: steps, timeout: j.TimeoutSeconds}
-	p.appendHistory(runID, "=== "+kindLabels[kind]+": "+j.Name+" ("+j.Engine+") ===\n")
-	env, err := p.environment(j)
+	op := &operation{runID: runID, subjectID: sub.id, kind: kind, startedAt: started.StartedAt, steps: steps, timeout: sub.timeout}
+	p.appendHistory(runID, "=== "+kindLabels[kind]+": "+sub.name+" ("+sub.engine+") ===\n")
+	env, err := p.environment(sub.repo)
 	if err != nil {
-		p.finish(j, r, op, nil, false, err.Error())
+		p.finish(r, op, nil, false, err.Error())
 		return runID, rpcFail("invalid_argument", err.Error())
 	}
-	op.env = env
+	op.env = withProgress(env, sub.repo)
 	r.op = op
 	if err := p.runStep(op); err != nil {
-		p.finish(j, r, op, nil, false, errText(err))
+		p.finish(r, op, nil, false, errText(err))
 		return runID, hostFailure(err)
 	}
-	p.publishStatus(j)
+	p.publishStatus(sub.id)
 	return runID, nil
 }
 
-func (p *plugin) begin(j *Job, kind string) string {
+func (p *plugin) begin(sub subject, kind string) string {
 	var begin struct {
 		ID string `json:"id"`
 	}
-	if callHost("history.begin", map[string]any{"kind": kind, "subject": j.ID, "label": j.Name}, &begin) != nil {
+	if callHost("history.begin", map[string]any{"kind": kind, "subject": sub.id, "label": sub.name}, &begin) != nil {
 		return ""
 	}
 	return begin.ID
@@ -399,7 +524,7 @@ func (p *plugin) processExited(processID string, info exitInfo) {
 	}
 	delete(p.procs, processID)
 	op.processID = ""
-	j, r := p.find(op.jobID), p.runtimeOf(op.jobID)
+	r := p.runtimeOf(op.subjectID)
 	s := op.steps[op.index]
 	code := info.code
 	var message string
@@ -417,29 +542,23 @@ func (p *plugin) processExited(processID string, info exitInfo) {
 	if success && op.index+1 < len(op.steps) {
 		op.index++
 		if err := p.runStep(op); err == nil {
-			if j != nil {
-				p.publishStatus(j)
-			}
+			p.publishStatus(op.subjectID)
 			return
 		} else {
 			success, message = false, errText(err)
 		}
 	}
-	p.finish(j, r, op, &code, success, message)
+	p.finish(r, op, &code, success, message)
 }
 
-func (p *plugin) finish(j *Job, r *jobRuntime, op *operation, code *int, success bool, message string) {
+func (p *plugin) finish(r *jobRuntime, op *operation, code *int, success bool, message string) {
 	p.finishHistory(op.runID, code, &success, message)
 	if r.op == op {
 		r.op = nil
 	}
 	p.recordLast(r, op.runID, op.startedAt, op.kind, &success, message)
-	name := ""
-	if j != nil {
-		name = j.Name
-		p.publishStatus(j)
-	}
-	p.publish("backup.run.completed", map[string]any{"id": op.jobID, "name": name, "kind": op.kind, "runId": op.runID, "success": success, "message": message})
+	p.publishStatus(op.subjectID)
+	p.publish("backup.run.completed", map[string]any{"id": op.subjectID, "name": p.nameOf(op.subjectID), "kind": op.kind, "runId": op.runID, "success": success, "message": message})
 }
 
 func (p *plugin) recordLast(r *jobRuntime, runID, startedAt, kind string, success *bool, message string) {
@@ -452,10 +571,10 @@ func (p *plugin) recordLast(r *jobRuntime, runID, startedAt, kind string, succes
 	r.lastRunID, r.lastRunAt, r.lastKind, r.lastSuccess, r.lastMessage = runID, startedAt, kind, success, message
 }
 
-func (p *plugin) stop(j *Job) error {
-	r := p.runtimeOf(j.ID)
+func (p *plugin) stop(id, name string) error {
+	r := p.runtimeOf(id)
 	if r.op == nil {
-		return rpcFail("not_running", "\""+j.Name+"\" is not running")
+		return rpcFail("not_running", "\""+name+"\" is not running")
 	}
 	r.op.stopping = true
 	if r.op.processID == "" {
@@ -539,12 +658,10 @@ type View struct {
 	Status Status `json:"status"`
 }
 
-func (p *plugin) view(j *Job, next map[string]string) View {
-	r := p.runtimeOf(j.ID)
+// runStatus describes what a job or repository is doing and how it last ended.
+func (p *plugin) runStatus(id string) Status {
+	r := p.runtimeOf(id)
 	s := Status{LastRunID: r.lastRunID, LastRunAt: r.lastRunAt, LastKind: r.lastKind, LastSuccess: r.lastSuccess, LastMessage: r.lastMessage, Error: r.err}
-	if j.Enabled && j.Schedule != nil {
-		s.NextRunAt = next[j.ID]
-	}
 	switch {
 	case r.op != nil:
 		s.State, s.Kind, s.RunID, s.StartedAt = "running", r.op.kind, r.op.runID, r.op.startedAt
@@ -557,11 +674,50 @@ func (p *plugin) view(j *Job, next map[string]string) View {
 	default:
 		s.State = "idle"
 	}
+	return s
+}
+
+func (p *plugin) view(j *Job, next map[string]string) View {
+	s := p.runStatus(j.ID)
+	if j.Enabled && j.Schedule != nil {
+		s.NextRunAt = next[j.ID]
+	}
 	return View{Job: cloneJob(*j), Status: s}
 }
 
-func (p *plugin) publishStatus(j *Job) {
-	p.publish("backup.status", p.view(j, p.nextRuns()))
+// RepositoryView is a repository with the number of backups assigned to it.
+type RepositoryView struct {
+	Repository Repository `json:"repository"`
+	Jobs       int        `json:"jobs"`
+	Status     Status     `json:"status"`
+}
+
+func (p *plugin) repoView(repo *Repository) RepositoryView {
+	return RepositoryView{Repository: *repo, Jobs: p.jobsUsing(repo.ID), Status: p.runStatus(repo.ID)}
+}
+
+func (p *plugin) repoViews() []RepositoryView {
+	views := make([]RepositoryView, 0, len(p.repos))
+	for _, repo := range p.repos {
+		views = append(views, p.repoView(repo))
+	}
+	sort.Slice(views, func(i, k int) bool {
+		a, b := strings.ToLower(views[i].Repository.Name), strings.ToLower(views[k].Repository.Name)
+		if a != b {
+			return a < b
+		}
+		return views[i].Repository.ID < views[k].Repository.ID
+	})
+	return views
+}
+
+// publishStatus pushes the current state of a job or repository to browsers.
+func (p *plugin) publishStatus(id string) {
+	if j := p.find(id); j != nil {
+		p.publish("backup.status", p.view(j, p.nextRuns()))
+	} else if repo := p.findRepo(id); repo != nil {
+		p.publish("backup.repository.status", p.repoView(repo))
+	}
 }
 
 func (p *plugin) views() []View {
