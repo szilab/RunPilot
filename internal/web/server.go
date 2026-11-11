@@ -705,6 +705,9 @@ func (s *Server) handlePluginAsset(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Plugin files change with plugin updates under the same URL. Browsers and
+	// intermediate proxies must not keep an older module next to a newer one.
+	w.Header().Set("Cache-Control", "no-store")
 	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 

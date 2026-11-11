@@ -155,6 +155,9 @@ func TestPluginRegistryLifecycleHTTP(t *testing.T) {
 	if response.Body.String() != "// 1.0.0" {
 		t.Fatal("update replaced active frontend")
 	}
+	if got := response.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("plugin asset Cache-Control = %q; a stale module must not be reused after a plugin update", got)
+	}
 	request("POST", "/api/v1/plugins/example/install", `{"version":"1.0.0"}`, 409)
 	storage := filepath.Join(dataDir, "plugins", "example", "data", "value")
 	if err := os.MkdirAll(filepath.Dir(storage), 0755); err != nil {
